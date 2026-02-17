@@ -1,0 +1,249 @@
+:root {
+  color-scheme: dark;
+  --window-icon-height: 14px;
+  --window-title-margin: 48px;
+  --window-titlebar-height: 36px;
+  --window-titlebar-font-size: 12px;
+  --window-scrollbar-width: 10px;
+  --window-mac-titlebar-controls-margin: 80px;
+  --window-background-transition-duration: 0.3s;
+  --window-c-popup-font-weight: normal;
+
+  /* Dark Theme Variables - Consistent with app styling */
+  --window-c-background: #1a1a1a;
+  --window-c-titlebar-background: #1a1a1a;
+  --window-c-titlebar-border: #2a2a2a;
+  --window-c-text: #e5e5e5;
+  --window-c-hover: #2a2a2a;
+  --window-c-popup-background: #2a2a2a;
+  --window-c-popup-border: #3a3a3a;
+  --window-c-popup-shadow: rgba(0, 0, 0, 0.4);
+  --window-c-separator: #3a3a3a;
+  --window-c-control-hover: #2a2a2a;
+  --window-c-control-close-hover: #ef4444;
+  --window-c-scrollbar-track: transparent;
+  --window-c-scrollbar-thumb: #3a3a3a;
+  --window-c-scrollbar-thumb-hover: #4a4a4a;
+  --window-c-text-shadow: none;
+}
+
+:root:not(.dark) {
+  color-scheme: light;
+  --window-titlebar-font-weight: 500;
+  --window-c-popup-font-weight: 500;
+
+  --window-c-background: #fff;
+  --window-c-titlebar-background: #fff;
+  --window-c-titlebar-border: #e5e5e5;
+  --window-c-text: #000000c8;
+  --window-c-hover: #ececec;
+  --window-c-popup-background: #f6f6f6;
+  --window-c-popup-border: #dcdcdc;
+  --window-c-popup-shadow: hsla(0, 0%, 0%, 0.1);
+  --window-c-separator: #80808033;
+  --window-c-control-hover: #0000001a;
+  --window-c-control-close-hover: #ff453b;
+  --window-c-control-close-hover-text: #fff;
+  --window-c-scrollbar-track: #e0e0e0;
+  --window-c-scrollbar-thumb: #b0b0b0;
+  --window-c-scrollbar-thumb-hover: #888888cf;
+  --window-c-text-shadow: transparent;
+}
+
+.window-frame {
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  background-color: var(--window-c-background);
+  transition: background-color var(--window-background-transition-duration) ease;
+}
+
+.window-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Assign direct last child to use full height of window content */
+.window-content > div:last-child {
+  height: 100%;
+}
+
+.window-titlebar {
+  display: flex;
+  position: relative;
+  height: var(--window-titlebar-height);
+  align-items: center;
+  -webkit-app-region: drag;
+  background-color: var(--window-c-titlebar-background);
+  color: var(--window-c-text);
+  transition: background-color var(--window-background-transition-duration) ease;
+  border-bottom: 1px solid var(--window-c-titlebar-border);
+}
+
+.window-titlebar-icon {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--window-title-margin);
+  height: 100%;
+  padding: 0 10px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.window-titlebar-icon img {
+  width: 100%;
+  max-width: 16px;
+}
+
+.window-titlebar-title {
+  flex: 1;
+  font-size: var(--window-titlebar-font-size);
+  margin-left: var(--window-title-margin);
+  font-weight: var(--window-titlebar-font-weight, normal);
+  padding-left: 4px;
+}
+
+.window-titlebar-title[data-centered] {
+  text-align: center;
+  padding-left: 0;
+  margin: 0;
+}
+
+.window-titlebar-controls {
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.window-titlebar-menu {
+  display: flex;
+  flex-direction: row;
+  gap: 2px;
+  position: absolute;
+  top: 9px;
+  left: var(--window-title-margin);
+  -webkit-app-region: no-drag;
+  font-size: var(--window-titlebar-font-size);
+}
+
+.titlebar-menuItem .menuItem-label {
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  font-weight: var(--window-titlebar-font-weight, normal);
+  transition: all 150ms ease;
+}
+
+.titlebar-menuItem:hover .menuItem-label,
+.titlebar-menuItem.active .menuItem-label {
+  background-color: var(--window-c-hover);
+}
+
+.titlebar-menuItem .menuItem-popup {
+  position: fixed;
+  background-color: var(--window-c-popup-background);
+  top: 36px;
+  min-width: 180px;
+  border: 1px solid var(--window-c-popup-border);
+  padding: 6px;
+  box-shadow: 0 4px 16px var(--window-c-popup-shadow);
+  z-index: 10000;
+  border-radius: 10px;
+}
+
+.titlebar-menuItem .menuItem-popupItem {
+  display: flex;
+  flex-direction: row;
+  padding: 8px 12px;
+  text-shadow: 1px 1px var(--window-c-text-shadow);
+  justify-content: space-between;
+  font-weight: var(--window-c-popup-font-weight);
+  border-radius: 6px;
+  transition: all 150ms ease;
+}
+
+.titlebar-menuItem .menuItem-shortcut {
+  opacity: 0.5;
+  margin-left: 3rem;
+  font-size: 12px;
+}
+
+.titlebar-menuItem .menuItem-popupItem:hover {
+  background-color: var(--window-c-hover);
+}
+
+.titlebar-menuItem .menuItem-popupItem.menuItem-separator {
+  border-top: 1px solid var(--window-c-separator);
+  margin-top: 4px;
+  padding: 4px 0;
+  pointer-events: none;
+}
+
+.titlebar-controlButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 30px;
+  cursor: pointer;
+  background-color: transparent;
+  transition: all 150ms ease;
+}
+
+/* Windows: full-height controls so hover area extends to top edge */
+.platform-win32 .titlebar-controlButton {
+  width: 46px;
+  height: 36px;
+}
+
+.titlebar-controlButton:hover {
+  background-color: var(--window-c-control-hover);
+}
+
+.titlebar-controlButton[aria-label='close']:hover {
+  background-color: var(--window-c-control-close-hover);
+  color: var(--window-c-control-close-hover-text, inherit);
+}
+
+.titlebar-controlButton:active {
+  transform: scale(0.95);
+}
+
+/* Custom scrollbar for window content */
+.window-content::-webkit-scrollbar {
+  width: var(--window-scrollbar-width);
+}
+
+.window-content::-webkit-scrollbar-track {
+  background-color: var(--window-c-scrollbar-track);
+}
+
+.window-content::-webkit-scrollbar-thumb {
+  background-color: var(--window-c-scrollbar-thumb);
+  border-radius: 4px;
+  border: 3px solid var(--window-c-scrollbar-track);
+}
+
+.window-content::-webkit-scrollbar-thumb:hover {
+  background-color: var(--window-c-scrollbar-thumb-hover);
+}
+
+.platform-darwin .window-titlebar-title {
+  margin-left: var(--window-mac-titlebar-controls-margin);
+}
+.platform-darwin .window-titlebar-menu {
+  left: var(--window-mac-titlebar-controls-margin);
+}
+
+/* Fullscreen: traffic lights hidden, use normal left margin */
+.is-fullscreen .platform-darwin .window-titlebar-title {
+  margin-left: 12px;
+}
+.is-fullscreen .platform-darwin .window-titlebar-menu {
+  left: 12px;
+}

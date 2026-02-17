@@ -1,0 +1,61 @@
+/* XTerm Container */
+.xterm-container {
+  width: 100%;
+  height: 100%;
+  background: hsl(var(--background));
+  padding: 10px 16px 10px 14px;
+  box-sizing: border-box;
+}
+
+.xterm-container .xterm {
+  height: 100%;
+}
+
+.xterm-container .xterm-viewport {
+  overflow-y: auto !important;
+}
+
+/* Better text rendering */
+.xterm-container .xterm-screen {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Scrollbar styling - thin and subtle */
+.xterm-container .xterm-viewport::-webkit-scrollbar {
+  width: 5px;
+}
+
+.xterm-container .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.xterm-container .xterm-viewport::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+
+.xterm-container .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.3);
+}
+
+/* Selection */
+.xterm-container ::selection {
+  background: hsl(var(--muted-foreground) / 0.3);
+}
+
+/* Cursor animation smoothing */
+.xterm-container .xterm-cursor-layer {
+  transition: opacity 80ms ease;
+}
+
+/* Links in terminal */
+.xterm-container .xterm-link-layer a {
+  color: #7ab3ef;
+  text-decoration: none;
+}
+
+.xterm-container .xterm-link-layer a:hover {
+  text-decoration: underline;
+}

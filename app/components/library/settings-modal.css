@@ -1,0 +1,585 @@
+/* Settings Modal - Refined Dark Theme */
+
+.settings-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(12px);
+}
+
+.settings-modal {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+  height: 640px;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 25px 80px -12px rgba(0, 0, 0, 0.7);
+}
+
+.settings-modal-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: hsl(var(--muted-foreground) / 0.5);
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.settings-modal-close:hover {
+  background: hsl(var(--muted) / 0.5);
+  color: hsl(var(--muted-foreground));
+}
+
+.settings-modal-layout {
+  display: flex;
+  height: 100%;
+}
+
+/* Sidebar Navigation */
+.settings-sidebar {
+  width: 220px;
+  padding: 24px 16px;
+  background: hsl(var(--background));
+  border-right: 1px solid hsl(var(--border));
+  flex-shrink: 0;
+}
+
+.settings-sidebar-title {
+  padding: 0 12px;
+  margin-bottom: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground) / 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground) / 0.7);
+  text-align: left;
+  cursor: pointer;
+  transition: all 150ms ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-nav-item:hover {
+  background: hsl(var(--muted) / 0.5);
+  color: hsl(var(--muted-foreground));
+}
+
+.settings-nav-item.active {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.settings-nav-item svg {
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.settings-nav-item.active svg {
+  opacity: 1;
+}
+
+/* Content Area */
+.settings-content {
+  flex: 1;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.settings-content > div {
+  padding: 0 40px 32px;
+}
+
+.settings-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.settings-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-content::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+
+.settings-content::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.3);
+}
+
+/* Page Header */
+.settings-page-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 20px 40px 14px;
+  margin: 0 -40px;
+  background: linear-gradient(to bottom, hsl(var(--card)) 80%, transparent);
+}
+
+.settings-page-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  margin: 0;
+  letter-spacing: -0.01em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-page-description {
+  font-size: 13px;
+  color: hsl(var(--muted-foreground) / 0.7);
+  margin-top: 6px;
+  margin-bottom: 0;
+  line-height: 1.5;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Form Fields */
+.settings-field {
+  margin-bottom: 24px;
+}
+
+.settings-field-label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-field-input {
+  width: 100%;
+  padding: 12px 16px;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  font-size: 14px;
+  color: hsl(var(--foreground) / 0.85);
+  outline: none;
+  transition: all 150ms ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-field-input:focus {
+  border-color: hsl(var(--muted-foreground) / 0.3);
+  background: hsl(var(--background));
+}
+
+.settings-field-input:read-only {
+  color: hsl(var(--muted-foreground) / 0.7);
+  cursor: default;
+}
+
+.settings-field-input::placeholder {
+  color: hsl(var(--muted-foreground) / 0.5);
+}
+
+.settings-field-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground) / 0.5);
+  line-height: 1.6;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-field-value {
+  font-size: 14px;
+  color: hsl(var(--muted-foreground));
+  font-family: "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+  letter-spacing: -0.01em;
+}
+
+/* Sections */
+.settings-section {
+  padding-top: 28px;
+  margin-top: 28px;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.settings-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground) / 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Action Rows */
+.settings-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 0;
+}
+
+.settings-action-row + .settings-action-row {
+  border-top: 1px solid hsl(var(--border));
+}
+
+.settings-action-info {
+  flex: 1;
+}
+
+.settings-action-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: hsl(var(--foreground) / 0.85);
+  margin-bottom: 4px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-action-description {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground) / 0.5);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Buttons */
+.settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  background: hsl(var(--muted) / 0.5);
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: all 150ms ease;
+  white-space: nowrap;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-btn:hover {
+  background: hsl(var(--muted));
+  border-color: hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+
+.settings-btn-danger {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.15);
+  color: #ef6b6b;
+}
+
+.settings-btn-danger:hover {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: #f89191;
+}
+
+.settings-btn-primary {
+  background: hsl(var(--muted));
+  border-color: hsl(var(--muted-foreground) / 0.3);
+  color: hsl(var(--foreground));
+}
+
+.settings-btn-primary:hover {
+  background: hsl(var(--muted));
+  border-color: hsl(var(--muted-foreground) / 0.3);
+}
+
+/* Save Button Container */
+.settings-save-container {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 36px;
+  padding-top: 28px;
+  border-top: 1px solid hsl(var(--border));
+}
+
+/* Integration Cards */
+.settings-integrations-section {
+  margin-bottom: 32px;
+}
+
+.settings-integrations-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-integrations-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground) / 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-integrations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-integration-card {
+  position: relative;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  transition: all 180ms ease;
+  overflow: hidden;
+}
+
+.settings-integration-card:hover {
+  border-color: hsl(var(--border));
+}
+
+.settings-integration-card.connected {
+  border-color: rgba(126, 198, 153, 0.2);
+  background: rgba(126, 198, 153, 0.03);
+}
+
+.settings-integration-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+}
+
+.settings-integration-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  background: hsl(var(--muted) / 0.5);
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+.settings-integration-card.connected .settings-integration-icon {
+  background: rgba(126, 198, 153, 0.08);
+}
+
+.settings-integration-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-integration-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.settings-integration-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: hsl(var(--foreground) / 0.85);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-integration-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 100px;
+  background: rgba(126, 198, 153, 0.15);
+  color: #7ec699;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.settings-integration-description {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground) / 0.5);
+  line-height: 1.5;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-integration-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-integration-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: hsl(var(--muted) / 0.5);
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: all 150ms ease;
+  white-space: nowrap;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-integration-btn:hover {
+  background: hsl(var(--muted));
+  border-color: hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+
+.settings-integration-btn.connect {
+  background: hsl(var(--muted));
+  border-color: hsl(var(--muted-foreground) / 0.3);
+  color: hsl(var(--foreground));
+}
+
+.settings-integration-btn.connect:hover {
+  background: hsl(var(--muted));
+  border-color: hsl(var(--muted-foreground) / 0.3);
+}
+
+.settings-integration-btn.disconnect {
+  background: rgba(239, 68, 68, 0.06);
+  border-color: rgba(239, 68, 68, 0.12);
+  color: #ef6b6b;
+}
+
+.settings-integration-btn.disconnect:hover {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.2);
+  color: #f89191;
+}
+
+.settings-integration-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-integration-expanded {
+  padding: 0 18px 16px;
+  border-top: 1px solid hsl(var(--border));
+  margin-top: -2px;
+  padding-top: 14px;
+}
+
+/* Form within integration card */
+.settings-integration-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-integration-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-integration-form-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground) / 0.7);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-integration-form-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  font-size: 13px;
+  color: hsl(var(--foreground) / 0.85);
+  outline: none;
+  transition: all 150ms ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-integration-form-input:focus {
+  border-color: hsl(var(--muted-foreground) / 0.3);
+  background: hsl(var(--card));
+}
+
+.settings-integration-form-input::placeholder {
+  color: hsl(var(--muted-foreground) / 0.5);
+}
+
+.settings-integration-form-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.settings-integration-form-error {
+  font-size: 12px;
+  color: #ef6b6b;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-integration-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.settings-integration-form-link {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground) / 0.7);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 150ms ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-integration-form-link:hover {
+  color: hsl(var(--muted-foreground));
+}

@@ -1,0 +1,35 @@
+{
+  "version": "4.1.0",
+  "updatedAt": "2026-02-08",
+  "skills": {
+    "claude": [
+      "building-native-ui",
+      "deploy-ios",
+      "expo-api-routes",
+      "expo-tailwind-setup",
+      "expo-dev-client",
+      "expo-deployment",
+      "upgrading-expo",
+      "frontend-design",
+      "convex/setup",
+      "convex/auth",
+      "add-firebase",
+      "add-stripe",
+      "add-revenuecat"
+    ],
+    "codex": [
+      "building-native-ui",
+      "expo-api-routes",
+      "expo-tailwind-setup",
+      "expo-dev-client",
+      "expo-deployment",
+      "upgrading-expo",
+      "frontend-design",
+      "convex/setup",
+      "convex/auth",
+      "add-firebase",
+      "add-stripe",
+      "add-revenuecat"
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "type": "mobile",
+  "setup": "npm install --legacy-peer-deps",
+  "dev": "BROWSER=none npx expo start --web --clear"
+}

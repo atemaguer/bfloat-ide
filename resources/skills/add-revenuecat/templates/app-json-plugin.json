@@ -1,0 +1,11 @@
+[
+  "react-native-purchases",
+  [
+    "expo-build-properties",
+    {
+      "ios": {
+        "deploymentTarget": "15.1"
+      }
+    }
+  ]
+]

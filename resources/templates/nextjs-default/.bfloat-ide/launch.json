@@ -1,0 +1,5 @@
+{
+  "type": "web",
+  "setup": "bun install",
+  "dev": "bun run dev"
+}

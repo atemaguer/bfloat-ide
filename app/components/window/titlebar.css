@@ -1,0 +1,298 @@
+.window-titlebar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  height: 36px;
+  background-color: hsl(var(--background));
+  user-select: none;
+}
+
+/* Windows: remove right padding so window controls sit flush at the edge */
+.platform-win32.window-titlebar {
+  padding-right: 0;
+}
+
+.window-titlebar-title {
+  font-weight: 500;
+  font-size: 12px;
+  color: hsl(var(--foreground));
+}
+
+/* Search bar in titlebar */
+.window-titlebar-search {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background-color: hsl(var(--muted) / 0.5);
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  color: hsl(var(--muted-foreground) / 0.65);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 150ms ease;
+  -webkit-app-region: no-drag;
+  min-width: 200px;
+}
+
+.window-titlebar-search:hover {
+  background-color: hsl(var(--muted));
+  border-color: hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+}
+
+.window-titlebar-search-shortcut {
+  margin-left: auto;
+  font-size: 10px;
+  color: hsl(var(--muted-foreground) / 0.5);
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+}
+
+.platform-darwin .window-titlebar-search {
+  transform: translate(-50%, -50%);
+}
+
+.window-titlebar-controls-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Project titlebar content */
+.window-titlebar-project-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  -webkit-app-region: no-drag;
+}
+
+/* macOS: avoid traffic light buttons + align content with them */
+.platform-darwin .window-titlebar-project-left {
+  padding-left: 70px;
+}
+
+.platform-darwin .window-titlebar-tabs {
+}
+
+.platform-darwin .window-titlebar-project-actions {
+}
+
+.platform-darwin .window-titlebar-title {
+}
+
+.platform-darwin .window-titlebar-controls-container {
+}
+
+/* Fullscreen: remove traffic light padding since they're hidden */
+.is-fullscreen .platform-darwin .window-titlebar-project-left {
+  padding-left: 12px;
+}
+
+.is-fullscreen .platform-darwin .window-titlebar-title {
+  margin-left: 12px;
+}
+
+.window-titlebar-project-icon {
+  color: hsl(var(--muted-foreground));
+  flex-shrink: 0;
+}
+
+.window-titlebar-back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: hsl(var(--foreground));
+  cursor: pointer !important;
+  transition: all 150ms ease;
+  outline: none;
+  -webkit-app-region: no-drag;
+}
+
+.window-titlebar-back-btn:hover {
+  background-color: hsl(var(--muted));
+}
+
+.window-titlebar-back-btn:active {
+  transform: scale(0.95);
+}
+
+.window-titlebar-project-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.window-titlebar-project-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.window-titlebar-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: all 150ms ease;
+  -webkit-app-region: no-drag;
+}
+
+.window-titlebar-icon-btn:hover {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.window-titlebar-icon-btn:active {
+  transform: scale(0.95);
+}
+
+.window-titlebar-icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.window-titlebar-icon-btn.syncing {
+  color: #3b82f6;
+}
+
+.window-titlebar-icon-btn.success {
+  color: #22c55e;
+}
+
+.window-titlebar-icon-btn.error {
+  color: #ef4444;
+}
+
+/* Spin animation for sync icon */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.window-titlebar-icon-btn .animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Expand chat button */
+.window-titlebar-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: all 150ms ease;
+  -webkit-app-region: no-drag;
+}
+
+.window-titlebar-expand-btn:hover {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.window-titlebar-expand-btn:active {
+  transform: scale(0.95);
+}
+
+/* Titlebar Tabs */
+.window-titlebar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.window-titlebar-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground) / 0.65);
+  cursor: pointer;
+  transition: all 150ms ease;
+  -webkit-app-region: no-drag;
+  position: relative;
+}
+
+.window-titlebar-tab:hover {
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.5);
+}
+
+.window-titlebar-tab.active {
+  color: hsl(var(--foreground));
+  background: hsl(var(--muted));
+}
+
+.window-titlebar-tab.deploy {
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.1);
+  margin-left: 8px;
+  border-left: 1px solid hsl(var(--border));
+  padding-left: 16px;
+}
+
+.window-titlebar-tab.deploy:hover {
+  color: #c4b5fd;
+  background: rgba(167, 139, 250, 0.18);
+}
+
+/* Settings button */
+.window-titlebar-settings-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground) / 0.65);
+  cursor: pointer;
+  transition: all 150ms ease;
+  -webkit-app-region: no-drag;
+}
+
+.window-titlebar-settings-btn:hover {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+

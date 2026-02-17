@@ -1,0 +1,83 @@
+appId: com.bfloat.ide
+productName: Bfloat
+protocols:
+  - name: Bfloat
+    schemes:
+      - bfloat
+directories:
+  buildResources: resources/build
+files:
+  - from: .
+    filter:
+      - out/**
+      - resources/**
+      - package.json
+      - node_modules/**
+      - '!**/.vscode/*'
+      - '!src/*'
+      - '!electron.vite.config.{js,ts,mjs,cjs}'
+      - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+      - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+      - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+      - '!**/node_modules/.cache/**'
+      - '!**/node_modules/**/{test,tests,__tests__}/**'
+asarUnpack:
+  - resources/**
+  - node_modules/node-pty/**
+  - node_modules/@openai/codex-sdk/vendor/**
+  - node_modules/@anthropic-ai/claude-code/**
+extraResources:
+  - from: resources/templates
+    to: templates
+    filter:
+      - "**/*"
+  - from: resources/skills
+    to: skills
+    filter:
+      - "**/*"
+win:
+  executableName: Bfloat
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
+  extraResources:
+    - from: resources/vendor/win32
+      to: vendor/win32
+      filter:
+        - "**/*"
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+  include: resources/build/installer.nsh
+mac:
+  entitlementsInherit: resources/build/entitlements.mac.plist
+  hardenedRuntime: true
+  forceCodeSigning: true
+  extendInfo:
+    - NSCameraUsageDescription: Application requests access to the device's camera.
+    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
+    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
+    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+  notarize: false
+dmg:
+  artifactName: ${name}-${version}.${ext}
+  title: Bfloat
+linux:
+  target:
+    - AppImage
+    - snap
+    - deb
+  maintainer: electronjs.org
+  category: Utility
+appImage:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false
+# Auto-updates: Configure via UPDATE_BASE_URL environment variable
+# Or use S3 with AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, UPDATES_BUCKET
+# publish:
+#   provider: generic
+#   url: ${env.UPDATE_BASE_URL}

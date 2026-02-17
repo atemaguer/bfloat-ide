@@ -1,0 +1,713 @@
+@import 'tailwindcss';
+@source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+@source '@/app';
+@source '@/lib';
+
+/* =============================================================================
+   THEME CONFIGURATION
+   Tailwind CSS v4 theme using @theme directive
+   ============================================================================= */
+
+@theme {
+  /* -------------------------------------------------------------------------
+     Typography - Aurora Design System
+     ------------------------------------------------------------------------- */
+  --font-sans: InterVariable, Inter_Variable, CursorGothic, system-ui, sans-serif;
+  --font-mono: PaperMono, GeistMono, monospace;
+  --font-departure-mono: DepartureMono, monospace;
+  --font-modena-mono: ModenaMono, monospace;
+  --font-zed-plex: ZedPlexSans, sans-serif;
+  --font-pp-neue: PPNeueMontreal, sans-serif;
+
+  /* -------------------------------------------------------------------------
+     Semantic Colors (mapped from CSS variables)
+     ------------------------------------------------------------------------- */
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+
+  /* -------------------------------------------------------------------------
+     Aurora Design System Colors
+     ------------------------------------------------------------------------- */
+  --color-neutral-100: var(--neutral-100);
+  --color-neutral-350: #d3d3d3;
+  --color-neutral-400: var(--neutral-400);
+  --color-neutral-500: var(--neutral-500);
+  --color-neutral-900: var(--neutral-900);
+  --color-neutral-950: var(--neutral-950);
+
+  /* Light mode specific colors */
+  --color-light-bg: #fefefe;
+  --color-light-bg-secondary: #ffffff;
+  --color-light-bg-input: #ffffff;
+  --color-light-border: #e5e5e5;
+  --color-light-border-input: #d3d3d3;
+  --color-light-text: #282828;
+  --color-light-text-secondary: #2e2e2e;
+  --color-light-text-muted: #55514e;
+  --color-light-text-placeholder: #a9a9a9;
+  --color-light-text-tertiary: #8a8a8a;
+
+  /* Dark mode specific colors */
+  --color-dark-bg: #171717;
+  --color-dark-bg-secondary: #1e1e1e;
+  --color-dark-bg-input: #1c1c1c;
+  --color-dark-bg-elevated: #212121;
+  --color-dark-border: #2a2a2a;
+  --color-dark-border-input: #353535;
+  --color-dark-border-hover: #3c3c3c;
+  --color-dark-text: #e9e9e9;
+  --color-dark-text-secondary: #ffffff;
+  --color-dark-text-muted: #a39c99;
+  --color-dark-text-placeholder: #717171;
+  --color-dark-text-code: #737373;
+
+  /* Accent colors */
+  --color-accent-blue: #4a9eff;
+  --color-accent-amber: rgb(245, 158, 11);
+
+  /* -------------------------------------------------------------------------
+     Border Radius - Aurora
+     ------------------------------------------------------------------------- */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-full: 9999px;
+  --radius-5: 5px;
+  --radius-7: 7px;
+  --radius-13: 13px;
+
+  /* -------------------------------------------------------------------------
+     Shadows
+     ------------------------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.2);
+  --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.1);
+  --shadow-button: 0 4px 12px rgba(0, 0, 0, 0.3);
+
+  /* -------------------------------------------------------------------------
+     Transitions
+     ------------------------------------------------------------------------- */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+
+  /* -------------------------------------------------------------------------
+     Spacing (additional) - Aurora
+     ------------------------------------------------------------------------- */
+  --spacing-sidebar: 220px;
+  --spacing-header: 56px;
+  --spacing-4_5: 18px;
+  --spacing-13: 52px;
+
+  /* -------------------------------------------------------------------------
+     Sizing - Aurora
+     ------------------------------------------------------------------------- */
+  --width-chat: 680px;
+  --height-23: 23px;
+
+  /* -------------------------------------------------------------------------
+     Z-Index Scale - Aurora
+     ------------------------------------------------------------------------- */
+  --z-9: 9;
+  --z-60: 60;
+
+  /* -------------------------------------------------------------------------
+     Animations - Aurora
+     ------------------------------------------------------------------------- */
+  --animate-fade-in: fadeIn 150ms ease-out;
+  --animate-slide-up: slideUp 200ms ease-out;
+}
+
+/* =============================================================================
+   BASE STYLES
+   ============================================================================= */
+
+@layer base {
+
+  /* Typography defaults - Aurora */
+  html {
+    font-family: InterVariable, Inter_Variable, CursorGothic, system-ui, sans-serif !important;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-synthesis: none;
+  }
+
+  body {
+    font-family: inherit !important;
+  }
+
+  *,
+  ::before,
+  ::after {
+    font-family: inherit;
+  }
+
+  /* -------------------------------------------------------------------------
+     Light Mode Colors (default) - Aurora Design System
+     ------------------------------------------------------------------------- */
+  :root {
+    --background: 0 0% 99.6%;
+    /* #fefefe */
+    --foreground: 0 0% 16%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 16%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 16%;
+    --primary: 0 0% 16%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 100%;
+    --secondary-foreground: 0 0% 18%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 26 4% 32%;
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 16%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 0 0% 35%;
+    --success-foreground: 0 0% 100%;
+    --warning: 0 0% 45%;
+    --warning-foreground: 0 0% 100%;
+    --border: 0 0% 90%;
+    --input: 0 0% 100%;
+    --ring: 0 0% 16%;
+    --radius: 0.75rem;
+    --chart-1: 0 0% 20%;
+    --chart-2: 0 0% 35%;
+    --chart-3: 0 0% 50%;
+    --chart-4: 0 0% 65%;
+    --chart-5: 0 0% 80%;
+
+    /* Aurora neutral scale */
+    --neutral-100: #fefefe;
+    --neutral-400: #a9a9a9;
+    --neutral-500: #8a8a8a;
+    --neutral-900: #282828;
+    --neutral-950: #171717;
+
+    /* Aurora specific */
+    --border-color: #e5e5e5;
+
+    /* Aurora Chat Input */
+    --background-gray-main: #f5f5f5;
+    --fill-input-chat: #ffffff;
+    --border-main: #e5e5e5;
+    --border-dark: #d3d3d3;
+    --text-disable: #a9a9a9;
+    --text-secondary: #55514e;
+    --fill-tsp-gray-main: rgba(0, 0, 0, 0.04);
+    --icon-primary: #282828;
+    --icon-disable: #a9a9a9;
+    --Button-primary-black: #282828;
+    --text-onblack: #ffffff;
+    --fill-tsp-white-dark: #e5e5e5;
+  }
+
+  /* -------------------------------------------------------------------------
+     Dark Mode Colors - Aurora Design System
+     ------------------------------------------------------------------------- */
+  .dark {
+    /* Background layers - Aurora */
+    --background: 0 0% 9%;
+    /* #171717 */
+    --foreground: 0 0% 91%;
+    /* #e9e9e9 */
+
+    /* Card/Surface */
+    --card: 0 0% 12%;
+    /* #1e1e1e */
+    --card-foreground: 0 0% 91%;
+
+    /* Popover */
+    --popover: 0 0% 12%;
+    --popover-foreground: 0 0% 91%;
+
+    /* Primary (buttons, links) - White in dark mode */
+    --primary: 0 0% 100%;
+    --primary-foreground: 0 0% 9%;
+
+    /* Secondary */
+    --secondary: 0 0% 11%;
+    /* #1c1c1c */
+    --secondary-foreground: 0 0% 91%;
+
+    /* Muted */
+    --muted: 0 0% 13%;
+    /* #212121 */
+    --muted-foreground: 20 3% 63%;
+    /* #a39c99 */
+
+    /* Accent */
+    --accent: 0 0% 13%;
+    --accent-foreground: 0 0% 91%;
+
+    /* Semantic colors */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 0 0% 70%;
+    --success-foreground: 0 0% 9%;
+    --warning: 0 0% 60%;
+    --warning-foreground: 0 0% 9%;
+
+    /* Border & Input - Aurora */
+    --border: 0 0% 16%;
+    /* #2a2a2a */
+    --input: 0 0% 11%;
+    /* #1c1c1c */
+    --ring: 0 0% 50%;
+
+    /* Radius */
+    --radius: 0.75rem;
+
+    /* Charts (grayscale) */
+    --chart-1: 0 0% 90%;
+    --chart-2: 0 0% 70%;
+    --chart-3: 0 0% 50%;
+    --chart-4: 0 0% 35%;
+    --chart-5: 0 0% 20%;
+
+    /* Aurora neutral scale */
+    --neutral-100: #e9e9e9;
+    --neutral-400: #717171;
+    --neutral-500: #737373;
+    --neutral-900: #1e1e1e;
+    --neutral-950: #171717;
+
+    /* Aurora specific */
+    --border-color: #2a2a2a;
+
+    /* Aurora Chat Input - Dark mode */
+    --background-gray-main: #1e1e1e;
+    --fill-input-chat: #1c1c1c;
+    --border-main: #2a2a2a;
+    --border-dark: #353535;
+    --text-disable: #717171;
+    --text-secondary: #a39c99;
+    --fill-tsp-gray-main: rgba(255, 255, 255, 0.04);
+    --icon-primary: #e9e9e9;
+    --icon-disable: #717171;
+    --Button-primary-black: #ffffff;
+    --text-onblack: #171717;
+    --fill-tsp-white-dark: #353535;
+  }
+}
+
+/* Popover animation */
+@keyframes popoverIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Aurora animations */
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  0% {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* =============================================================================
+   COMPONENT CLASSES
+   Reusable component styles using @layer components
+   ============================================================================= */
+
+@layer components {
+  /* -------------------------------------------------------------------------
+     Buttons
+     ------------------------------------------------------------------------- */
+
+  /* Primary button - solid white/black */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2;
+    @apply px-4 py-2.5 rounded-lg;
+    @apply bg-foreground text-background;
+    @apply text-sm font-medium;
+    @apply transition-all duration-200;
+    @apply hover:bg-foreground/90 hover:-translate-y-0.5;
+    @apply active:scale-[0.98];
+    @apply disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0;
+    box-shadow: var(--shadow-button);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* Secondary button - outlined */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2;
+    @apply px-4 py-2.5 rounded-lg;
+    @apply bg-secondary text-secondary-foreground;
+    @apply border border-border;
+    @apply text-sm font-medium;
+    @apply transition-all duration-200;
+    @apply hover:bg-secondary/80 hover:border-foreground/20;
+    @apply active:scale-[0.98];
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Ghost button - minimal */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2;
+    @apply px-4 py-2.5 rounded-lg;
+    @apply bg-transparent text-muted-foreground;
+    @apply text-sm font-medium;
+    @apply transition-all duration-200;
+    @apply hover:bg-secondary hover:text-foreground;
+    @apply active:scale-[0.98];
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Icon button */
+  .btn-icon {
+    @apply inline-flex items-center justify-center;
+    @apply w-9 h-9 rounded-lg;
+    @apply bg-transparent text-muted-foreground;
+    @apply transition-all duration-200;
+    @apply hover:bg-secondary hover:text-foreground;
+    @apply active:scale-[0.95];
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* -------------------------------------------------------------------------
+     Inputs
+     ------------------------------------------------------------------------- */
+
+  .input-field {
+    @apply w-full py-2.5 px-4;
+    @apply bg-input border border-border rounded-lg;
+    @apply text-foreground text-sm;
+    @apply placeholder:text-muted-foreground;
+    @apply outline-none transition-all duration-200;
+    @apply focus:border-foreground/50 focus:ring-2 focus:ring-foreground/10;
+    @apply disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  .input-textarea {
+    @apply w-full py-3 px-4;
+    @apply bg-input border border-border rounded-xl;
+    @apply text-foreground text-base leading-relaxed;
+    @apply placeholder:text-muted-foreground;
+    @apply outline-none resize-none transition-all duration-200;
+    @apply focus:border-foreground/50 focus:ring-2 focus:ring-foreground/10;
+    @apply disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  .input-search {
+    @apply w-full py-2.5 pl-10 pr-4;
+    @apply bg-background border border-border rounded-lg;
+    @apply text-foreground text-sm;
+    @apply placeholder:text-muted-foreground;
+    @apply outline-none transition-all duration-200;
+    @apply focus:border-foreground/50 focus:ring-2 focus:ring-foreground/10;
+  }
+
+  /* -------------------------------------------------------------------------
+     Cards
+     ------------------------------------------------------------------------- */
+
+  .card {
+    @apply bg-card border border-border rounded-xl;
+    @apply overflow-hidden;
+  }
+
+  .card-interactive {
+    @apply bg-card border border-border rounded-xl;
+    @apply overflow-hidden cursor-pointer;
+    @apply transition-all duration-200;
+    @apply hover:border-foreground/20 hover:-translate-y-0.5;
+    box-shadow: var(--shadow-card);
+  }
+
+  .card-interactive:hover {
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* -------------------------------------------------------------------------
+     Sidebar
+     ------------------------------------------------------------------------- */
+
+  .sidebar {
+    @apply w-[220px] flex flex-col;
+    @apply bg-card border-r border-border;
+    @apply p-4;
+  }
+
+  .sidebar-item {
+    @apply flex items-center gap-2.5;
+    @apply w-full px-3 py-2.5 rounded-lg;
+    @apply text-muted-foreground text-sm text-left;
+    @apply transition-all duration-200;
+    @apply hover:bg-secondary hover:text-foreground;
+  }
+
+  .sidebar-item-active {
+    @apply flex items-center gap-2.5;
+    @apply w-full px-3 py-2.5 rounded-lg;
+    @apply bg-foreground/10 text-foreground text-sm text-left;
+    @apply transition-all duration-200;
+  }
+
+  /* -------------------------------------------------------------------------
+     Badges
+     ------------------------------------------------------------------------- */
+
+  .badge {
+    @apply inline-flex items-center;
+    @apply px-2 py-0.5 rounded;
+    @apply text-xs font-medium;
+    @apply bg-secondary text-secondary-foreground;
+  }
+
+  .badge-primary {
+    @apply inline-flex items-center;
+    @apply px-2 py-0.5 rounded;
+    @apply text-xs font-medium;
+    @apply bg-foreground/10 text-foreground;
+  }
+
+  /* -------------------------------------------------------------------------
+     Avatar
+     ------------------------------------------------------------------------- */
+
+  .avatar {
+    @apply w-7 h-7 rounded-full;
+    @apply bg-foreground;
+    @apply flex items-center justify-center;
+    @apply text-xs font-semibold text-background uppercase;
+  }
+
+  .avatar-lg {
+    @apply w-10 h-10 rounded-full;
+    @apply bg-foreground;
+    @apply flex items-center justify-center;
+    @apply text-sm font-semibold text-background uppercase;
+  }
+
+  /* -------------------------------------------------------------------------
+     Status Indicators
+     ------------------------------------------------------------------------- */
+
+  .status-dot {
+    @apply w-1.5 h-1.5 rounded-full bg-foreground;
+  }
+
+  .status-dot-muted {
+    @apply w-1.5 h-1.5 rounded-full bg-muted-foreground;
+  }
+
+  /* -------------------------------------------------------------------------
+     Modal/Dialog
+     ------------------------------------------------------------------------- */
+
+  .modal-backdrop {
+    @apply fixed inset-0 z-[1000];
+    @apply flex items-center justify-center;
+    @apply bg-black/60 backdrop-blur-sm;
+  }
+
+  .modal-content {
+    @apply relative w-full max-w-[600px] max-h-[90vh];
+    @apply overflow-y-auto;
+    @apply bg-card border border-border rounded-2xl;
+    @apply p-6 shadow-2xl;
+  }
+
+  /* -------------------------------------------------------------------------
+     Quick Action Chips
+     ------------------------------------------------------------------------- */
+
+  .chip {
+    @apply flex items-center gap-2.5;
+    @apply px-4 py-2.5 rounded-xl;
+    @apply border border-border bg-card;
+    @apply text-muted-foreground text-sm font-medium;
+    @apply transition-all duration-200;
+    @apply hover:border-foreground/30 hover:text-foreground;
+  }
+
+  .chip-active {
+    @apply flex items-center gap-2.5;
+    @apply px-4 py-2.5 rounded-xl;
+    @apply border border-foreground/30 bg-foreground/5;
+    @apply text-foreground text-sm font-medium;
+  }
+
+  /* -------------------------------------------------------------------------
+     Hero Section
+     ------------------------------------------------------------------------- */
+
+  .hero-title {
+    @apply text-4xl font-bold text-foreground;
+  }
+
+  .hero-subtitle {
+    @apply text-lg text-muted-foreground;
+  }
+
+  /* -------------------------------------------------------------------------
+     Section Headers
+     ------------------------------------------------------------------------- */
+
+  .section-title {
+    @apply text-sm font-medium text-muted-foreground uppercase tracking-wide;
+  }
+
+  .page-title {
+    @apply text-2xl font-semibold text-foreground;
+  }
+}
+
+/* =============================================================================
+   UTILITY CLASSES
+   Additional utility classes using @layer utilities
+   ============================================================================= */
+
+@layer utilities {
+
+  /* Text utilities */
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Scrollbar styling */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+
+  /* Focus ring utility */
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-foreground/20 focus:ring-offset-2 focus:ring-offset-background;
+  }
+
+  /* Truncate with ellipsis */
+  .truncate-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* Gradient mask for fading text */
+  .mask-fade-bottom {
+    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+  }
+
+  /* Aurora variable font utilities */
+  .font-variation-410 {
+    font-variation-settings: "wght" 410;
+  }
+
+  .font-variation-429 {
+    font-variation-settings: "wght" 429;
+  }
+
+  .font-variation-432 {
+    font-variation-settings: "wght" 432;
+  }
+
+  .font-synthesis-none {
+    font-synthesis: none;
+  }
+
+  .contain-layout {
+    contain: layout;
+  }
+
+  /* Electron drag utilities */
+  .electron-drag {
+    -webkit-app-region: drag;
+  }
+
+  .electron-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  /* Aurora animations */
+  .animate-fade-in {
+    animation: fadeIn 150ms ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 200ms ease-out;
+  }
+
+  /* Aurora max-width */
+  .max-w-chat {
+    max-width: 680px;
+  }
+
+  /* Aurora input shadow */
+  .shadow-input {
+    box-shadow: 0 0 0 0.5px var(--border-color);
+  }
+}

@@ -1,0 +1,14 @@
+node_modules
+dist
+out
+.DS_Store
+*.log*
+temp
+pg
+.env
+.claude/settings.local.json
+.env.production
+
+# Bundled vendor binaries (downloaded during build)
+resources/vendor/win32/mingit/
+resources/vendor/win32/busybox.exe
