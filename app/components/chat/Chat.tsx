@@ -266,57 +266,6 @@ export function Chat({
       .catch(() => {})
   }, [projectId])
 
-  // Re-fetch Convex integration status after OAuth callback
-  useEffect(() => {
-    if (!window.conveyor?.app) return
-
-    const unsubscribe = window.conveyor.app.onConvexCallback(async (data) => {
-      if (data.success) {
-        setIntegrationStatus((prev) => ({ ...prev, convex: true }))
-        setInput('Setting up Convex...')
-        setIsProvisioning(true)
-
-        setIsProvisioning(false)
-        setConvexProvisioned(true)
-        const prompt = 'Use the /convex-setup skill to set up Convex backend integration for this project'
-        setInput(prompt)
-        setTimeout(() => {
-          submitRef.current?.(prompt)
-        }, 100)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
-
-  // Re-fetch Google/Firebase integration status after OAuth callback
-  useEffect(() => {
-    if (!window.conveyor?.app) return
-
-    const unsubscribe = window.conveyor.app.onGoogleCallback(async (data) => {
-      if (data.success) {
-        setIntegrationStatus((prev) => ({ ...prev, firebase: true }))
-        setShowFirebaseReconnect(false) // Hide reconnect banner if it was showing
-        setInput('Setting up Firebase...')
-        setIsProvisioning(true)
-
-        setIsProvisioning(false)
-        setFirebaseProvisioned(true)
-        const prompt = 'Use the /add-firebase skill to set up Firebase backend integration for this project'
-        setInput(prompt)
-        setTimeout(() => {
-          submitRef.current?.(prompt)
-        }, 100)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
-
   // Re-fetch Stripe integration status after OAuth callback
   useEffect(() => {
     if (!window.conveyor?.app?.onStripeCallback) return

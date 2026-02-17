@@ -9,10 +9,6 @@ export const appIpcSchema = {
     args: z.tuple([]),
     return: z.void(),
   },
-  'app:connect-convex': {
-    args: z.tuple([]),
-    return: z.void(),
-  },
   'app:open-external': {
     args: z.tuple([z.string()]),
     return: z.void(),

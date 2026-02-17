@@ -1125,10 +1125,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                       <ConvexIntegration
                         isConnected={hasConvexIntegration || false}
                         onConnect={() => {
-                          // Open Convex OAuth flow
-                          if (window.conveyor?.app) {
-                            window.conveyor.app.connectConvex()
-                          }
+                          const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined
+                          window.open(`${backendUrl}/desktop/convex/connect`, '_blank')
                         }}
                         onDisconnect={async () => {
                           console.log('[Workbench] Convex disconnect requested (local-first mode)')

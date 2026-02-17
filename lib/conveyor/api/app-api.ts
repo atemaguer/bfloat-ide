@@ -4,7 +4,6 @@ export class AppApi extends ConveyorApi {
   version = () => this.invoke('version')
   login = () => this.invoke('login')
   requestToken = (userId: string) => this.invoke('app:request-token', { userId })
-  connectConvex = () => this.invoke('app:connect-convex')
   openExternal = (url: string) => this.invoke('app:open-external', url)
 
   onAuthToken = (
@@ -72,22 +71,6 @@ export class AppApi extends ConveyorApi {
     }
     this.renderer.on('auth-invalid', subscription)
     return () => this.renderer.removeListener('auth-invalid', subscription)
-  }
-
-  onGoogleCallback = (callback: (data: { success: boolean; error: string | null }) => void) => {
-    const subscription = (_: any, data: { success: boolean; error: string | null }) => {
-      callback(data)
-    }
-    this.renderer.on('google-callback', subscription)
-    return () => this.renderer.removeListener('google-callback', subscription)
-  }
-
-  onConvexCallback = (callback: (data: { success: boolean; error: string | null }) => void) => {
-    const subscription = (_: any, data: { success: boolean; error: string | null }) => {
-      callback(data)
-    }
-    this.renderer.on('convex-callback', subscription)
-    return () => this.renderer.removeListener('convex-callback', subscription)
   }
 
   onStripeCallback = (callback: (data: { success: boolean; error: string | null }) => void) => {

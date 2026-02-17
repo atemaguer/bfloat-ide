@@ -26,24 +26,6 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
   // Account settings are not fetched from backend in local-first mode
 
-  // Listen for Convex OAuth callback
-  useEffect(() => {
-    if (!window.conveyor?.app) return
-
-    const unsubscribe = window.conveyor.app.onConvexCallback(async (data) => {
-      if (data.success) {
-        setConvexConnected(true)
-      } else if (data.error) {
-        console.error('Convex OAuth error:', data.error)
-        alert(`Failed to connect Convex: ${data.error}`)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
-
   // Reset to account tab when modal opens
   useEffect(() => {
     if (open) {

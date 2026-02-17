@@ -143,27 +143,6 @@ function handleProtocolUrl(url: string, window: BrowserWindow): void {
       const message = parsedUrl.searchParams.get('message')
       window.webContents.send('oauth-error', { message })
     }
-    // Handle Convex OAuth callbacks
-    else if (callbackPath === '/convex/callback') {
-      // Send convex callback event to renderer for processing
-      const success = parsedUrl.searchParams.get('success')
-      const error = parsedUrl.searchParams.get('error')
-
-      window.webContents.send('convex-callback', {
-        success: success === 'true',
-        error: error || null,
-      })
-    }
-    // Handle Google OAuth callbacks (for Firebase integration)
-    else if (callbackPath === '/google/callback') {
-      const success = parsedUrl.searchParams.get('success')
-      const error = parsedUrl.searchParams.get('error')
-
-      window.webContents.send('google-callback', {
-        success: success === 'true',
-        error: error || null,
-      })
-    }
     // Handle Stripe Connect OAuth callbacks
     else if (callbackPath === '/stripe/callback') {
       const success = parsedUrl.searchParams.get('success')
