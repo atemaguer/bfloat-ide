@@ -6,8 +6,15 @@ out
 temp
 pg
 .env
-.claude/settings.local.json
 .env.production
+.claude/
+
+# Build cache
+*.tsbuildinfo
+electron.vite.config.*.mjs
+
+# Lock files (using pnpm)
+bun.lockb
 
 # Bundled vendor binaries (downloaded during build)
 resources/vendor/win32/mingit/
