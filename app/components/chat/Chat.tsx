@@ -595,7 +595,7 @@ export function Chat({
     }
   }, [pendingScreenshotDataUrl])
   const handlePendingAttachmentConsumed = useCallback(() => {
-    workbenchStore.pendingScreenshot.set(null)
+    workbenchStore.pendingScreenshot.setState(null, true)
   }, [])
 
   // Handle session ID changes - update local state and persist to projects.json

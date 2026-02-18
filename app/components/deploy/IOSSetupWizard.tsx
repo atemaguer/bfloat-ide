@@ -579,7 +579,7 @@ export function IOSSetupWizard({
   const handleCopyError = useCallback(() => {
     // Copy the last portion of build logs which contains the actual error details
     // Fall back to error message if no logs available
-    const logs = deployStore.buildLogs.get()
+    const logs = deployStore.buildLogs.getState()
     const logTail = logs ? logs.slice(-4000) : '' // Last 4000 chars of logs (before cleaning)
 
     let textToCopy = ''

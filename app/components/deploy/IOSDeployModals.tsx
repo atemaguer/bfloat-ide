@@ -287,7 +287,7 @@ export function IOSDeployModals() {
     if (!projectPath) return
 
     // Set project owner based on selected account (for org builds)
-    const selectedAccount = deployStore.selectedEasAccount.get()
+    const selectedAccount = deployStore.selectedEasAccount.getState()
     if (selectedAccount) {
       await setProjectOwner(projectPath, selectedAccount)
     }
@@ -325,7 +325,7 @@ export function IOSDeployModals() {
 
     // Get the latest credential status from the store (not from closure)
     // This ensures we use the updated status after wizard completion
-    const latestCredentialStatus = deployStore.iOSCredentialStatus.get()
+    const latestCredentialStatus = deployStore.iOSCredentialStatus.getState()
 
     // Run background deployment
     const { cancel } = await runBackgroundDeployment(
@@ -531,7 +531,7 @@ export function IOSDeployModals() {
       if (checkResult?.success && checkResult.configured) {
         // Has credentials - use Claude Code (non-interactive)
         // Set project owner based on selected account (for org builds)
-        const selectedAccount = deployStore.selectedEasAccount.get()
+        const selectedAccount = deployStore.selectedEasAccount.getState()
         if (selectedAccount) {
           await setProjectOwner(syncedPath, selectedAccount)
         }
@@ -576,7 +576,7 @@ export function IOSDeployModals() {
 
     // Set project owner based on selected account (for org builds)
     // This now works because app.json exists from prepareForDeployment
-    const selectedAccount = deployStore.selectedEasAccount.get()
+    const selectedAccount = deployStore.selectedEasAccount.getState()
     if (selectedAccount) {
       const ownerResult = await setProjectOwner(projectPath, selectedAccount)
       if (!ownerResult.success) {
@@ -595,7 +595,7 @@ export function IOSDeployModals() {
       console.log('[IOSDeployModals] Has ASC key - using Claude Code (non-interactive)')
       // Has ASC key - use Claude Code (non-interactive)
       // Update credential status to indicate credentials are configured
-      const currentStatus = deployStore.iOSCredentialStatus.get()
+      const currentStatus = deployStore.iOSCredentialStatus.getState()
       if (currentStatus) {
         deployStore.setIOSCredentialStatus({
           ...currentStatus,
@@ -614,7 +614,7 @@ export function IOSDeployModals() {
       console.log('[IOSDeployModals] No ASC key - using interactive deployment with Apple credentials')
       // No ASC key - need interactive deployment with Apple credentials
       // Update credential status
-      const currentStatus = deployStore.iOSCredentialStatus.get()
+      const currentStatus = deployStore.iOSCredentialStatus.getState()
       if (currentStatus) {
         deployStore.setIOSCredentialStatus({
           ...currentStatus,
@@ -666,8 +666,8 @@ export function IOSDeployModals() {
 
   // Handle fix with AI - send build logs to agent
   const handleFixWithAI = useCallback(() => {
-    const logs = deployStore.iOSLogs.get()
-    const progress = deployStore.iOSProgress.get()
+    const logs = deployStore.iOSLogs.getState()
+    const progress = deployStore.iOSProgress.getState()
 
     const prompt = buildDeployErrorPrompt({
       platform: 'ios',

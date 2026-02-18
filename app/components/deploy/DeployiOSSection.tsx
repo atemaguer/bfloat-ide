@@ -219,13 +219,13 @@ export function DeployiOSSection({ disabled = false }: DeployiOSSectionProps) {
       if (checkResult?.success && checkResult.configured) {
         // Has credentials - use Claude Code (non-interactive)
         // Set project owner based on selected account (for org builds)
-        const selectedAccount = deployStore.selectedEasAccount.get()
+        const selectedAccount = deployStore.selectedEasAccount.getState()
         if (selectedAccount) {
           await setProjectOwner(projectPath, selectedAccount)
         }
 
         // Prepare the project
-        const currentProj = workbenchStore.currentProject.get()
+        const currentProj = workbenchStore.currentProject.getState()
         const projectTitle = currentProj?.title || 'myapp'
         const expoUsername = tokens.expo?.username
         await prepareForDeployment(projectPath, expoUsername, projectTitle)

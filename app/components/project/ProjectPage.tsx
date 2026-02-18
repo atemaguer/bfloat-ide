@@ -270,8 +270,8 @@ function ProjectPageContent() {
     // Get the changed file paths from projectStore's invalidated cache
     // When a file changes, projectStore invalidates it from openFiles cache
     // We just need to check which files are no longer in cache and reload them
-    const currentFiles = workbenchStore.files.get()
-    const openFilesCache = projectStore.openFiles.get()
+    const currentFiles = workbenchStore.files.getState()
+    const openFilesCache = projectStore.openFiles.getState()
 
     // Find files that were invalidated (in workbench but not in projectStore cache)
     const invalidatedFiles = Object.keys(currentFiles).filter(

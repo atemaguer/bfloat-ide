@@ -371,7 +371,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               errorMessage = errorMessage.slice(0, cutoff > 200 ? cutoff + 1 : 500) + '...'
             }
 
-            const currentError = workbenchStore.promptError.get()
+            const currentError = workbenchStore.promptError.getState()
             // Avoid setting duplicate errors
             if (!currentError || !currentError.includes(errorMessage.slice(0, 50))) {
               console.log('[Workbench] Detected bundler error:', errorMessage.slice(0, 100))
@@ -602,13 +602,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           console.error('[Workbench] Error cleaning up temp directory:', err)
         )
         tempDirPathRef.current = null
-        workbenchStore.projectPath.set(null)
+        workbenchStore.projectPath.setState(null, true)
       }
     }
 
     // Prevent running multiple times for the same project
     // Only skip if setup was initiated AND projectPath is set (setup actually completed)
-    const currentProjectPath = workbenchStore.projectPath.get()
+    const currentProjectPath = workbenchStore.projectPath.getState()
     console.log('[Workbench] Setup check:', { setupInitiated: setupInitiatedRef.current, currentProjectPath, fileCount })
     if (setupInitiatedRef.current && currentProjectPath) {
       console.log('[Workbench] Setup already completed for this project, skipping')
@@ -700,7 +700,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       if (gitProjectPath) {
         console.log(`[Workbench] Using git project path: ${gitProjectPath}`)
         tempDirPathRef.current = gitProjectPath
-        workbenchStore.projectPath.set(gitProjectPath)
+        workbenchStore.projectPath.setState(gitProjectPath, true)
 
         // Get launch config from project files, or auto-detect from package.json
         let launchConfig = getLaunchConfig(files)
@@ -744,7 +744,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         console.log(`[Workbench] Temp directory created: ${tempPath}`)
         
         // Set the project path in the store for file saving
-        workbenchStore.projectPath.set(tempPath)
+        workbenchStore.projectPath.setState(tempPath, true)
 
         // Step 2: Convert FileMap to array of file entries + clean package.json
         // Use the snapshot to ensure we're using the same files that triggered this setup
@@ -906,7 +906,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           window.conveyor.filesystem.cleanupTempDir(tempDirPathRef.current)
             .catch(err => console.error('[Workbench] Error cleaning up temp directory:', err))
         }
-        workbenchStore.projectPath.set(null)
+        workbenchStore.projectPath.setState(null, true)
       }
     }
   }, [])
@@ -957,7 +957,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   // Handle screenshot from Preview component — add to chat as pending attachment
   const handleScreenshot = useCallback((dataUrl: string) => {
-    workbenchStore.pendingScreenshot.set(dataUrl)
+    workbenchStore.pendingScreenshot.setState(dataUrl, true)
   }, [])
 
   // Launch app in iOS Simulator (sends 'i' to Expo dev server)
@@ -994,7 +994,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     await new Promise(resolve => setTimeout(resolve, 500))
 
     // Find the project directory
-    const projectDir = tempDirPathRef.current || workbenchStore.projectPath.get()
+    const projectDir = tempDirPathRef.current || workbenchStore.projectPath.getState()
     if (!projectDir) {
       console.error('[Workbench] Cannot restart server - no project directory')
       setServerStatus('error')
