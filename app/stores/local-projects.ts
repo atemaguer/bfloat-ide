@@ -5,7 +5,7 @@
  * No backend server required - all operations are local.
  */
 
-import { atom, map, computed } from 'nanostores'
+import { createStore } from 'zustand/vanilla'
 import type { Project, AppType } from '@/app/types/project'
 
 // Generate a unique project ID
@@ -23,36 +23,44 @@ function generateTitle(prompt: string): string {
 
 class LocalProjectsStore {
   // Project list
-  projects = map<Record<string, Project>>({})
+  projects = createStore<Record<string, Project>>(() => ({}))
 
   // Loading state
-  isLoading = atom(false)
+  isLoading = createStore<boolean>(() => false)
 
-  // Computed: sorted project list
-  sortedProjects = computed([this.projects], (projects): Project[] => {
-    return Object.values(projects).sort((a, b) => {
-      const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
-      const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
-      return dateB - dateA
+  // Derived: sorted project list
+  sortedProjects = createStore<Project[]>(() => [])
+
+  constructor() {
+    // Subscribe to project changes to update sorted list
+    this.projects.subscribe((projects) => {
+      this.sortedProjects.setState(
+        Object.values(projects).sort((a, b) => {
+          const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
+          const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
+          return dateB - dateA
+        }),
+        true
+      )
     })
-  })
+  }
 
   /**
    * Load projects from local storage via IPC
    */
   async load(): Promise<void> {
-    this.isLoading.set(true)
+    this.isLoading.setState(true, true)
     try {
       const projects = await window.conveyor.localProjects.list()
       const projectMap: Record<string, Project> = {}
       for (const project of projects) {
         projectMap[project.id] = project
       }
-      this.projects.set(projectMap)
+      this.projects.setState(projectMap, true)
     } catch (error) {
       console.error('[LocalProjectsStore] Failed to load projects:', error)
     } finally {
-      this.isLoading.set(false)
+      this.isLoading.setState(false, true)
     }
   }
 
@@ -60,7 +68,7 @@ class LocalProjectsStore {
    * Get a single project
    */
   get(id: string): Project | undefined {
-    return this.projects.get()[id]
+    return this.projects.getState()[id]
   }
 
   /**
@@ -88,9 +96,9 @@ class LocalProjectsStore {
     await window.conveyor.localProjects.create(project)
 
     // Update local state
-    const current = { ...this.projects.get() }
+    const current = { ...this.projects.getState() }
     current[id] = project
-    this.projects.set(current)
+    this.projects.setState(current, true)
 
     return project
   }
@@ -122,9 +130,9 @@ class LocalProjectsStore {
     await window.conveyor.localProjects.create(project)
 
     // Update local state
-    const current = { ...this.projects.get() }
+    const current = { ...this.projects.getState() }
     current[id] = project
-    this.projects.set(current)
+    this.projects.setState(current, true)
 
     return project
   }
@@ -156,9 +164,9 @@ class LocalProjectsStore {
     await window.conveyor.localProjects.create(project)
 
     // Update local state
-    const current = { ...this.projects.get() }
+    const current = { ...this.projects.getState() }
     current[id] = project
-    this.projects.set(current)
+    this.projects.setState(current, true)
 
     return project
   }
@@ -167,7 +175,7 @@ class LocalProjectsStore {
    * Update a project
    */
   async update(id: string, updates: Partial<Project>): Promise<void> {
-    const current = { ...this.projects.get() }
+    const current = { ...this.projects.getState() }
     const project = current[id]
 
     if (!project) {
@@ -185,7 +193,7 @@ class LocalProjectsStore {
 
     // Update local state
     current[id] = updated
-    this.projects.set(current)
+    this.projects.setState(current, true)
   }
 
   /**
@@ -196,9 +204,9 @@ class LocalProjectsStore {
     await window.conveyor.localProjects.delete(id)
 
     // Update local state
-    const current = { ...this.projects.get() }
+    const current = { ...this.projects.getState() }
     delete current[id]
-    this.projects.set(current)
+    this.projects.setState(current, true)
   }
 }
 

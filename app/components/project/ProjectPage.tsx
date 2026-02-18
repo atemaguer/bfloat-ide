@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { Loader2, ArrowLeft } from 'lucide-react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { motion } from 'framer-motion'
 
 import { workbenchStore } from '@/app/stores/workbench'

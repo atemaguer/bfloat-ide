@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, FileText, Copy, Share2, RefreshCw, Code, Eye, Database, CreditCard, Settings, PanelLeft, Rocket, Check, Search, Loader2 } from 'lucide-react'
 import { workbenchStore, type WorkbenchTabType } from '@/app/stores/workbench'

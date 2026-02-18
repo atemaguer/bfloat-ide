@@ -1,4 +1,4 @@
-import { atom } from 'nanostores'
+import { createStore } from 'zustand/vanilla'
 import type { DeployStep } from '@/app/utils/eas-output-parser'
 import type { EasAccount } from '@/app/utils/eas-accounts'
 import type { PromptType, HumanizedPrompt } from '@/lib/conveyor/schemas/deploy-schema'
@@ -82,63 +82,63 @@ function saveDeployments(deployments: Deployment[]): void {
 
 class DeployStore {
   // Modal visibility
-  modalOpen = atom<boolean>(false)
+  modalOpen = createStore<boolean>(() => false)
 
   // Current running deployment
-  activeDeployment = atom<Deployment | null>(null)
+  activeDeployment = createStore<Deployment | null>(() => null)
 
   // Whether to show embedded terminal (for interactive deployments like iOS)
-  showTerminal = atom<boolean>(false)
+  showTerminal = createStore<boolean>(() => false)
 
   // Deployment history (persisted to localStorage)
-  deployments = atom<Deployment[]>(getStoredDeployments())
+  deployments = createStore<Deployment[]>(() => getStoredDeployments())
 
   // Background completion notification
-  deploymentNotification = atom<DeploymentNotification | null>(null)
+  deploymentNotification = createStore<DeploymentNotification | null>(() => null)
 
   // Terminal ID for the current deployment
-  terminalId = atom<string | null>(null)
+  terminalId = createStore<string | null>(() => null)
 
   // iOS-specific state
-  iOSSetupStep = atom<iOSSetupStep>('idle')
-  iOSProgress = atom<iOSDeployProgress>({
+  iOSSetupStep = createStore<iOSSetupStep>(() => 'idle')
+  iOSProgress = createStore<iOSDeployProgress>(() => ({
     step: 'prepare',
     percent: 0,
     message: 'Preparing...',
-  })
-  iOSLogs = atom<string>('')
-  iOSProgressModalOpen = atom<boolean>(false)
-  iOSSetupWizardOpen = atom<boolean>(false)
-  iOSCredentialStatus = atom<{
+  }))
+  iOSLogs = createStore<string>(() => '')
+  iOSProgressModalOpen = createStore<boolean>(() => false)
+  iOSSetupWizardOpen = createStore<boolean>(() => false)
+  iOSCredentialStatus = createStore<{
     hasExpoToken: boolean
     hasEasProject: boolean
     hasDistributionCert: boolean
     hasAscApiKey: boolean
     isFullyConfigured: boolean
     isFirstBuild: boolean
-  } | null>(null)
+  } | null>(() => null)
 
   // Flag to trigger automated deployment from IOSDeployModals
-  iOSShouldStartDeployment = atom<boolean>(false)
+  iOSShouldStartDeployment = createStore<boolean>(() => false)
 
   // EAS account management
-  easAccounts = atom<EasAccount[]>([])
-  selectedEasAccount = atom<string | null>(null) // Account name to use for builds
-  isLoadingAccounts = atom<boolean>(false)
+  easAccounts = createStore<EasAccount[]>(() => [])
+  selectedEasAccount = createStore<string | null>(() => null) // Account name to use for builds
+  isLoadingAccounts = createStore<boolean>(() => false)
 
   // Apple login state for GUI-based flow
-  appleLoginStatus = atom<AppleLoginStatus>('idle')
-  appleLoginError = atom<string | null>(null)
-  appleId = atom<string>('') // Stores the Apple ID for retry with OTP
+  appleLoginStatus = createStore<AppleLoginStatus>(() => 'idle')
+  appleLoginError = createStore<string | null>(() => null)
+  appleId = createStore<string>(() => '') // Stores the Apple ID for retry with OTP
 
   // Build logs for collapsible logs section
-  buildLogs = atom<string>('')
+  buildLogs = createStore<string>(() => '')
 
   // Interactive auth state for new wizard flow
-  interactiveAuthState = atom<InteractiveAuthState>({ mode: 'none' })
+  interactiveAuthState = createStore<InteractiveAuthState>(() => ({ mode: 'none' }))
 
   // Pending Apple credentials for interactive build
-  pendingAppleCredentials = atom<{ appleId: string; password: string } | null>(null)
+  pendingAppleCredentials = createStore<{ appleId: string; password: string } | null>(() => null)
 
   constructor() {
     // Sync deployments to localStorage
@@ -148,11 +148,11 @@ class DeployStore {
   }
 
   openModal(): void {
-    this.modalOpen.set(true)
+    this.modalOpen.setState(true, true)
   }
 
   toggleModal(): void {
-    if (this.modalOpen.get()) {
+    if (this.modalOpen.getState()) {
       this.closeModal()
     } else {
       this.openModal()
@@ -162,9 +162,9 @@ class DeployStore {
   closeModal(): void {
     // Allow closing the deploy panel even during active deployments
     // The deployment continues in the background
-    this.modalOpen.set(false)
-    this.showTerminal.set(false)
-    this.terminalId.set(null)
+    this.modalOpen.setState(false, true)
+    this.showTerminal.setState(false, true)
+    this.terminalId.setState(null, true)
   }
 
   startDeployment(platform: DeploymentPlatform, projectId?: string): Deployment {
@@ -176,13 +176,13 @@ class DeployStore {
       startedAt: new Date().toISOString(),
     }
 
-    this.activeDeployment.set(deployment)
+    this.activeDeployment.setState(deployment, true)
 
     return deployment
   }
 
   completeDeployment(url?: string): void {
-    const active = this.activeDeployment.get()
+    const active = this.activeDeployment.getState()
     if (!active) return
 
     const completed: Deployment = {
@@ -193,15 +193,15 @@ class DeployStore {
     }
 
     // Add to history
-    const history = this.deployments.get()
-    this.deployments.set([completed, ...history].slice(0, 50)) // Keep last 50
+    const history = this.deployments.getState()
+    this.deployments.setState([completed, ...history].slice(0, 50), true) // Keep last 50
 
-    this.activeDeployment.set(null)
-    this.showTerminal.set(false)
+    this.activeDeployment.setState(null, true)
+    this.showTerminal.setState(false, true)
   }
 
   failDeployment(error: string): void {
-    const active = this.activeDeployment.get()
+    const active = this.activeDeployment.getState()
     if (!active) return
 
     const failed: Deployment = {
@@ -212,28 +212,28 @@ class DeployStore {
     }
 
     // Add to history
-    const history = this.deployments.get()
-    this.deployments.set([failed, ...history].slice(0, 50))
+    const history = this.deployments.getState()
+    this.deployments.setState([failed, ...history].slice(0, 50), true)
 
-    this.activeDeployment.set(null)
-    this.showTerminal.set(false)
+    this.activeDeployment.setState(null, true)
+    this.showTerminal.setState(false, true)
   }
 
   cancelDeployment(): void {
-    const active = this.activeDeployment.get()
+    const active = this.activeDeployment.getState()
     if (!active) return
 
-    this.activeDeployment.set(null)
-    this.showTerminal.set(false)
-    this.terminalId.set(null)
+    this.activeDeployment.setState(null, true)
+    this.showTerminal.setState(false, true)
+    this.terminalId.setState(null, true)
   }
 
   getDeploymentsByPlatform(platform: DeploymentPlatform): Deployment[] {
-    return this.deployments.get().filter((d) => d.platform === platform)
+    return this.deployments.getState().filter((d) => d.platform === platform)
   }
 
   getLatestDeployment(platform: DeploymentPlatform): Deployment | undefined {
-    return this.deployments.get().find((d) => d.platform === platform)
+    return this.deployments.getState().find((d) => d.platform === platform)
   }
 
   // iOS-specific methods
@@ -249,37 +249,37 @@ class DeployStore {
     isFullyConfigured: boolean
     isFirstBuild: boolean
   } | null): void {
-    this.iOSCredentialStatus.set(status)
+    this.iOSCredentialStatus.setState(status, true)
   }
 
   /**
    * Open the iOS setup wizard
    */
   openIOSSetupWizard(): void {
-    this.iOSSetupWizardOpen.set(true)
-    this.iOSSetupStep.set('wizard')
+    this.iOSSetupWizardOpen.setState(true, true)
+    this.iOSSetupStep.setState('wizard', true)
   }
 
   /**
    * Close the iOS setup wizard
    */
   closeIOSSetupWizard(): void {
-    this.iOSSetupWizardOpen.set(false)
-    this.iOSSetupStep.set('idle')
+    this.iOSSetupWizardOpen.setState(false, true)
+    this.iOSSetupStep.setState('idle', true)
   }
 
   /**
    * Start iOS deployment with progress tracking
    */
   startIOSDeployment(projectId?: string): void {
-    this.iOSSetupStep.set('deploying')
-    this.iOSProgressModalOpen.set(true)
-    this.iOSProgress.set({
+    this.iOSSetupStep.setState('deploying', true)
+    this.iOSProgressModalOpen.setState(true, true)
+    this.iOSProgress.setState({
       step: 'prepare',
       percent: 0,
       message: 'Starting deployment...',
-    })
-    this.iOSLogs.set('')
+    }, true)
+    this.iOSLogs.setState('', true)
     this.startDeployment('ios', projectId)
   }
 
@@ -288,22 +288,22 @@ class DeployStore {
    * This sets a flag that IOSDeployModals watches to start the deployment
    */
   triggerIOSDeployment(): void {
-    this.iOSShouldStartDeployment.set(true)
+    this.iOSShouldStartDeployment.setState(true, true)
   }
 
   /**
    * Clear the deployment trigger flag
    */
   clearIOSDeploymentTrigger(): void {
-    this.iOSShouldStartDeployment.set(false)
+    this.iOSShouldStartDeployment.setState(false, true)
   }
 
   /**
    * Update iOS deployment progress
    */
   updateIOSProgress(progress: Partial<iOSDeployProgress>): void {
-    const current = this.iOSProgress.get()
-    this.iOSProgress.set({ ...current, ...progress })
+    const current = this.iOSProgress.getState()
+    this.iOSProgress.setState({ ...current, ...progress }, true)
   }
 
   /**
@@ -311,25 +311,25 @@ class DeployStore {
    * Uses comprehensive cleaning to remove ANSI codes, spinner characters, and escape sequences
    */
   appendIOSLog(data: string): void {
-    const current = this.iOSLogs.get()
+    const current = this.iOSLogs.getState()
     const cleaned = cleanTerminalOutput(data)
-    this.iOSLogs.set(current + cleaned)
+    this.iOSLogs.setState(current + cleaned, true)
   }
 
   /**
    * Complete iOS deployment successfully
    */
   completeIOSDeployment(buildUrl?: string): void {
-    this.iOSProgress.set({
+    this.iOSProgress.setState({
       step: 'complete',
       percent: 100,
       message: 'Deployment complete!',
       buildUrl,
-    })
-    this.iOSSetupStep.set('complete')
+    }, true)
+    this.iOSSetupStep.setState('complete', true)
     this.completeDeployment(buildUrl)
 
-    if (!this.iOSProgressModalOpen.get()) {
+    if (!this.iOSProgressModalOpen.getState()) {
       this.showDeploymentNotification({
         id: `deploy-toast-${Date.now()}`,
         platform: 'ios',
@@ -344,15 +344,15 @@ class DeployStore {
    * Fail iOS deployment with error
    */
   failIOSDeployment(error: string): void {
-    this.iOSProgress.set({
-      ...this.iOSProgress.get(),
+    this.iOSProgress.setState({
+      ...this.iOSProgress.getState(),
       step: 'error',
       error,
-    })
-    this.iOSSetupStep.set('idle')
+    }, true)
+    this.iOSSetupStep.setState('idle', true)
     this.failDeployment(error)
 
-    if (!this.iOSProgressModalOpen.get()) {
+    if (!this.iOSProgressModalOpen.getState()) {
       this.showDeploymentNotification({
         id: `deploy-toast-${Date.now()}`,
         platform: 'ios',
@@ -366,8 +366,8 @@ class DeployStore {
    * Cancel iOS deployment
    */
   cancelIOSDeployment(): void {
-    this.iOSProgressModalOpen.set(false)
-    this.iOSSetupStep.set('idle')
+    this.iOSProgressModalOpen.setState(false, true)
+    this.iOSSetupStep.setState('idle', true)
     this.cancelDeployment()
   }
 
@@ -375,35 +375,35 @@ class DeployStore {
    * Open the iOS progress modal (e.g. to view an in-progress deployment)
    */
   openIOSProgressModal(): void {
-    this.iOSProgressModalOpen.set(true)
+    this.iOSProgressModalOpen.setState(true, true)
   }
 
   /**
    * Close the iOS progress modal
    */
   closeIOSProgressModal(): void {
-    this.iOSProgressModalOpen.set(false)
-    this.iOSSetupStep.set('idle')
+    this.iOSProgressModalOpen.setState(false, true)
+    this.iOSSetupStep.setState('idle', true)
   }
 
   /**
    * Reset iOS state for a fresh deployment
    */
   resetIOSState(): void {
-    this.iOSSetupStep.set('idle')
-    this.iOSProgress.set({
+    this.iOSSetupStep.setState('idle', true)
+    this.iOSProgress.setState({
       step: 'prepare',
       percent: 0,
       message: 'Preparing...',
-    })
-    this.iOSLogs.set('')
-    this.iOSProgressModalOpen.set(false)
-    this.iOSSetupWizardOpen.set(false)
+    }, true)
+    this.iOSLogs.setState('', true)
+    this.iOSProgressModalOpen.setState(false, true)
+    this.iOSSetupWizardOpen.setState(false, true)
     // Don't reset credential status - it should persist
     // Reset Apple login state
-    this.appleLoginStatus.set('idle')
-    this.appleLoginError.set(null)
-    this.buildLogs.set('')
+    this.appleLoginStatus.setState('idle', true)
+    this.appleLoginError.setState(null, true)
+    this.buildLogs.setState('', true)
   }
 
   // Apple login methods for GUI-based flow
@@ -412,21 +412,21 @@ class DeployStore {
    * Set Apple login status
    */
   setAppleLoginStatus(status: AppleLoginStatus): void {
-    this.appleLoginStatus.set(status)
+    this.appleLoginStatus.setState(status, true)
   }
 
   /**
    * Set Apple login error
    */
   setAppleLoginError(error: string | null): void {
-    this.appleLoginError.set(error)
+    this.appleLoginError.setState(error, true)
   }
 
   /**
    * Store Apple ID for OTP retry
    */
   setAppleId(appleId: string): void {
-    this.appleId.set(appleId)
+    this.appleId.setState(appleId, true)
   }
 
   /**
@@ -434,25 +434,25 @@ class DeployStore {
    * Uses comprehensive cleaning to remove ANSI codes, spinner characters, and escape sequences
    */
   appendBuildLog(data: string): void {
-    const current = this.buildLogs.get()
+    const current = this.buildLogs.getState()
     const cleaned = cleanTerminalOutput(data)
-    this.buildLogs.set(current + cleaned)
+    this.buildLogs.setState(current + cleaned, true)
   }
 
   /**
    * Clear build logs
    */
   clearBuildLogs(): void {
-    this.buildLogs.set('')
+    this.buildLogs.setState('', true)
   }
 
   /**
    * Reset Apple login state
    */
   resetAppleLoginState(): void {
-    this.appleLoginStatus.set('idle')
-    this.appleLoginError.set(null)
-    this.appleId.set('')
+    this.appleLoginStatus.setState('idle', true)
+    this.appleLoginError.setState(null, true)
+    this.appleId.setState('', true)
   }
 
   // Interactive auth methods for new wizard flow
@@ -461,69 +461,69 @@ class DeployStore {
    * Set interactive auth state
    */
   setInteractiveAuthState(state: InteractiveAuthState): void {
-    this.interactiveAuthState.set(state)
+    this.interactiveAuthState.setState(state, true)
   }
 
   /**
    * Show credentials form
    */
   showCredentialsForm(): void {
-    this.interactiveAuthState.set({ mode: 'credentials' })
+    this.interactiveAuthState.setState({ mode: 'credentials' }, true)
   }
 
   /**
    * Show 2FA input
    */
   show2FAInput(context?: string, suggestion?: string): void {
-    this.interactiveAuthState.set({
+    this.interactiveAuthState.setState({
       mode: '2fa',
       promptType: '2fa',
       promptContext: context,
       suggestion,
-    })
+    }, true)
   }
 
   /**
    * Show terminal fallback
    */
   showTerminalFallback(promptType: PromptType, context?: string, suggestion?: string, humanized?: HumanizedPrompt): void {
-    this.interactiveAuthState.set({
+    this.interactiveAuthState.setState({
       mode: 'terminal-fallback',
       promptType,
       promptContext: context,
       suggestion,
       humanized,
-    })
+    }, true)
   }
 
   /**
    * Reset interactive auth state
    */
   resetInteractiveAuth(): void {
-    this.interactiveAuthState.set({ mode: 'none' })
-    this.pendingAppleCredentials.set(null)
+    this.interactiveAuthState.setState({ mode: 'none' }, true)
+    this.pendingAppleCredentials.setState(null, true)
   }
 
   /**
    * Store pending Apple credentials for interactive build
    */
   setPendingAppleCredentials(appleId: string, password: string): void {
-    this.pendingAppleCredentials.set({ appleId, password })
-    this.appleId.set(appleId) // Also store for OTP retry
+    this.pendingAppleCredentials.setState({ appleId, password }, true)
+    this.appleId.setState(appleId, true) // Also store for OTP retry
   }
 
   /**
    * Get pending Apple credentials
    */
   getPendingAppleCredentials(): { appleId: string; password: string } | null {
-    return this.pendingAppleCredentials.get()
+    return this.pendingAppleCredentials.getState()
   }
 
   /**
    * Clear pending Apple credentials
    */
   clearPendingAppleCredentials(): void {
-    this.pendingAppleCredentials.set(null)
+    this.pendingAppleCredentials.setState(null, true)
   }
 
   // EAS Account management methods
@@ -532,12 +532,12 @@ class DeployStore {
    * Set available EAS accounts
    */
   setEasAccounts(accounts: EasAccount[]): void {
-    this.easAccounts.set(accounts)
+    this.easAccounts.setState(accounts, true)
 
     // Auto-select: prefer org account (non-owner role) as they're likely paid, otherwise first account
-    if (!this.selectedEasAccount.get() && accounts.length > 0) {
+    if (!this.selectedEasAccount.getState() && accounts.length > 0) {
       const orgAccount = accounts.find((a) => a.role !== 'owner')
-      this.selectedEasAccount.set(orgAccount?.name || accounts[0].name)
+      this.selectedEasAccount.setState(orgAccount?.name || accounts[0].name, true)
     }
   }
 
@@ -545,7 +545,7 @@ class DeployStore {
    * Select an EAS account for builds
    */
   selectEasAccount(accountName: string): void {
-    this.selectedEasAccount.set(accountName)
+    this.selectedEasAccount.setState(accountName, true)
     // Persist selection
     try {
       localStorage.setItem('bfloat_selected_eas_account', accountName)
@@ -561,7 +561,7 @@ class DeployStore {
     try {
       const saved = localStorage.getItem('bfloat_selected_eas_account')
       if (saved) {
-        this.selectedEasAccount.set(saved)
+        this.selectedEasAccount.setState(saved, true)
       }
     } catch {
       // Ignore storage errors
@@ -572,30 +572,30 @@ class DeployStore {
    * Get the currently selected account details
    */
   getSelectedAccount(): EasAccount | null {
-    const selected = this.selectedEasAccount.get()
+    const selected = this.selectedEasAccount.getState()
     if (!selected) return null
-    return this.easAccounts.get().find((a) => a.name === selected) || null
+    return this.easAccounts.getState().find((a) => a.name === selected) || null
   }
 
   /**
    * Set loading state for accounts
    */
   setLoadingAccounts(loading: boolean): void {
-    this.isLoadingAccounts.set(loading)
+    this.isLoadingAccounts.setState(loading, true)
   }
 
   /**
    * Show a deployment notification toast
    */
   showDeploymentNotification(notification: DeploymentNotification): void {
-    this.deploymentNotification.set(notification)
+    this.deploymentNotification.setState(notification, true)
   }
 
   /**
    * Dismiss the current deployment notification
    */
   dismissDeploymentNotification(): void {
-    this.deploymentNotification.set(null)
+    this.deploymentNotification.setState(null, true)
   }
 }
 

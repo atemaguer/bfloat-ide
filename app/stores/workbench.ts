@@ -1,4 +1,4 @@
-import { atom, map } from 'nanostores'
+import { createStore } from 'zustand/vanilla'
 import type { EditorDocument, FileMap, ChatMessage, Project } from '@/app/types/project'
 import { FilesStore } from './files'
 import { EditorStore } from './editor'
@@ -29,43 +29,43 @@ export class WorkbenchStore {
   #editorStore = new EditorStore(this.#filesStore)
 
   // Current project
-  currentProject = atom<Project | null>(null)
+  currentProject = createStore<Project | null>(() => null)
 
   // Project filesystem path
-  projectPath = atom<string | null>(null)
+  projectPath = createStore<string | null>(() => null)
 
   // Chat state
-  chatStreaming = atom<boolean>(false)
-  messages = atom<ChatMessage[]>([])
+  chatStreaming = createStore<boolean>(() => false)
+  messages = createStore<ChatMessage[]>(() => [])
 
   // Preview error state - errors from dev server that need AI to fix
-  promptError = atom<string>('')
+  promptError = createStore<string>(() => '')
 
   // View state
-  activeView = atom<WorkbenchViewType>('preview')
+  activeView = createStore<WorkbenchViewType>(() => 'preview')
 
   // Workbench tab state (shared between Titlebar and Workbench)
   // Default to 'preview' so users see their app immediately
-  activeTab = atom<WorkbenchTabType>('preview')
+  activeTab = createStore<WorkbenchTabType>(() => 'preview')
 
   // Chat panel collapsed state
-  isChatCollapsed = atom<boolean>(false)
-  unsavedFiles = atom<Set<string>>(new Set())
+  isChatCollapsed = createStore<boolean>(() => false)
+  unsavedFiles = createStore<Set<string>>(() => new Set())
 
   // Pending prompt from external components (e.g., deployment)
   // The Chat component watches this and sends the prompt when set
-  pendingPrompt = atom<string | null>(null)
+  pendingPrompt = createStore<string | null>(() => null)
 
   // Pending environment variables for the next agent session
   // Used for passing temporary credentials (e.g., Apple ID for iOS deployment)
-  pendingEnvVars = atom<Record<string, string> | null>(null)
+  pendingEnvVars = createStore<Record<string, string> | null>(() => null)
 
   // Pending environment variables for PTY (interactive terminal) sessions
   // Used for first-time iOS deployment where interactive prompts are needed
-  pendingPtyEnvVars = atom<{ projectPath: string; envVars: Record<string, string> } | null>(null)
+  pendingPtyEnvVars = createStore<{ projectPath: string; envVars: Record<string, string> } | null>(() => null)
 
   // Pending screenshot from Preview — consumed by Chat to add as attachment
-  pendingScreenshot = atom<string | null>(null)
+  pendingScreenshot = createStore<string | null>(() => null)
 
   /**
    * Register the filesystem API for file operations
@@ -93,7 +93,7 @@ export class WorkbenchStore {
 
   // Project management
   setProject(project: Project): void {
-    this.currentProject.set(project)
+    this.currentProject.setState(project, true)
     this.#filesStore.setFiles(project.files)
     this.#editorStore.setDocuments(project.files)
     // NOTE: Messages are NOT set from project - they come from local Claude/Codex sessions
@@ -106,7 +106,7 @@ export class WorkbenchStore {
    * the async file sync completes
    */
   setProjectMetadata(project: Project): void {
-    this.currentProject.set(project)
+    this.currentProject.setState(project, true)
     // NOTE: Messages are NOT set from project - they come from local Claude/Codex sessions
     // Messages are loaded via aiAgentApi.readSession() in the Chat component
   }
@@ -116,7 +116,7 @@ export class WorkbenchStore {
    * Creates the directory if it doesn't exist, then writes all files
    */
   async syncFilesToDisk(): Promise<{ success: boolean; path?: string; error?: string }> {
-    const project = this.currentProject.get()
+    const project = this.currentProject.getState()
     if (!project) {
       return { success: false, error: 'No project loaded' }
     }
@@ -134,10 +134,10 @@ export class WorkbenchStore {
       }
 
       const projectDir = result.path
-      this.projectPath.set(projectDir)
+      this.projectPath.setState(projectDir, true)
 
       // Convert FileMap to array of files for writing
-      const files = this.files.get()
+      const files = this.files.getState()
       const fileEntries: Array<{ path: string; content: string }> = []
 
       for (const [filePath, dirent] of Object.entries(files)) {
@@ -167,24 +167,24 @@ export class WorkbenchStore {
    * Get the current project's filesystem path
    */
   getProjectPath(): string | null {
-    return this.projectPath.get()
+    return this.projectPath.getState()
   }
 
   // View management
   setActiveView(view: WorkbenchViewType): void {
-    this.activeView.set(view)
+    this.activeView.setState(view, true)
   }
 
   setActiveTab(tab: WorkbenchTabType): void {
-    this.activeTab.set(tab)
+    this.activeTab.setState(tab, true)
   }
 
   setIsChatCollapsed(collapsed: boolean): void {
-    this.isChatCollapsed.set(collapsed)
+    this.isChatCollapsed.setState(collapsed, true)
   }
 
   toggleChatCollapsed(): void {
-    this.isChatCollapsed.set(!this.isChatCollapsed.get())
+    this.isChatCollapsed.setState(!this.isChatCollapsed.getState(), true)
   }
 
   /**
@@ -194,12 +194,12 @@ export class WorkbenchStore {
    */
   triggerChatPrompt(prompt: string): void {
     console.log('[workbenchStore] triggerChatPrompt called with:', prompt)
-    console.log('[workbenchStore] Previous pendingPrompt:', this.pendingPrompt.get())
-    console.log('[workbenchStore] isChatCollapsed before:', this.isChatCollapsed.get())
-    this.pendingPrompt.set(prompt)
-    this.isChatCollapsed.set(false) // Open chat panel
-    console.log('[workbenchStore] pendingPrompt set to:', this.pendingPrompt.get())
-    console.log('[workbenchStore] isChatCollapsed after:', this.isChatCollapsed.get())
+    console.log('[workbenchStore] Previous pendingPrompt:', this.pendingPrompt.getState())
+    console.log('[workbenchStore] isChatCollapsed before:', this.isChatCollapsed.getState())
+    this.pendingPrompt.setState(prompt, true)
+    this.isChatCollapsed.setState(false, true) // Open chat panel
+    console.log('[workbenchStore] pendingPrompt set to:', this.pendingPrompt.getState())
+    console.log('[workbenchStore] isChatCollapsed after:', this.isChatCollapsed.getState())
   }
 
   /**
@@ -207,8 +207,8 @@ export class WorkbenchStore {
    */
   clearPendingPrompt(): void {
     console.log('[workbenchStore] clearPendingPrompt called')
-    console.log('[workbenchStore] pendingPrompt before:', this.pendingPrompt.get())
-    this.pendingPrompt.set(null)
+    console.log('[workbenchStore] pendingPrompt before:', this.pendingPrompt.getState())
+    this.pendingPrompt.setState(null, true)
     console.log('[workbenchStore] pendingPrompt after: null')
   }
 
@@ -218,9 +218,9 @@ export class WorkbenchStore {
    */
   setPendingEnvVars(envVars: Record<string, string>): void {
     console.log('[workbenchStore] setPendingEnvVars called with keys:', Object.keys(envVars))
-    console.log('[workbenchStore] Previous pendingEnvVars:', this.pendingEnvVars.get())
-    this.pendingEnvVars.set(envVars)
-    console.log('[workbenchStore] pendingEnvVars set to:', this.pendingEnvVars.get())
+    console.log('[workbenchStore] Previous pendingEnvVars:', this.pendingEnvVars.getState())
+    this.pendingEnvVars.setState(envVars, true)
+    console.log('[workbenchStore] pendingEnvVars set to:', this.pendingEnvVars.getState())
   }
 
   /**
@@ -228,10 +228,10 @@ export class WorkbenchStore {
    * Called when creating a new agent session
    */
   takePendingEnvVars(): Record<string, string> | null {
-    const envVars = this.pendingEnvVars.get()
+    const envVars = this.pendingEnvVars.getState()
     console.log('[workbenchStore] takePendingEnvVars called, returning:', envVars ? Object.keys(envVars) : null)
-    this.pendingEnvVars.set(null) // Clear after taking
-    console.log('[workbenchStore] pendingEnvVars cleared, now:', this.pendingEnvVars.get())
+    this.pendingEnvVars.setState(null, true) // Clear after taking
+    console.log('[workbenchStore] pendingEnvVars cleared, now:', this.pendingEnvVars.getState())
     return envVars
   }
 
@@ -240,10 +240,10 @@ export class WorkbenchStore {
    * Used to decide whether to create a new session
    */
   hasPendingEnvVars(): boolean {
-    const has = this.pendingEnvVars.get() !== null
+    const has = this.pendingEnvVars.getState() !== null
     console.log('[workbenchStore] hasPendingEnvVars called, returning:', has)
     if (has) {
-      console.log('[workbenchStore] pendingEnvVars keys:', Object.keys(this.pendingEnvVars.get()!))
+      console.log('[workbenchStore] pendingEnvVars keys:', Object.keys(this.pendingEnvVars.getState()!))
     }
     return has
   }
@@ -254,7 +254,7 @@ export class WorkbenchStore {
    * The terminal will pick these up when spawning
    */
   setPtyEnvVars(projectPath: string, envVars: Record<string, string>): void {
-    this.pendingPtyEnvVars.set({ projectPath, envVars })
+    this.pendingPtyEnvVars.setState({ projectPath, envVars }, true)
   }
 
   /**
@@ -262,8 +262,8 @@ export class WorkbenchStore {
    * Called when creating a new PTY session
    */
   takePendingPtyEnvVars(): { projectPath: string; envVars: Record<string, string> } | null {
-    const ptyEnvVars = this.pendingPtyEnvVars.get()
-    this.pendingPtyEnvVars.set(null) // Clear after taking
+    const ptyEnvVars = this.pendingPtyEnvVars.getState()
+    this.pendingPtyEnvVars.setState(null, true) // Clear after taking
     return ptyEnvVars
   }
 
@@ -271,7 +271,7 @@ export class WorkbenchStore {
   setDocuments(files: FileMap): void {
     this.#editorStore.setDocuments(files)
 
-    if (this.#filesStore.filesCount > 0 && this.currentDocument.get() === undefined) {
+    if (this.#filesStore.filesCount > 0 && this.currentDocument.getState() === undefined) {
       for (const [filePath, dirent] of Object.entries(files)) {
         if (dirent?.type === 'file') {
           this.setSelectedFile(filePath)
@@ -286,7 +286,7 @@ export class WorkbenchStore {
   }
 
   setCurrentDocumentContent(newContent: string): void {
-    const doc = this.currentDocument.get()
+    const doc = this.currentDocument.getState()
     const filePath = doc?.filePath
 
     if (!filePath) return
@@ -297,7 +297,7 @@ export class WorkbenchStore {
     this.#editorStore.updateFile(filePath, newContent)
 
     if (doc) {
-      const previousUnsavedFiles = this.unsavedFiles.get()
+      const previousUnsavedFiles = this.unsavedFiles.getState()
 
       if (unsavedChanges && previousUnsavedFiles.has(filePath)) {
         return
@@ -311,12 +311,12 @@ export class WorkbenchStore {
         newUnsavedFiles.delete(filePath)
       }
 
-      this.unsavedFiles.set(newUnsavedFiles)
+      this.unsavedFiles.setState(newUnsavedFiles, true)
     }
   }
 
   async saveFile(filePath: string): Promise<void> {
-    const documents = this.#editorStore.documents.get()
+    const documents = this.#editorStore.documents.getState()
     const document = documents[filePath]
 
     if (document === undefined) return
@@ -324,7 +324,7 @@ export class WorkbenchStore {
     await this.#filesStore.saveFile(filePath, document.value)
 
     // Save to disk via projectStore (new architecture)
-    const storeStatus = projectStore.status.get()
+    const storeStatus = projectStore.status.getState()
     if (storeStatus === 'ready') {
       try {
         // Use createFile which writes directly to disk via IPC
@@ -337,7 +337,7 @@ export class WorkbenchStore {
     }
     // Fallback to legacy filesystemApi
     else {
-      const projectDir = this.projectPath.get()
+      const projectDir = this.projectPath.getState()
       if (projectDir && filesystemApi) {
         try {
           await filesystemApi.writeFiles(projectDir, [{ path: filePath, content: document.value }])
@@ -347,19 +347,19 @@ export class WorkbenchStore {
       }
     }
 
-    const newUnsavedFiles = new Set(this.unsavedFiles.get())
+    const newUnsavedFiles = new Set(this.unsavedFiles.getState())
     newUnsavedFiles.delete(filePath)
-    this.unsavedFiles.set(newUnsavedFiles)
+    this.unsavedFiles.setState(newUnsavedFiles, true)
   }
 
   async saveCurrentDocument(): Promise<void> {
-    const currentDocument = this.currentDocument.get()
+    const currentDocument = this.currentDocument.getState()
     if (currentDocument === undefined) return
     await this.saveFile(currentDocument.filePath)
   }
 
   resetCurrentDocument(): void {
-    const currentDocument = this.currentDocument.get()
+    const currentDocument = this.currentDocument.getState()
     if (currentDocument === undefined) return
 
     const { filePath } = currentDocument
@@ -371,7 +371,7 @@ export class WorkbenchStore {
   }
 
   async saveAllFiles(): Promise<void> {
-    for (const filePath of this.unsavedFiles.get()) {
+    for (const filePath of this.unsavedFiles.getState()) {
       await this.saveFile(filePath)
     }
   }
@@ -385,7 +385,7 @@ export class WorkbenchStore {
     await this.saveAllFiles()
 
     // Then commit and push to git
-    const storeStatus = projectStore.status.get()
+    const storeStatus = projectStore.status.getState()
     if (storeStatus === 'ready') {
       try {
         await projectStore.commitAndPush('Auto-save before close')
@@ -403,7 +403,7 @@ export class WorkbenchStore {
     this.#editorStore.updateFile(filePath, content)
 
     // Write to disk via projectStore (new architecture)
-    const storeStatus = projectStore.status.get()
+    const storeStatus = projectStore.status.getState()
     if (storeStatus === 'ready') {
       projectStore.createFile(filePath, content).catch((error) => {
         console.error(`[WorkbenchStore] Failed to add file via projectStore: ${filePath}`, error)
@@ -411,7 +411,7 @@ export class WorkbenchStore {
     }
     // Fallback to legacy filesystemApi
     else {
-      const projectDir = this.projectPath.get()
+      const projectDir = this.projectPath.getState()
       if (projectDir && filesystemApi) {
         filesystemApi.writeFiles(projectDir, [{ path: filePath, content }]).catch((error) => {
           console.error(`[WorkbenchStore] Failed to add file to disk: ${filePath}`, error)
@@ -427,7 +427,7 @@ export class WorkbenchStore {
     this.#editorStore.updateFile(filePath, content)
 
     // Write to disk via projectStore (new architecture)
-    const storeStatus = projectStore.status.get()
+    const storeStatus = projectStore.status.getState()
     if (storeStatus === 'ready') {
       // Use createFile which writes directly to disk via IPC
       projectStore.createFile(filePath, content).catch((error) => {
@@ -436,7 +436,7 @@ export class WorkbenchStore {
     }
     // Fallback to legacy filesystemApi
     else {
-      const projectDir = this.projectPath.get()
+      const projectDir = this.projectPath.getState()
       if (projectDir && filesystemApi) {
         filesystemApi.writeFiles(projectDir, [{ path: filePath, content }]).catch((error) => {
           console.error(`[WorkbenchStore] Failed to update file on disk: ${filePath}`, error)
@@ -467,25 +467,25 @@ export class WorkbenchStore {
 
   // Chat management
   addMessage(message: ChatMessage): void {
-    const currentMessages = this.messages.get()
-    this.messages.set([...currentMessages, message])
+    const currentMessages = this.messages.getState()
+    this.messages.setState([...currentMessages, message], true)
   }
 
   setMessages(messages: ChatMessage[]): void {
-    this.messages.set(messages)
+    this.messages.setState(messages, true)
   }
 
   setChatStreaming(streaming: boolean): void {
-    this.chatStreaming.set(streaming)
+    this.chatStreaming.setState(streaming, true)
   }
 
   // Preview error management
   setPromptError(error: string): void {
-    this.promptError.set(error)
+    this.promptError.setState(error, true)
   }
 
   clearPromptError(): void {
-    this.promptError.set('')
+    this.promptError.setState('', true)
   }
 
   // Terminal command execution
@@ -585,11 +585,11 @@ export class WorkbenchStore {
    * Called when leaving the project page to clear stale data
    */
   reset(): void {
-    const currentProject = this.currentProject.get()
+    const currentProject = this.currentProject.getState()
 
     // Clear project state
-    this.currentProject.set(null)
-    this.projectPath.set(null)
+    this.currentProject.setState(null, true)
+    this.projectPath.setState(null, true)
 
     // Clear files and editor state
     this.#filesStore.setFiles(null)
@@ -597,22 +597,22 @@ export class WorkbenchStore {
     this.#editorStore.setSelectedFile(undefined)
 
     // Clear chat state
-    this.messages.set([])
-    this.chatStreaming.set(false)
+    this.messages.setState([], true)
+    this.chatStreaming.setState(false, true)
 
     // Clear error state
-    this.promptError.set('')
+    this.promptError.setState('', true)
 
     // Clear unsaved files
-    this.unsavedFiles.set(new Set())
+    this.unsavedFiles.setState(new Set(), true)
 
     // Clear pending screenshot
-    this.pendingScreenshot.set(null)
+    this.pendingScreenshot.setState(null, true)
 
     // Reset view state to defaults
-    this.activeView.set('preview')
-    this.activeTab.set('preview')
-    this.isChatCollapsed.set(false)
+    this.activeView.setState('preview', true)
+    this.activeTab.setState('preview', true)
+    this.isChatCollapsed.setState(false, true)
     console.log('[WorkbenchStore] ===== reset COMPLETE =====')
   }
 }

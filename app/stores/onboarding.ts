@@ -1,5 +1,6 @@
-import { computed } from 'nanostores'
+import { createStore } from 'zustand/vanilla'
 import { providerAuthStore } from './provider-auth'
+import type { ProviderAuthState } from './provider-auth'
 
 /**
  * Onboarding store - derives completion status from provider auth state
@@ -8,13 +9,11 @@ import { providerAuthStore } from './provider-auth'
  * - At least one AI provider (Claude OR ChatGPT) must be connected
  */
 
-// Computed atom that checks if onboarding is complete
-export const isOnboardingComplete = computed(providerAuthStore.tokens, (tokens) => {
+function deriveOnboardingComplete(tokens: ProviderAuthState): boolean {
   return tokens.anthropic !== null || tokens.openai !== null
-})
+}
 
-// Computed atom for current step based on connection status
-export const onboardingStep = computed(providerAuthStore.tokens, (tokens) => {
+function deriveOnboardingStep(tokens: ProviderAuthState): number {
   const hasAIProvider = tokens.anthropic !== null || tokens.openai !== null
 
   // Step 0: Welcome (always start here)
@@ -23,14 +22,29 @@ export const onboardingStep = computed(providerAuthStore.tokens, (tokens) => {
 
   if (!hasAIProvider) return 1 // Need to connect AI provider
   return 2 // All done, show success
-})
+}
 
-// Helper to check if AI provider step is complete
-export const hasAnyAIProvider = computed(providerAuthStore.tokens, (tokens) => {
+function deriveHasAnyAIProvider(tokens: ProviderAuthState): boolean {
   return tokens.anthropic !== null || tokens.openai !== null
-})
+}
 
-// Helper to check if Expo is connected
-export const hasExpo = computed(providerAuthStore.tokens, (tokens) => {
+function deriveHasExpo(tokens: ProviderAuthState): boolean {
   return tokens.expo !== null
+}
+
+// Initialize with current state
+const initialTokens = providerAuthStore.tokens.getState()
+
+// Derived stores that sync from providerAuthStore.tokens
+export const isOnboardingComplete = createStore<boolean>(() => deriveOnboardingComplete(initialTokens))
+export const onboardingStep = createStore<number>(() => deriveOnboardingStep(initialTokens))
+export const hasAnyAIProvider = createStore<boolean>(() => deriveHasAnyAIProvider(initialTokens))
+export const hasExpo = createStore<boolean>(() => deriveHasExpo(initialTokens))
+
+// Subscribe to token changes and update derived stores
+providerAuthStore.tokens.subscribe((tokens) => {
+  isOnboardingComplete.setState(deriveOnboardingComplete(tokens), true)
+  onboardingStep.setState(deriveOnboardingStep(tokens), true)
+  hasAnyAIProvider.setState(deriveHasAnyAIProvider(tokens), true)
+  hasExpo.setState(deriveHasExpo(tokens), true)
 })

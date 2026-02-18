@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useState, useEffect } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { Loader2, XCircle } from 'lucide-react'
 import { deployStore } from '@/app/stores/deploy'
 import { workbenchStore } from '@/app/stores/workbench'

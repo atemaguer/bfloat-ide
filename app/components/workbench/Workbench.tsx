@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { motion } from 'framer-motion'
 import { ChevronDown, ChevronUp, Terminal as TerminalIcon, Plus, X } from 'lucide-react'
 

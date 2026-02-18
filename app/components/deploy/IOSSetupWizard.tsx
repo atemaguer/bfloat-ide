@@ -17,7 +17,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import {
   Check,
   ChevronRight,

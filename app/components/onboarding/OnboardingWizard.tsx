@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { providerAuthStore } from '@/app/stores/provider-auth'
 import { WelcomeStep } from './steps/WelcomeStep'

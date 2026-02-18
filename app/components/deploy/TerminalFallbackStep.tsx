@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import {
   Send,
   AlertTriangle,
