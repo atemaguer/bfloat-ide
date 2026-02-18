@@ -290,7 +290,7 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
         history(),
         foldGutter(),
         bracketMatching(),
-        themeCompartment.of(getEditorThemeExtensions(themeStore.resolvedTheme.get())),
+        themeCompartment.of(getEditorThemeExtensions(themeStore.resolvedTheme.getState())),
         getLanguageExtension(language),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         saveKeymap,

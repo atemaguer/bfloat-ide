@@ -1,4 +1,4 @@
-import { atom, map } from 'nanostores'
+import { createStore } from 'zustand/vanilla'
 import type { FileMap, ChatMessage, Project, AppType } from '@/app/types/project'
 
 /**
@@ -30,29 +30,29 @@ let terminalRunner: ((command: string, terminalId?: string) => Promise<void>) | 
 
 class ProjectStore {
   // Current project
-  currentProject = atom<Project | null>(null)
+  currentProject = createStore<Project | null>(() => null)
 
   // Project files - simple reactive map
-  files = map<FileMap>({})
+  files = createStore<FileMap>(() => ({}))
 
   // Selected file for viewing (read-only)
-  selectedFile = atom<string | undefined>(undefined)
+  selectedFile = createStore<string | undefined>(() => undefined)
 
   // Project path on disk
-  projectPath = atom<string | null>(null)
+  projectPath = createStore<string | null>(() => null)
 
   // Chat state
-  chatStreaming = atom<boolean>(false)
-  messages = atom<ChatMessage[]>([])
+  chatStreaming = createStore<boolean>(() => false)
+  messages = createStore<ChatMessage[]>(() => [])
 
   // Preview error state
-  promptError = atom<string>('')
+  promptError = createStore<string>(() => '')
 
   // View state
-  activeView = atom<WorkbenchViewType>('preview')
+  activeView = createStore<WorkbenchViewType>(() => 'preview')
 
   // Agent running state
-  agentRunning = atom<boolean>(false)
+  agentRunning = createStore<boolean>(() => false)
 
   // File change subscription cleanup
   #fileChangeUnsubscribe: (() => void) | null = null
@@ -84,7 +84,7 @@ class ProjectStore {
     }
 
     // Set project state
-    this.currentProject.set(project)
+    this.currentProject.setState(project, true)
     // NOTE: Messages are NOT set from project - they come from local Claude/Codex sessions
 
     // Start agent (clones/pulls repo)
@@ -97,8 +97,8 @@ class ProjectStore {
       return { success: false, error: result.error }
     }
 
-    this.projectPath.set(result.projectPath ?? null)
-    this.agentRunning.set(true)
+    this.projectPath.setState(result.projectPath ?? null, true)
+    this.agentRunning.setState(true, true)
 
     // Load files from agent
     await this.refreshFiles()
@@ -113,7 +113,7 @@ class ProjectStore {
    * Refresh files from the agent
    */
   async refreshFiles(): Promise<void> {
-    const project = this.currentProject.get()
+    const project = this.currentProject.getState()
     if (!project || !agentApi) return
 
     const result = await agentApi.getFiles(project.id)
@@ -126,7 +126,7 @@ class ProjectStore {
           content: file.content,
         }
       }
-      this.files.set(fileMap)
+      this.files.setState(fileMap, true)
     }
   }
 
@@ -134,7 +134,7 @@ class ProjectStore {
    * Unload the current project
    */
   async unloadProject(): Promise<void> {
-    const project = this.currentProject.get()
+    const project = this.currentProject.getState()
     if (project && agentApi) {
       await agentApi.stop(project.id)
     }
@@ -145,19 +145,19 @@ class ProjectStore {
       this.#fileChangeUnsubscribe = null
     }
 
-    this.currentProject.set(null)
-    this.files.set({})
-    this.selectedFile.set(undefined)
-    this.projectPath.set(null)
-    this.messages.set([])
-    this.agentRunning.set(false)
+    this.currentProject.setState(null, true)
+    this.files.setState({}, true)
+    this.selectedFile.setState(undefined, true)
+    this.projectPath.setState(null, true)
+    this.messages.setState([], true)
+    this.agentRunning.setState(false, true)
   }
 
   /**
    * Execute file changes from AI
    */
   async executeChanges(changes: Array<{ path: string; content?: string; type: 'write' | 'delete' }>): Promise<{ success: boolean; error?: string }> {
-    const project = this.currentProject.get()
+    const project = this.currentProject.getState()
     if (!project || !agentApi) {
       return { success: false, error: 'No project loaded' }
     }
@@ -175,7 +175,7 @@ class ProjectStore {
    * Commit current changes
    */
   async commit(message: string, messageId?: string): Promise<{ success: boolean; error?: string }> {
-    const project = this.currentProject.get()
+    const project = this.currentProject.getState()
     if (!project || !agentApi) {
       return { success: false, error: 'No project loaded' }
     }
@@ -187,7 +187,7 @@ class ProjectStore {
    * Pull latest changes
    */
   async pull(): Promise<{ success: boolean; error?: string }> {
-    const project = this.currentProject.get()
+    const project = this.currentProject.getState()
     if (!project || !agentApi) {
       return { success: false, error: 'No project loaded' }
     }
@@ -201,16 +201,16 @@ class ProjectStore {
 
   // View management
   setActiveView(view: WorkbenchViewType): void {
-    this.activeView.set(view)
+    this.activeView.setState(view, true)
   }
 
   setSelectedFile(filePath: string | undefined): void {
-    this.selectedFile.set(filePath)
+    this.selectedFile.setState(filePath, true)
   }
 
   // Get file content
   getFileContent(filePath: string): string | undefined {
-    const file = this.files.get()[filePath]
+    const file = this.files.getState()[filePath]
     if (file?.type === 'file') {
       return file.content
     }
@@ -219,25 +219,25 @@ class ProjectStore {
 
   // Chat management
   addMessage(message: ChatMessage): void {
-    const currentMessages = this.messages.get()
-    this.messages.set([...currentMessages, message])
+    const currentMessages = this.messages.getState()
+    this.messages.setState([...currentMessages, message], true)
   }
 
   setMessages(messages: ChatMessage[]): void {
-    this.messages.set(messages)
+    this.messages.setState(messages, true)
   }
 
   setChatStreaming(streaming: boolean): void {
-    this.chatStreaming.set(streaming)
+    this.chatStreaming.setState(streaming, true)
   }
 
   // Preview error management
   setPromptError(error: string): void {
-    this.promptError.set(error)
+    this.promptError.setState(error, true)
   }
 
   clearPromptError(): void {
-    this.promptError.set('')
+    this.promptError.setState('', true)
   }
 
   // Terminal command execution
@@ -251,7 +251,7 @@ class ProjectStore {
 
   // File count helper
   get filesCount(): number {
-    return Object.keys(this.files.get()).length
+    return Object.keys(this.files.getState()).length
   }
 
   #subscribeToFileChanges(projectId: string): void {

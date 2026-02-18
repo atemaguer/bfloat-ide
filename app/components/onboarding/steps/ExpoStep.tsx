@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { Smartphone, Check, Loader2, ArrowLeft, ArrowRight, ExternalLink } from 'lucide-react'
 import { providerAuthStore } from '@/app/stores/provider-auth'
 import ExpoLogo from '@/app/components/ui/icons/expo-logo'

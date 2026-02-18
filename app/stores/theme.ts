@@ -1,4 +1,4 @@
-import { atom } from 'nanostores'
+import { createStore } from 'zustand/vanilla'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
 export type ResolvedTheme = 'light' | 'dark'
@@ -39,14 +39,14 @@ function applyThemeToDocument(resolved: ResolvedTheme) {
 }
 
 class ThemeStore {
-  theme = atom<ThemePreference>(getStoredTheme())
-  resolvedTheme = atom<ResolvedTheme>(resolveTheme(getStoredTheme()))
+  theme = createStore<ThemePreference>(() => getStoredTheme())
+  resolvedTheme = createStore<ResolvedTheme>(() => resolveTheme(getStoredTheme()))
 
   private mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
 
   constructor() {
     // Apply theme immediately
-    applyThemeToDocument(this.resolvedTheme.get())
+    applyThemeToDocument(this.resolvedTheme.getState())
 
     // Persist and apply on change
     this.theme.subscribe((preference) => {
@@ -56,22 +56,22 @@ class ThemeStore {
         // localStorage unavailable
       }
       const resolved = resolveTheme(preference)
-      this.resolvedTheme.set(resolved)
+      this.resolvedTheme.setState(resolved, true)
       applyThemeToDocument(resolved)
     })
 
     // Listen for system theme changes
     this.mediaQuery.addEventListener('change', () => {
-      if (this.theme.get() === 'system') {
+      if (this.theme.getState() === 'system') {
         const resolved = resolveTheme('system')
-        this.resolvedTheme.set(resolved)
+        this.resolvedTheme.setState(resolved, true)
         applyThemeToDocument(resolved)
       }
     })
   }
 
   setTheme = (preference: ThemePreference) => {
-    this.theme.set(preference)
+    this.theme.setState(preference, true)
   }
 }
 

@@ -57,7 +57,7 @@ export function DeployTerminal({
       fontFamily: '"JetBrains Mono", "SF Mono", "Monaco", "Consolas", "Liberation Mono", monospace',
       fontSize: 13,
       lineHeight: 1.4,
-      theme: getDeployTerminalTheme(themeStore.resolvedTheme.get()),
+      theme: getDeployTerminalTheme(themeStore.resolvedTheme.getState()),
       allowProposedApi: true,
     })
 

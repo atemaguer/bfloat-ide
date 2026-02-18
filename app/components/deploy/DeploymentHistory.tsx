@@ -1,4 +1,4 @@
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { Globe, Smartphone, ExternalLink, CheckCircle2, XCircle, Clock } from 'lucide-react'
 import { deployStore, type Deployment, type DeploymentPlatform } from '@/app/stores/deploy'
 

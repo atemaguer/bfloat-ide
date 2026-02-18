@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useRef, useState } from 'react'
 import { X, AlertCircle, ExternalLink, Loader2, Smartphone, Globe } from 'lucide-react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { deployStore } from '@/app/stores/deploy'
 import { providerAuthStore } from '@/app/stores/provider-auth'
 import { workbenchStore } from '@/app/stores/workbench'

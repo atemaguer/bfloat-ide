@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { Loader2, ExternalLink } from 'lucide-react'
 import { IntegrationCard } from './IntegrationCard'
 import { ProviderAuthModal } from './ProviderAuthModal'

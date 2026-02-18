@@ -1,4 +1,4 @@
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { PartyPopper, Check } from 'lucide-react'
 import { providerAuthStore } from '@/app/stores/provider-auth'
 import ClaudeLogo from '@/app/components/ui/icons/claude-logo'
