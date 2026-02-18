@@ -58,7 +58,7 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
       fontWeightBold: '600',
       lineHeight: 1.45,
       letterSpacing: 0.5,
-      theme: getTerminalTheme(themeStore.resolvedTheme.get()),
+      theme: getTerminalTheme(themeStore.resolvedTheme.getState()),
       allowProposedApi: true,
     })
 

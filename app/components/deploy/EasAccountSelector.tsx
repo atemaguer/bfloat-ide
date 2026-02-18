@@ -5,7 +5,7 @@
  * Shows personal and organization accounts parsed from `eas whoami`.
  */
 
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { ChevronDown, User, Building2 } from 'lucide-react'
 import { deployStore } from '@/app/stores/deploy'
 import type { EasAccount } from '@/app/utils/eas-accounts'

@@ -1,4 +1,4 @@
-import { atom } from 'nanostores'
+import { createStore } from 'zustand/vanilla'
 
 export type ProviderType = 'anthropic' | 'openai' | 'expo'
 
@@ -40,28 +40,28 @@ function getStoredSettings(): ProviderSettings {
 }
 
 export class ProviderAuthStore {
-  tokens = atom<ProviderAuthState>({
+  tokens = createStore<ProviderAuthState>(() => ({
     anthropic: null,
     openai: null,
     expo: null,
-  })
+  }))
 
-  settings = atom<ProviderSettings>(getStoredSettings())
+  settings = createStore<ProviderSettings>(() => getStoredSettings())
 
   // Track when a provider's auth has been invalidated by an API error
   // This is separate from token existence - tokens may exist but be expired/revoked
-  authInvalidated = atom<Record<ProviderType, boolean>>({
+  authInvalidated = createStore<Record<ProviderType, boolean>>(() => ({
     anthropic: false,
     openai: false,
     expo: false,
-  })
+  }))
 
   isConnected(provider: ProviderType): boolean {
-    const state = this.tokens.get()
+    const state = this.tokens.getState()
     const token = state[provider]
     if (!token) return false
     // Check if auth has been invalidated by an API error
-    if (this.authInvalidated.get()[provider]) return false
+    if (this.authInvalidated.getState()[provider]) return false
     // If expiresAt is set, check it; otherwise just check token exists
     if (token.expiresAt) {
       return token.expiresAt > Date.now()
@@ -74,27 +74,27 @@ export class ProviderAuthStore {
    * This doesn't clear tokens - they may still be valid for refresh
    */
   markAuthInvalidated(provider: ProviderType) {
-    const current = this.authInvalidated.get()
-    this.authInvalidated.set({ ...current, [provider]: true })
+    const current = this.authInvalidated.getState()
+    this.authInvalidated.setState({ ...current, [provider]: true }, true)
   }
 
   /**
    * Clear the invalidation flag (e.g., after successful re-auth)
    */
   clearAuthInvalidated(provider: ProviderType) {
-    const current = this.authInvalidated.get()
-    this.authInvalidated.set({ ...current, [provider]: false })
+    const current = this.authInvalidated.getState()
+    this.authInvalidated.setState({ ...current, [provider]: false }, true)
   }
 
   /**
    * Check if a provider's auth has been invalidated by an API error
    */
   isAuthInvalidated(provider: ProviderType): boolean {
-    return this.authInvalidated.get()[provider]
+    return this.authInvalidated.getState()[provider]
   }
 
   needsRefresh(provider: ProviderType): boolean {
-    const state = this.tokens.get()
+    const state = this.tokens.getState()
     const token = state[provider]
     if (!token || !token.expiresAt) return false
     // Refresh if expiring within 5 minutes
@@ -102,21 +102,21 @@ export class ProviderAuthStore {
   }
 
   setTokens(provider: ProviderType, tokens: OAuthTokens) {
-    const current = this.tokens.get()
-    this.tokens.set({ ...current, [provider]: tokens })
+    const current = this.tokens.getState()
+    this.tokens.setState({ ...current, [provider]: tokens }, true)
     // Persist to secure storage via IPC
     window.conveyor.provider.saveTokens(provider, tokens)
   }
 
   clearTokens(provider: ProviderType) {
-    const current = this.tokens.get()
-    this.tokens.set({ ...current, [provider]: null })
+    const current = this.tokens.getState()
+    this.tokens.setState({ ...current, [provider]: null }, true)
     window.conveyor.provider.clearTokens(provider)
   }
 
   setDefaultProvider(provider: ProviderType) {
-    const newSettings = { ...this.settings.get(), defaultProvider: provider }
-    this.settings.set(newSettings)
+    const newSettings = { ...this.settings.getState(), defaultProvider: provider }
+    this.settings.setState(newSettings, true)
     localStorage.setItem('provider_settings', JSON.stringify(newSettings))
   }
 
@@ -125,7 +125,7 @@ export class ProviderAuthStore {
     const settingsStr = localStorage.getItem('provider_settings')
     if (settingsStr) {
       try {
-        this.settings.set(JSON.parse(settingsStr))
+        this.settings.setState(JSON.parse(settingsStr), true)
       } catch {
         // Keep defaults
       }
@@ -137,11 +137,11 @@ export class ProviderAuthStore {
       openai: tokens.openai !== null,
       expo: tokens.expo !== null,
     }))
-    this.tokens.set(tokens)
+    this.tokens.setState(tokens, true)
   }
 
   getAccessToken(provider: ProviderType): string | null {
-    const tokens = this.tokens.get()[provider]
+    const tokens = this.tokens.getState()[provider]
     if (!tokens) return null
     // Check expiry if set
     if (tokens.expiresAt && tokens.expiresAt <= Date.now()) return null

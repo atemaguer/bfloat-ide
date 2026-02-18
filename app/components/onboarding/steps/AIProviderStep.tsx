@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { Bot, Check, Loader2, ArrowLeft, ArrowRight } from 'lucide-react'
 import { providerAuthStore } from '@/app/stores/provider-auth'
 import ClaudeLogo from '@/app/components/ui/icons/claude-logo'

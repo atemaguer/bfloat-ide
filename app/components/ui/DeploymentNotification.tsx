@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { CheckCircle2, XCircle, ExternalLink, X } from 'lucide-react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { deployStore } from '@/app/stores/deploy'
 
 export function DeploymentNotification() {

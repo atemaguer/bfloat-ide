@@ -15,7 +15,7 @@ import {
   Smartphone,
   Globe,
 } from 'lucide-react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { useConveyor } from '@/app/hooks/use-conveyor'
 import { localProjectsStore } from '@/app/stores/local-projects'
 import type { AppType, Project } from '@/app/types/project'

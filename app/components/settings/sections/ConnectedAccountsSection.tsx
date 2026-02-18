@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { Check, Loader2, ExternalLink, ChevronDown, ChevronUp, Github } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'

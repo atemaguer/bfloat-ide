@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { Switch } from '@/app/components/ui/Switch'
 import { SettingsCard, SettingsRow, SettingsSelect } from '../components'
 import { themeStore } from '@/app/stores/theme'

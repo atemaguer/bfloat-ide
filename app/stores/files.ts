@@ -1,16 +1,16 @@
-import { atom, map } from 'nanostores'
+import { createStore } from 'zustand/vanilla'
 import type { FileMap, Dirent, ProjectFile } from '@/app/types/project'
 
 export class FilesStore {
-  files = map<FileMap>({})
+  files = createStore<FileMap>(() => ({}))
   #modifiedFiles = new Set<string>()
 
   get filesCount(): number {
-    return Object.keys(this.files.get()).length
+    return Object.keys(this.files.getState()).length
   }
 
   getFile(filePath: string): ProjectFile | undefined {
-    const dirent = this.files.get()[filePath]
+    const dirent = this.files.getState()[filePath]
     if (dirent?.type === 'file') {
       return dirent
     }
@@ -18,36 +18,36 @@ export class FilesStore {
   }
 
   setFiles(files: FileMap | null): void {
-    this.files.set(files || {})
+    this.files.setState(files || {}, true)
   }
 
   addFile(filePath: string, content: string, isBinary?: boolean): void {
-    const currentFiles = this.files.get()
-    this.files.set({
+    const currentFiles = this.files.getState()
+    this.files.setState({
       ...currentFiles,
       [filePath]: { type: 'file', content, isBinary },
-    })
+    }, true)
     this.#modifiedFiles.add(filePath)
   }
 
   updateFile(filePath: string, content: string): void {
-    const currentFiles = this.files.get()
+    const currentFiles = this.files.getState()
     const file = currentFiles[filePath]
 
     if (file?.type === 'file') {
-      this.files.set({
+      this.files.setState({
         ...currentFiles,
         // Preserve isBinary flag when updating content
         [filePath]: { type: 'file', content, isBinary: file.isBinary },
-      })
+      }, true)
       this.#modifiedFiles.add(filePath)
     }
   }
 
   deleteFile(filePath: string): void {
-    const currentFiles = this.files.get()
+    const currentFiles = this.files.getState()
     const { [filePath]: _, ...rest } = currentFiles
-    this.files.set(rest)
+    this.files.setState(rest, true)
     this.#modifiedFiles.delete(filePath)
   }
 
@@ -57,7 +57,7 @@ export class FilesStore {
   }
 
   reinitialize(files: FileMap | null): void {
-    this.files.set(files || {})
+    this.files.setState(files || {}, true)
     this.#modifiedFiles.clear()
   }
 

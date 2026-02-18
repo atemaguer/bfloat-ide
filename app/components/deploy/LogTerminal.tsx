@@ -47,7 +47,7 @@ export function LogTerminal({ logs, height = 200 }: LogTerminalProps) {
         fontSize: 12,
         lineHeight: 1.3,
         scrollback: 5000,
-        theme: getLogTerminalTheme(themeStore.resolvedTheme.get()),
+        theme: getLogTerminalTheme(themeStore.resolvedTheme.getState()),
         allowProposedApi: true,
       })
 

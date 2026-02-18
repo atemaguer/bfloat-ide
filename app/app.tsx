@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from '@/app/lib/query-client'
 import { isOnboardingComplete } from '@/app/stores/onboarding'

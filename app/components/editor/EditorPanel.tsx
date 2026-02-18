@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect } from 'react'
-import { useStore } from '@nanostores/react'
+import { useStore } from '@/app/hooks/useStore'
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels'
 import { Save, RotateCcw, X, ChevronRight, ZoomIn, ZoomOut, RotateCw } from 'lucide-react'
 
