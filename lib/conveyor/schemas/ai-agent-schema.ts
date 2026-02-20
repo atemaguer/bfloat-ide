@@ -8,7 +8,7 @@
 import { z } from 'zod'
 
 // Provider ID schema
-export const providerIdSchema = z.enum(['claude', 'codex', 'bfloat'])
+export const providerIdSchema = z.enum(['claude', 'codex'])
 
 // Permission mode schema
 export const permissionModeSchema = z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'delegate', 'dontAsk'])
@@ -237,6 +237,15 @@ export const aiAgentApiSchema = {
     }),
   },
 
+  // Terminate all sessions (used when leaving a project)
+  'ai-agent:terminate-all-sessions': {
+    args: z.tuple([]),
+    return: z.object({
+      success: z.boolean(),
+      error: z.string().optional(),
+    }),
+  },
+
   // Set default provider
   'ai-agent:set-default-provider': {
     args: z.tuple([providerIdSchema]),
@@ -379,6 +388,28 @@ export const aiAgentApiSchema = {
       error: z.string().optional(),
     }),
   },
+}
+
+// Session message types (used by session reader UI)
+export interface SessionMessageBlock {
+  type: 'text' | 'tool'
+  content?: string
+  action?: {
+    id: string
+    type: string
+    label: string
+    status: 'running' | 'completed' | 'error'
+    output?: string
+    timestamp: number
+  }
+}
+
+export interface SessionMessageData {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  blocks?: SessionMessageBlock[]
+  timestamp: number
 }
 
 // Export types

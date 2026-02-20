@@ -17,6 +17,7 @@ import { fetchEasAccounts, setProjectOwner } from '@/app/utils/eas-accounts'
 import { checkiOSCredentialStatus } from '@/app/utils/ios-credentials'
 import { getDefaultEasConfig } from '@/app/utils/eas-config'
 import { EasAccountSelector } from './EasAccountSelector'
+import { deploy, filesystem } from '@/app/api/sidecar'
 
 /**
  * Prepare the project for iOS deployment
@@ -27,14 +28,14 @@ async function prepareForDeployment(
   expoUsername: string | undefined,
   projectTitle: string
 ): Promise<{ success: boolean; error?: string }> {
-  if (!window.conveyor?.filesystem) {
+  if (!filesystem) {
     return { success: false, error: 'Filesystem API not available' }
   }
 
   try {
     // Ensure app.json exists (EAS needs this to write config, even with app.config.js)
     const appJsonPath = `${projectPath}/app.json`
-    const readResult = await window.conveyor.filesystem.readFile(appJsonPath)
+    const readResult = await filesystem.readFile(appJsonPath)
 
     let appConfig: Record<string, unknown> = {}
 
@@ -65,11 +66,11 @@ async function prepareForDeployment(
     }
 
     // Always write app.json so EAS can modify it (needed even with app.config.js)
-    await window.conveyor.filesystem.writeFile(appJsonPath, JSON.stringify(appConfig, null, 2))
+    await filesystem.writeFile(appJsonPath, JSON.stringify(appConfig, null, 2))
 
     // Ensure eas.json and inject production env vars
     const easJsonPath = `${projectPath}/eas.json`
-    const easResult = await window.conveyor.filesystem.readFile(easJsonPath)
+    const easResult = await filesystem.readFile(easJsonPath)
 
     const defaultConfig = getDefaultEasConfig()
     let easConfig: Record<string, unknown> = defaultConfig
@@ -106,7 +107,7 @@ async function prepareForDeployment(
       }
     }
 
-    await window.conveyor.filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
+    await filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
 
     return { success: true }
   } catch (error) {
@@ -182,7 +183,7 @@ export function DeployiOSSection({ disabled = false }: DeployiOSSectionProps) {
   const handleCancel = useCallback(async () => {
     try {
       // Kill any running PTY build processes
-      await window.conveyor?.deploy?.cancelBuild()
+      await deploy.cancelBuild()
     } catch {
       // Ignore - process may already be dead
     }
@@ -214,7 +215,7 @@ export function DeployiOSSection({ disabled = false }: DeployiOSSectionProps) {
       }
 
       // Check if ASC API key is configured
-      const checkResult = await window.conveyor?.deploy?.checkASCApiKey(projectPath)
+      const checkResult = await deploy.checkASCApiKey(projectPath)
 
       if (checkResult?.success && checkResult.configured) {
         // Has credentials - use Claude Code (non-interactive)

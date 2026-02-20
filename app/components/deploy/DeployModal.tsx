@@ -9,6 +9,7 @@ import { DeployiOSSection } from './DeployiOSSection'
 import { DeployWebSection } from './DeployWebSection'
 import { ProdEnvVarsSection } from './ProdEnvVarsSection'
 import ExpoLogo from '@/app/components/ui/icons/expo-logo'
+import { provider } from '@/app/api/sidecar'
 
 interface DeployPopoverProps {
   anchorRef: React.RefObject<HTMLButtonElement>
@@ -29,7 +30,7 @@ function ExpoConnectForm({ onSuccess }: { onSuccess: () => void }) {
     setError(null)
 
     try {
-      const result = await window.conveyor.provider.connectExpo({
+      const result = await provider.connectExpo({
         username,
         password,
         otp: otp || undefined,

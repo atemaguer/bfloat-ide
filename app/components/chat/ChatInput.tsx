@@ -1,5 +1,5 @@
 import { useRef, useCallback, useLayoutEffect, useEffect, KeyboardEvent, useState } from 'react'
-import { Square, Plus, Bot, Cpu, Mic, ArrowUp, ChevronDown, ChevronRight, Check, Smartphone, Globe, Puzzle, Key } from 'lucide-react'
+import { Square, Plus, Bot, Cpu, Mic, ArrowUp, ChevronDown, ChevronRight, Check, Smartphone, Globe, Puzzle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { FileUIPart } from 'ai'
 import {
@@ -125,11 +125,17 @@ export function ChatInput({
   const dropdownRef = useRef<HTMLDivElement>(null)
   const [attachments, setAttachments] = useState<AttachmentData[]>([])
 
-  // Consume externally-injected attachment (e.g. preview screenshot)
+  // Consume externally-injected attachment (e.g. preview screenshot).
+  // Uses a ref to track the last consumed attachment ID so that
+  // React StrictMode's double-mount doesn't lose the attachment
+  // (first mount consumes+clears it, second mount sees null).
+  const lastConsumedAttachmentRef = useRef<string | null>(null)
   useEffect(() => {
-    if (pendingAttachment) {
+    if (pendingAttachment && pendingAttachment.id !== lastConsumedAttachmentRef.current) {
+      lastConsumedAttachmentRef.current = pendingAttachment.id
       setAttachments((prev) => [...prev, pendingAttachment])
-      onPendingAttachmentConsumed?.()
+      // Defer clearing so the attachment persists across StrictMode remounts
+      setTimeout(() => onPendingAttachmentConsumed?.(), 0)
     }
   }, [pendingAttachment, onPendingAttachmentConsumed])
 
@@ -276,7 +282,7 @@ export function ChatInput({
     providerSelector?.options.find(o => o.id === providerSelector?.provider)?.isAuthenticated
 
   const selectedOption = providerSelector?.options.find(o => o.id === providerSelector?.provider)
-  const SelectedIcon = selectedOption?.id === 'claude' ? Bot : selectedOption?.id === 'bfloat' ? Key : Cpu
+  const SelectedIcon = selectedOption?.id === 'claude' ? Bot : Cpu
 
   // Get the selected model label (for display when a model is selected)
   const selectedModel = providerSelector?.selectedModel
@@ -617,7 +623,7 @@ export function ChatInput({
                   >
                     {providerSelector.options.map((option) => {
                       const isSelected = providerSelector.provider === option.id
-                      const Icon = option.id === 'claude' ? Bot : option.id === 'bfloat' ? Key : Cpu
+                      const Icon = option.id === 'claude' ? Bot : Cpu
                       const optionAuth = option.isAuthenticated ?? providerSelector.isAuthenticated
                       const hasModels = option.models && option.models.length > 0
                       const isHovered = hoveredProvider === option.id

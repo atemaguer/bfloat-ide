@@ -18,16 +18,17 @@ import { DeployProgressModal } from './DeployProgressModal'
 import { IOSSetupWizard } from './IOSSetupWizard'
 import { TwoFactorStep } from './TwoFactorStep'
 import { Dialog, DialogContent } from '@/app/components/ui/dialog'
+import { deploy, filesystem } from '@/app/api/sidecar'
 
 /**
  * Mark iOS setup as complete in eas.json
  * This adds iOS-specific config that the credential checker looks for
  */
 async function markIOSSetupComplete(projectPath: string): Promise<void> {
-  if (!window.conveyor?.filesystem) return
+  if (!filesystem) return
 
   const easJsonPath = `${projectPath}/eas.json`
-  const readResult = await window.conveyor.filesystem.readFile(easJsonPath)
+  const readResult = await filesystem.readFile(easJsonPath)
 
   if (readResult.success && readResult.content) {
     try {
@@ -45,7 +46,7 @@ async function markIOSSetupComplete(projectPath: string): Promise<void> {
       }
 
       if (needsUpdate) {
-        await window.conveyor.filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
+        await filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
       }
     } catch {
       // If JSON parsing fails, skip the update
@@ -57,10 +58,10 @@ async function markIOSSetupComplete(projectPath: string): Promise<void> {
  * Check if App Store Connect submission is configured (has ascAppId)
  */
 async function hasSubmitConfig(projectPath: string): Promise<boolean> {
-  if (!window.conveyor?.filesystem) return false
+  if (!filesystem) return false
 
   const easJsonPath = `${projectPath}/eas.json`
-  const readResult = await window.conveyor.filesystem.readFile(easJsonPath)
+  const readResult = await filesystem.readFile(easJsonPath)
 
   if (readResult.success && readResult.content) {
     try {
@@ -82,14 +83,14 @@ async function prepareForDeployment(
   expoUsername: string | undefined,
   projectTitle: string
 ): Promise<{ success: boolean; error?: string }> {
-  if (!window.conveyor?.filesystem) {
+  if (!filesystem) {
     return { success: false, error: 'Filesystem API not available' }
   }
 
   try {
     // Ensure app.json exists (EAS needs this to write config, even with app.config.js)
     const appJsonPath = `${projectPath}/app.json`
-    const readResult = await window.conveyor.filesystem.readFile(appJsonPath)
+    const readResult = await filesystem.readFile(appJsonPath)
 
     let appConfig: Record<string, unknown> = {}
 
@@ -124,11 +125,11 @@ async function prepareForDeployment(
     }
 
     // Always write app.json so EAS can modify it (needed even with app.config.js)
-    await window.conveyor.filesystem.writeFile(appJsonPath, JSON.stringify(appConfig, null, 2))
+    await filesystem.writeFile(appJsonPath, JSON.stringify(appConfig, null, 2))
 
     // Ensure eas.json
     const easJsonPath = `${projectPath}/eas.json`
-    const easResult = await window.conveyor.filesystem.readFile(easJsonPath)
+    const easResult = await filesystem.readFile(easJsonPath)
 
     const defaultConfig = getDefaultEasConfig()
     let easConfig: Record<string, unknown> = defaultConfig
@@ -165,7 +166,7 @@ async function prepareForDeployment(
       }
     }
 
-    await window.conveyor.filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
+    await filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
 
     return { success: true }
   } catch (error) {
@@ -390,7 +391,7 @@ export function IOSDeployModals() {
       setTwoFactorError(null)
 
       // Set up event listeners for the PTY build
-      const unsubProgress = window.conveyor.deploy.onBuildProgress((progress) => {
+      const unsubProgress = deploy.onBuildProgress((progress) => {
         console.log('[IOSDeployModals] Build progress:', progress)
         deployStore.updateIOSProgress({
           step: progress.step as any,
@@ -412,12 +413,12 @@ export function IOSDeployModals() {
         }
       })
 
-      const unsubLogs = window.conveyor.deploy.onBuildLog(({ data }) => {
+      const unsubLogs = deploy.onBuildLog(({ data }) => {
         deployStore.appendIOSLog(data)
       })
 
       // Subscribe to interactive auth events (for 2FA)
-      const unsubAuth = window.conveyor.deploy.onInteractiveAuth((event) => {
+      const unsubAuth = deploy.onInteractiveAuth((event) => {
         console.log('[IOSDeployModals] Interactive auth event:', event.type)
 
         if (event.type === '2fa') {
@@ -442,7 +443,7 @@ export function IOSDeployModals() {
       // Use the existing deploy:ios-build-interactive handler
       // It handles prompt detection, auto-confirmation, and 2FA via PTY
       try {
-        const result = await window.conveyor.deploy.startInteractiveIOSBuild({
+        const result = await deploy.startInteractiveIOSBuild({
           projectPath,
           appleId: credentials?.appleId || '',
           password: credentials?.password || '',
@@ -484,7 +485,7 @@ export function IOSDeployModals() {
   const handle2FASubmit = useCallback(async (code: string) => {
     setTwoFactorError(null)
     try {
-      const result = await window.conveyor.deploy.submit2FACode(code)
+      const result = await deploy.submit2FACode(code)
       if (result.success) {
         setShowTwoFactorInput(false)
       } else {
@@ -526,7 +527,7 @@ export function IOSDeployModals() {
       const syncedPath = syncResult.path || projectPath
 
       // Check if ASC API key is configured
-      const checkResult = await window.conveyor?.deploy?.checkASCApiKey(syncedPath)
+      const checkResult = await deploy.checkASCApiKey(syncedPath)
 
       if (checkResult?.success && checkResult.configured) {
         // Has credentials - use Claude Code (non-interactive)
@@ -588,7 +589,7 @@ export function IOSDeployModals() {
     await markIOSSetupComplete(projectPath)
 
     // Check if ASC API key is configured
-    const checkResult = await window.conveyor?.deploy?.checkASCApiKey(projectPath)
+    const checkResult = await deploy.checkASCApiKey(projectPath)
     console.log('[IOSDeployModals] ASC API key check result:', checkResult)
 
     if (checkResult?.success && checkResult.configured) {

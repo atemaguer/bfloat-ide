@@ -82,12 +82,12 @@ export interface Project {
   stripeConnectedAccountId?: string
 }
 
-// Agent session for Claude/Codex/Bfloat CLI persistence
+// Agent session for Claude/Codex CLI persistence
 export interface AgentSession {
   id: string
   projectId: string
   sessionId: string  // The CLI session ID
-  provider: 'claude' | 'codex' | 'bfloat'
+  provider: 'claude' | 'codex'
   model?: string  // The model ID used for this session (e.g., 'claude-sonnet-4-20250514')
   name?: string | null
   createdAt: string
@@ -103,7 +103,7 @@ export interface ChatMessage {
   // Session/thread ID for resuming conversations
   sessionId?: string
   // Provider that generated this message (for display purposes)
-  provider?: 'claude' | 'codex' | 'bfloat' | string
+  provider?: 'claude' | 'codex' | string
 }
 
 // ============================================================================

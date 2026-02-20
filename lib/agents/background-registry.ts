@@ -212,6 +212,17 @@ class BackgroundSessionRegistry {
   }
 
   /**
+   * Clear all sessions from the registry
+   */
+  clear(): void {
+    const count = this.sessions.size
+    this.sessions.clear()
+    this.sessionAliasIndex.clear()
+    this.projectIndex.clear()
+    console.log(`[BackgroundRegistry] Cleared ${count} sessions`)
+  }
+
+  /**
    * Get all active background sessions (status === 'running')
    */
   getAllActive(): BackgroundSession[] {

@@ -3,6 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { themeStore } from '@/app/stores/theme'
 import { getDeployTerminalTheme } from '@/app/components/terminal/terminal-theme'
+import { terminal } from '@/app/api/sidecar'
 import '@xterm/xterm/css/xterm.css'
 
 interface DeployTerminalProps {
@@ -51,7 +52,7 @@ export function DeployTerminal({
     console.log(`[DeployTerminal] Initializing terminal: ${terminalId}`)
     isInitializedRef.current = true
 
-    const terminal = new XTerm({
+    const xterminal = new XTerm({
       cursorBlink: true,
       cursorStyle: 'bar',
       fontFamily: '"JetBrains Mono", "SF Mono", "Monaco", "Consolas", "Liberation Mono", monospace',
@@ -62,10 +63,10 @@ export function DeployTerminal({
     })
 
     const fitAddon = new FitAddon()
-    terminal.loadAddon(fitAddon)
-    terminal.open(containerRef.current)
+    xterminal.loadAddon(fitAddon)
+    xterminal.open(containerRef.current)
 
-    terminalRef.current = terminal
+    terminalRef.current = xterminal
     fitAddonRef.current = fitAddon
 
     // Subscribe to theme changes
@@ -80,14 +81,14 @@ export function DeployTerminal({
     })
 
     // Set up listeners
-    window.conveyor.terminal.onData(terminalId, (id, data) => {
+    terminal.onData(terminalId, (id, data) => {
       if (id === terminalId && terminalRef.current) {
         terminalRef.current.write(data)
         onOutputRef.current?.(data)
       }
     })
 
-    window.conveyor.terminal.onExit(terminalId, (id, exitCode) => {
+    terminal.onExit(terminalId, (id, exitCode) => {
       console.log(`[DeployTerminal] Terminal ${id} exited with code: ${exitCode}`)
       if (id === terminalId && terminalRef.current) {
         terminalRef.current.writeln(`\r\n\x1b[90mProcess exited with code ${exitCode}\x1b[0m`)
@@ -97,24 +98,24 @@ export function DeployTerminal({
     })
 
     // Handle user input
-    terminal.onData((data) => {
-      window.conveyor.terminal.write(terminalId, data)
+    xterminal.onData((data) => {
+      terminal.write(terminalId, data)
     })
 
     // Handle terminal resize
-    terminal.onResize(({ cols, rows }) => {
-      window.conveyor.terminal.resize(terminalId, cols, rows)
+    xterminal.onResize(({ cols, rows }) => {
+      terminal.resize(terminalId, cols, rows)
     })
 
     // Create PTY
     if (!createdTerminals.has(terminalId)) {
       createdTerminals.add(terminalId)
-      window.conveyor.terminal.create(terminalId).then((result) => {
+      terminal.create(terminalId).then((result) => {
         if (result.success) {
           requestAnimationFrame(() => {
             if (fitAddonRef.current && terminalRef.current) {
               fitAddonRef.current.fit()
-              window.conveyor.terminal.resize(
+              terminal.resize(
                 terminalId,
                 terminalRef.current.cols,
                 terminalRef.current.rows
@@ -134,8 +135,8 @@ export function DeployTerminal({
     return () => {
       console.log(`[DeployTerminal] Disposing terminal: ${terminalId}`)
       unsubTheme()
-      window.conveyor.terminal.removeListeners(terminalId)
-      terminal.dispose()
+      terminal.removeListeners(terminalId)
+      xterminal.dispose()
       isInitializedRef.current = false
     }
   }, [terminalId])
@@ -185,5 +186,5 @@ export function DeployTerminal({
 export function killDeployTerminal(terminalId: string): void {
   console.log(`[DeployTerminal] Killing terminal: ${terminalId}`)
   createdTerminals.delete(terminalId)
-  window.conveyor.terminal.kill(terminalId)
+  terminal.kill(terminalId)
 }

@@ -7,9 +7,9 @@ import { projectStore } from '@/app/stores/project-store'
 import { useWindowContext } from './WindowContext'
 import { useTitlebarContext } from './TitlebarContext'
 import { TitlebarMenu } from './TitlebarMenu'
-import { useConveyor } from '@/app/hooks/use-conveyor'
 import { DeployModal } from '@/app/components/deploy/DeployModal'
 import { deployStore } from '@/app/stores/deploy'
+import { window as windowApi } from '@/app/api/sidecar'
 import './titlebar.css'
 
 // Removed unused isDeployModalOpen - DeployModal manages its own visibility
@@ -243,13 +243,11 @@ const TitlebarControls = () => {
 }
 
 const TitlebarControlButton = ({ svgPath, label }: { svgPath: string; label: string }) => {
-  const { windowMinimize, windowMaximizeToggle, windowClose } = useConveyor('window')
-
   const handleAction = () => {
     const actions = {
-      minimize: windowMinimize,
-      maximize: windowMaximizeToggle,
-      close: windowClose,
+      minimize: windowApi.windowMinimize,
+      maximize: windowApi.windowMaximizeToggle,
+      close: windowApi.windowClose,
     }
     actions[label as keyof typeof actions]?.()
   }

@@ -3,6 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { themeStore } from '@/app/stores/theme'
 import { getTerminalTheme } from './terminal-theme'
+import { terminal } from '@/app/api/sidecar'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
@@ -48,7 +49,7 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
     isInitializedRef.current = true
 
     // Create xterm instance with refined theme
-    const terminal = new XTerm({
+    const xterminal = new XTerm({
       cursorBlink: true,
       cursorStyle: 'bar',
       cursorWidth: 2,
@@ -64,13 +65,13 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
 
     // Create fit addon
     const fitAddon = new FitAddon()
-    terminal.loadAddon(fitAddon)
+    xterminal.loadAddon(fitAddon)
 
     // Open terminal in container
-    terminal.open(containerRef.current)
+    xterminal.open(containerRef.current)
 
     // Store refs
-    terminalRef.current = terminal
+    terminalRef.current = xterminal
     fitAddonRef.current = fitAddon
 
     // Subscribe to theme changes
@@ -83,12 +84,12 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
     // Initial fit
     requestAnimationFrame(() => {
       fitAddon.fit()
-      console.log(`[Terminal UI] Terminal fitted: ${terminal.cols}x${terminal.rows}`)
+      console.log(`[Terminal UI] Terminal fitted: ${xterminal.cols}x${xterminal.rows}`)
     })
 
     // Set up listeners BEFORE creating PTY to capture all output
     console.log(`[Terminal UI] Setting up data listener for: ${terminalId}`)
-    window.conveyor.terminal.onData(terminalId, (id, data) => {
+    terminal.onData(terminalId, (id, data) => {
       if (id === terminalId && terminalRef.current) {
         terminalRef.current.write(data)
         // Call onOutput callback for monitoring terminal output using ref
@@ -96,7 +97,7 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
       }
     })
 
-    window.conveyor.terminal.onExit(terminalId, (id, exitCode) => {
+    terminal.onExit(terminalId, (id, exitCode) => {
       console.log(`[Terminal UI] Terminal ${id} exited with code: ${exitCode}`)
       if (id === terminalId && terminalRef.current) {
         terminalRef.current.writeln(`\r\n\x1b[90mProcess exited with code ${exitCode}\x1b[0m`)
@@ -107,13 +108,13 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
     })
 
     // Handle user input - send to PTY
-    terminal.onData((data) => {
-      window.conveyor.terminal.write(terminalId, data)
+    xterminal.onData((data) => {
+      terminal.write(terminalId, data)
     })
 
     // Handle terminal resize
-    terminal.onResize(({ cols, rows }) => {
-      window.conveyor.terminal.resize(terminalId, cols, rows)
+    xterminal.onResize(({ cols, rows }) => {
+      terminal.resize(terminalId, cols, rows)
     })
 
     // Create PTY only if not already created and not being killed
@@ -131,7 +132,7 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
       console.log(`[Terminal UI] Creating PTY for: ${terminalId}`)
       createdTerminals.add(terminalId)
 
-      waitForKillComplete().then(() => window.conveyor.terminal.create(terminalId)).then((result) => {
+      waitForKillComplete().then(() => terminal.create(terminalId)).then((result) => {
         console.log(`[Terminal UI] PTY create result:`, result)
         if (result.success) {
           // Send initial size after a small delay to ensure PTY is ready
@@ -141,7 +142,7 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
               const cols = terminalRef.current.cols
               const rows = terminalRef.current.rows
               console.log(`[Terminal UI] Sending initial resize: ${cols}x${rows}`)
-              window.conveyor.terminal.resize(terminalId, cols, rows)
+              terminal.resize(terminalId, cols, rows)
             }
           })
           onReadyRef.current?.()
@@ -158,7 +159,7 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
       requestAnimationFrame(() => {
         if (fitAddonRef.current && terminalRef.current) {
           fitAddonRef.current.fit()
-          window.conveyor.terminal.resize(terminalId, terminalRef.current.cols, terminalRef.current.rows)
+          terminal.resize(terminalId, terminalRef.current.cols, terminalRef.current.rows)
         }
         onReadyRef.current?.()
       })
@@ -168,8 +169,8 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
     return () => {
       console.log(`[Terminal UI] Disposing xterm UI for: ${terminalId}`)
       unsubTheme()
-      window.conveyor.terminal.removeListeners(terminalId)
-      terminal.dispose()
+      terminal.removeListeners(terminalId)
+      xterminal.dispose()
       isInitializedRef.current = false
       // Don't kill PTY here - it will be killed when the tab is closed
     }
@@ -224,7 +225,7 @@ export function killTerminal(terminalId: string) {
   // Mark as pending kill to prevent race conditions with creation
   pendingKillTerminals.add(terminalId)
   createdTerminals.delete(terminalId)
-  window.conveyor.terminal.kill(terminalId)
+  terminal.kill(terminalId)
   // Clear pending kill after a short delay
   setTimeout(() => {
     pendingKillTerminals.delete(terminalId)

@@ -8,14 +8,14 @@ import type { ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { Chat } from '@/app/components/chat/Chat'
 import { Workbench, WorkbenchHandle } from '@/app/components/workbench/Workbench'
 import { workbenchStore } from '@/app/stores/workbench'
-import { useConveyor } from '@/app/hooks/use-conveyor'
+import { aiAgent, localProjects } from '@/app/api/sidecar'
 
 // Local session info - unified format for SessionTabs
 interface LocalSessionInfo {
   sessionId: string
   lastModified: number
   name?: string
-  provider?: 'claude' | 'codex' | 'bfloat'
+  provider?: 'claude' | 'codex'
 }
 
 // Image data passed from HomePage via navigation state
@@ -58,8 +58,6 @@ export function ProjectContent({
   const isChatCollapsed = useStore(workbenchStore.isChatCollapsed)
   const refreshPreviewRef = useRef<(() => void) | null>(null)
   const workbenchRef = useRef<WorkbenchHandle>(null)
-  const aiAgentApi = useConveyor('aiAgent')
-  const localProjectsApi = useConveyor('localProjects')
 
   // Session state - loaded from projects.json with CLI fallback
   const [sessions, setSessions] = useState<LocalSessionInfo[]>([])
@@ -68,11 +66,9 @@ export function ProjectContent({
 
   // Load sessions from projects.json, with CLI storage fallback for migration
   const loadSessions = useCallback(async () => {
-    if (!localProjectsApi) return
-
     try {
       console.log('[ProjectContent] Loading sessions from projects.json for:', project.id)
-      const projectSessions = await localProjectsApi.listSessions(project.id)
+      const projectSessions = await localProjects.listSessions(project.id)
 
       if (projectSessions && projectSessions.length > 0) {
         // Convert AgentSession to LocalSessionInfo format
@@ -97,9 +93,9 @@ export function ProjectContent({
       } else {
         console.log('[ProjectContent] No sessions in projects.json, trying CLI storage...')
         // Fallback: Try to discover sessions from CLI storage for migration
-        if (aiAgentApi && projectPath) {
+        if (projectPath) {
           const provider = initialProvider || 'claude'
-          const result = await aiAgentApi.listSessions(provider, projectPath)
+          const result = await aiAgent.listSessions(provider, projectPath)
           if (result.success && result.sessions && result.sessions.length > 0) {
             console.log('[ProjectContent] Found sessions in CLI storage:', result.sessions.length)
             setSessions(result.sessions)
@@ -114,16 +110,16 @@ export function ProjectContent({
     } catch (err) {
       console.error('[ProjectContent] Failed to load sessions:', err)
     }
-  }, [localProjectsApi, aiAgentApi, project.id, projectPath, initialProvider, discoveredSessionId])
+  }, [project.id, projectPath, initialProvider, discoveredSessionId])
 
   // Initial session load
   useEffect(() => {
-    if (!localProjectsApi || hasLoadedSessions.current) return
+    if (hasLoadedSessions.current) return
     if (syncStatus !== 'ready') return
 
     hasLoadedSessions.current = true
     loadSessions()
-  }, [localProjectsApi, syncStatus, loadSessions])
+  }, [syncStatus, loadSessions])
 
   // Callback for Chat to notify when a session is created/updated
   const handleSessionsChange = useCallback(() => {

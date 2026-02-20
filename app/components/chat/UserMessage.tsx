@@ -9,6 +9,7 @@
 import { memo, useState, useEffect } from 'react'
 import type { MessagePart } from '@/app/types/project'
 import { Markdown } from './Markdown'
+import { projectFiles } from '@/app/api/sidecar'
 
 interface LoadedImage {
   url: string
@@ -78,7 +79,7 @@ export const UserMessage = memo(function UserMessage({
 
       for (const path of attachmentPaths) {
         try {
-          const result = await window.conveyor.projectFiles.readFile(path)
+          const result = await projectFiles.readFile(path)
           if (result.isBinary && result.content) {
             const mimeType = getMimeType(path)
             const dataUrl = `data:${mimeType};base64,${result.content}`

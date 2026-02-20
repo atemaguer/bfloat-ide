@@ -7,6 +7,7 @@ import { Button } from '@/app/components/ui/button'
 import { ProviderAuthModal } from '@/app/components/integrations/ProviderAuthModal'
 import { providerAuthStore } from '@/app/stores/provider-auth'
 import { SettingsCard } from '../components'
+import { provider } from '@/app/api/sidecar'
 
 // Icons
 import ClaudeLogo from '@/app/components/ui/icons/claude-logo'
@@ -229,7 +230,7 @@ export function ConnectedAccountsSection() {
   }
 
   const handleDisconnectClaude = async () => {
-    const result = await window.conveyor.provider.disconnect('anthropic')
+    const result = await provider.disconnect('anthropic')
     if (result.success) {
       providerAuthStore.clearTokens('anthropic')
     }
@@ -240,7 +241,7 @@ export function ConnectedAccountsSection() {
   }
 
   const handleDisconnectOpenAI = async () => {
-    const result = await window.conveyor.provider.disconnect('openai')
+    const result = await provider.disconnect('openai')
     if (result.success) {
       providerAuthStore.clearTokens('openai')
     }
@@ -262,7 +263,7 @@ export function ConnectedAccountsSection() {
     setExpoLoading(true)
     setExpoError(null)
     try {
-      const result = await window.conveyor.provider.connectExpo(credentials)
+      const result = await provider.connectExpo(credentials)
       if (result.authenticated) {
         await providerAuthStore.loadFromStorage()
       } else {
@@ -276,7 +277,7 @@ export function ConnectedAccountsSection() {
   }
 
   const handleDisconnectExpo = async () => {
-    const result = await window.conveyor.provider.disconnect('expo')
+    const result = await provider.disconnect('expo')
     if (result.success) {
       providerAuthStore.clearTokens('expo')
     }

@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal as TerminalIcon, Check, Loader2 } from 'lucide-react'
+import { terminal } from '@/app/api/sidecar'
 
 interface EmbeddedTerminalProps {
   terminalId: string
@@ -91,22 +92,15 @@ export function EmbeddedTerminal({
       return
     }
 
-    // Guard against missing terminal API
-    if (!window.conveyor?.terminal) {
-      console.error('[EmbeddedTerminal] Terminal API not available')
-      onError?.('Terminal API not available')
-      return
-    }
-
     console.log('[EmbeddedTerminal] Initializing with:', { terminalId, projectPath, command })
 
     // Set up output listener FIRST (before creating terminal to avoid race condition)
-    window.conveyor.terminal.onData(terminalId, handleOutput)
+    terminal.onData(terminalId, handleOutput)
 
     async function initTerminal() {
       try {
         // Create terminal
-        const result = await window.conveyor.terminal.create(terminalId, projectPath)
+        const result = await terminal.create(terminalId, projectPath)
 
         if (!result.success) {
           console.error('[EmbeddedTerminal] Failed to create terminal:', result.error)
@@ -117,7 +111,7 @@ export function EmbeddedTerminal({
         if (isMounted) {
           setIsRunning(true)
           // Run the command
-          await window.conveyor.terminal.runCommand(terminalId, command)
+          await terminal.runCommand(terminalId, command)
         }
       } catch (error) {
         console.error('[EmbeddedTerminal] Error:', error)
@@ -131,8 +125,8 @@ export function EmbeddedTerminal({
     return () => {
       isMounted = false
       try {
-        window.conveyor.terminal.removeListeners(terminalId)
-        window.conveyor.terminal.kill(terminalId)
+        terminal.removeListeners(terminalId)
+        terminal.kill(terminalId)
       } catch {
         // Ignore cleanup errors
       }
@@ -275,7 +269,7 @@ export function InteractiveTerminal({
   const sendInput = useCallback(
     async (text: string) => {
       try {
-        await window.conveyor.terminal.runCommand(terminalId, text)
+        await terminal.runCommand(terminalId, text)
         setInput('')
         setWaitingForInput(false)
       } catch (error) {
@@ -307,35 +301,22 @@ export function InteractiveTerminal({
       return
     }
 
-    // Guard against missing terminal API
-    if (!window.conveyor?.terminal) {
-      console.error('[InteractiveTerminal] Terminal API not available')
-      onError?.('Terminal API not available')
-      return
-    }
-
     console.log('[InteractiveTerminal] Initializing with:', { terminalId, projectPath, command })
 
     // Set up output listener FIRST (before creating terminal to avoid race condition)
-    window.conveyor.terminal.onData(terminalId, handleOutput)
+    terminal.onData(terminalId, handleOutput)
 
     async function initTerminal() {
       try {
-        // Verify the directory exists before trying to create terminal
-        if (window.conveyor?.filesystem) {
-          const checkResult = await window.conveyor.filesystem.readFile(`${projectPath}/package.json`)
-          console.log('[InteractiveTerminal] Directory check:', { exists: checkResult.success, projectPath })
-        }
-
         console.log('[InteractiveTerminal] Creating terminal...')
         // Try to create terminal - if it fails with the project path, the error will be caught
-        let result = await window.conveyor.terminal.create(terminalId, projectPath)
+        let result = await terminal.create(terminalId, projectPath)
         let useHomeFallback = false
 
         // If creation failed, try with no specific cwd (will use home directory)
         if (!result.success && result.error?.includes('posix_spawnp')) {
           console.log('[InteractiveTerminal] Retrying with home directory...')
-          result = await window.conveyor.terminal.create(terminalId)
+          result = await terminal.create(terminalId)
           useHomeFallback = true
         }
         console.log('[InteractiveTerminal] Create result:', result)
@@ -352,7 +333,7 @@ export function InteractiveTerminal({
           const finalCommand = useHomeFallback
             ? `cd "${projectPath}" && ${command}`
             : command
-          await window.conveyor.terminal.runCommand(terminalId, finalCommand)
+          await terminal.runCommand(terminalId, finalCommand)
         }
       } catch (error) {
         console.error('[InteractiveTerminal] Error:', error)
@@ -365,8 +346,8 @@ export function InteractiveTerminal({
     return () => {
       isMounted = false
       try {
-        window.conveyor.terminal.removeListeners(terminalId)
-        window.conveyor.terminal.kill(terminalId)
+        terminal.removeListeners(terminalId)
+        terminal.kill(terminalId)
       } catch {
         // Ignore cleanup errors
       }

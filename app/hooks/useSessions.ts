@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { localProjects } from '@/app/api/sidecar'
 import type { AgentSession } from '@/app/types/project'
 
 // Local session info format for SessionTabs
@@ -11,7 +12,7 @@ export interface LocalSessionInfo {
   sessionId: string
   lastModified: number
   name?: string
-  provider?: 'claude' | 'codex' | 'bfloat'
+  provider?: 'claude' | 'codex'
 }
 
 /**
@@ -25,11 +26,11 @@ export function useSessions(projectId: string | undefined) {
 
   // Load sessions from projects.json
   const loadSessions = useCallback(async () => {
-    if (!projectId || !window.conveyor?.localProjects) return
+    if (!projectId) return
 
     setIsLoading(true)
     try {
-      const projectSessions = await window.conveyor.localProjects.listSessions(projectId)
+      const projectSessions = await localProjects.listSessions(projectId)
 
       if (projectSessions && projectSessions.length > 0) {
         // Convert AgentSession to LocalSessionInfo format
@@ -89,7 +90,7 @@ export function useSaveSession(
   const mutate = useCallback(
     async (params: {
       sessionId: string
-      provider: 'claude' | 'codex' | 'bfloat'
+      provider: 'claude' | 'codex'
       model?: string
       name?: string | null
     }) => {
@@ -99,15 +100,12 @@ export function useSaveSession(
         provider: params.provider,
         model: params.model,
         projectId,
-        hasLocalProjectsApi: !!window.conveyor?.localProjects,
       })
       console.log('[useSaveSession] ========================================')
 
-      if (!projectId || !window.conveyor?.localProjects) {
-        console.error('[useSaveSession] Missing projectId or localProjects API', {
+      if (!projectId) {
+        console.error('[useSaveSession] Missing projectId', {
           projectId,
-          hasConveyor: !!window.conveyor,
-          hasLocalProjects: !!window.conveyor?.localProjects,
         })
         return
       }
@@ -129,7 +127,7 @@ export function useSaveSession(
         }
 
         console.log('[useSaveSession] Calling localProjects.addSession...')
-        await window.conveyor.localProjects.addSession(projectId, session)
+        await localProjects.addSession(projectId, session)
         console.log('[useSaveSession] ========================================')
         console.log('[useSaveSession] SUCCESS - Session saved:', params.sessionId)
         console.log('[useSaveSession] Project ID:', projectId)
@@ -170,8 +168,8 @@ export function useDeleteSession(
 
   const mutate = useCallback(
     async (sessionId: string) => {
-      if (!projectId || !window.conveyor?.localProjects) {
-        console.error('[useDeleteSession] Missing projectId or localProjects API')
+      if (!projectId) {
+        console.error('[useDeleteSession] Missing projectId')
         return
       }
 
@@ -179,7 +177,7 @@ export function useDeleteSession(
       setError(null)
 
       try {
-        await window.conveyor.localProjects.deleteSession(projectId, sessionId)
+        await localProjects.deleteSession(projectId, sessionId)
         console.log('[useDeleteSession] Session deleted:', sessionId)
         onSuccess?.(sessionId)
       } catch (err) {
@@ -206,10 +204,10 @@ export function useDeleteSession(
 export function useUpdateSession(projectId: string | undefined) {
   const mutate = useCallback(
     async (sessionId: string, updates: Partial<AgentSession>) => {
-      if (!projectId || !window.conveyor?.localProjects) return
+      if (!projectId) return
 
       try {
-        await window.conveyor.localProjects.updateSession(projectId, sessionId, updates)
+        await localProjects.updateSession(projectId, sessionId, updates)
       } catch (err) {
         console.warn('[useUpdateSession] Failed to update session:', err)
       }

@@ -47,6 +47,7 @@ import { TerminalFallbackStep } from './TerminalFallbackStep'
 import type { iOSCredentialStatus } from '@/app/utils/ios-credentials'
 import type { IOSBuildProgress, CheckASCApiKeyResult } from '@/lib/conveyor/schemas/deploy-schema'
 import { getDefaultEasConfig } from '@/app/utils/eas-config'
+import { deploy, filesystem } from '@/app/api/sidecar'
 
 type WizardStep =
   | 'welcome'
@@ -68,7 +69,7 @@ async function ensureProjectConfiguration(
   expoUsername: string | undefined,
   projectTitle: string
 ): Promise<void> {
-  if (!window.conveyor?.filesystem) return
+  if (!filesystem) return
 
   // Extract project ID from path (format: ~/.bfloat-ide/projects/{projectId})
   const pathParts = projectPath.split('/')
@@ -76,16 +77,16 @@ async function ensureProjectConfiguration(
 
   // 1. Ensure eas.json exists
   const easJsonPath = `${projectPath}/eas.json`
-  const easResult = await window.conveyor.filesystem.readFile(easJsonPath)
+  const easResult = await filesystem.readFile(easJsonPath)
 
   if (!easResult.success) {
     const easConfig = getDefaultEasConfig()
-    await window.conveyor.filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
+    await filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
   }
 
   // 2. Ensure bundle identifier is set in app.json
   const appJsonPath = `${projectPath}/app.json`
-  const appResult = await window.conveyor.filesystem.readFile(appJsonPath)
+  const appResult = await filesystem.readFile(appJsonPath)
 
   if (appResult.success && appResult.content) {
     try {
@@ -117,7 +118,7 @@ async function ensureProjectConfiguration(
       }
 
       if (needsUpdate) {
-        await window.conveyor.filesystem.writeFile(appJsonPath, JSON.stringify(appConfig, null, 2))
+        await filesystem.writeFile(appJsonPath, JSON.stringify(appConfig, null, 2))
       }
     } catch {
       // If JSON parsing fails, skip the update
@@ -236,7 +237,7 @@ export function IOSSetupWizard({
   useEffect(() => {
     if (currentStep === 'api-key-setup' && !existingKeyConfig && !isCheckingKey) {
       setIsCheckingKey(true)
-      window.conveyor.deploy
+      deploy
         .checkASCApiKey(projectPath)
         .then((config) => {
           setExistingKeyConfig(config)
@@ -322,7 +323,7 @@ export function IOSSetupWizard({
         if (!hasExistingAppleSession) {
           // Check for any existing Apple sessions before prompting for credentials
           try {
-            const sessionsResult = await window.conveyor.deploy.listAppleSessions()
+            const sessionsResult = await deploy.listAppleSessions()
             console.log('[IOSSetupWizard] Apple sessions check:', sessionsResult)
 
             if (sessionsResult.hasValidSession && sessionsResult.sessions.length > 0) {
@@ -392,7 +393,7 @@ export function IOSSetupWizard({
   const handleSubmit2FA = useCallback(async (code: string) => {
     setError(null)
     try {
-      await window.conveyor.deploy.submit2FACode(code)
+      await deploy.submit2FACode(code)
       // Will return to build-progress via event
       deployStore.resetInteractiveAuth()
     } catch (err) {
@@ -439,7 +440,7 @@ export function IOSSetupWizard({
       // Ensure project is configured
       await ensureProjectConfiguration(projectPath, tokens.expo?.username, projectTitle)
 
-      const result = await window.conveyor.deploy.saveASCApiKey({
+      const result = await deploy.saveASCApiKey({
         projectPath,
         keyId,
         issuerId,
@@ -483,7 +484,7 @@ export function IOSSetupWizard({
 
   // Subscribe to build events
   useEffect(() => {
-    const unsubProgress = window.conveyor.deploy.onBuildProgress((progress) => {
+    const unsubProgress = deploy.onBuildProgress((progress) => {
       setBuildProgress(progress)
       if (progress.step === 'complete') {
         setIsBuilding(false)
@@ -511,12 +512,12 @@ export function IOSSetupWizard({
       }
     })
 
-    const unsubLogs = window.conveyor.deploy.onBuildLog(({ data }) => {
+    const unsubLogs = deploy.onBuildLog(({ data }) => {
       deployStore.appendBuildLog(data)
     })
 
     // Subscribe to interactive auth events
-    const unsubAuth = window.conveyor.deploy.onInteractiveAuth((event) => {
+    const unsubAuth = deploy.onInteractiveAuth((event) => {
       if (event.type === '2fa') {
         deployStore.show2FAInput(event.context, event.suggestion)
         setCurrentStep('apple-2fa')
@@ -540,7 +541,7 @@ export function IOSSetupWizard({
     setBuildProgress({ step: 'init', message: 'Starting build...', percent: 5 })
 
     try {
-      const result = await window.conveyor.deploy.startIOSBuild({
+      const result = await deploy.startIOSBuild({
         projectPath,
       })
 
@@ -555,7 +556,7 @@ export function IOSSetupWizard({
   }
 
   const handleCancelBuild = async () => {
-    await window.conveyor.deploy.cancelBuild()
+    await deploy.cancelBuild()
     setIsBuilding(false)
     setBuildProgress(null)
     deployStore.resetInteractiveAuth()
@@ -652,7 +653,7 @@ export function IOSSetupWizard({
       }
 
       if (cachedAppleId) {
-        window.conveyor.deploy.checkAppleSession(cachedAppleId)
+        deploy.checkAppleSession(cachedAppleId)
           .then((sessionInfo) => {
             if (sessionInfo.exists) {
               setExistingAppleId(cachedAppleId)

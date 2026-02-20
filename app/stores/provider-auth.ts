@@ -1,4 +1,5 @@
 import { createStore } from 'zustand/vanilla'
+import { provider } from '@/app/api/sidecar'
 
 export type ProviderType = 'anthropic' | 'openai' | 'expo'
 
@@ -101,21 +102,21 @@ export class ProviderAuthStore {
     return token.expiresAt - Date.now() < 5 * 60 * 1000
   }
 
-  setTokens(provider: ProviderType, tokens: OAuthTokens) {
+  setTokens(providerType: ProviderType, tokens: OAuthTokens) {
     const current = this.tokens.getState()
-    this.tokens.setState({ ...current, [provider]: tokens }, true)
+    this.tokens.setState({ ...current, [providerType]: tokens }, true)
     // Persist to secure storage via IPC
-    window.conveyor.provider.saveTokens(provider, tokens)
+    provider.saveTokens(providerType, tokens)
   }
 
-  clearTokens(provider: ProviderType) {
+  clearTokens(providerType: ProviderType) {
     const current = this.tokens.getState()
-    this.tokens.setState({ ...current, [provider]: null }, true)
-    window.conveyor.provider.clearTokens(provider)
+    this.tokens.setState({ ...current, [providerType]: null }, true)
+    provider.clearTokens(providerType)
   }
 
-  setDefaultProvider(provider: ProviderType) {
-    const newSettings = { ...this.settings.getState(), defaultProvider: provider }
+  setDefaultProvider(providerType: ProviderType) {
+    const newSettings = { ...this.settings.getState(), defaultProvider: providerType }
     this.settings.setState(newSettings, true)
     localStorage.setItem('provider_settings', JSON.stringify(newSettings))
   }
@@ -131,7 +132,7 @@ export class ProviderAuthStore {
       }
     }
     // Load tokens from secure storage via IPC
-    const tokens = await window.conveyor.provider.loadTokens()
+    const tokens = await provider.loadTokens()
     console.log('[providerAuthStore] Loaded tokens:', JSON.stringify({
       anthropic: tokens.anthropic !== null ? { ...tokens.anthropic, accessToken: tokens.anthropic?.accessToken ? '[REDACTED]' : undefined } : null,
       openai: tokens.openai !== null,
@@ -140,8 +141,8 @@ export class ProviderAuthStore {
     this.tokens.setState(tokens, true)
   }
 
-  getAccessToken(provider: ProviderType): string | null {
-    const tokens = this.tokens.getState()[provider]
+  getAccessToken(providerType: ProviderType): string | null {
+    const tokens = this.tokens.getState()[providerType]
     if (!tokens) return null
     // Check expiry if set
     if (tokens.expiresAt && tokens.expiresAt <= Date.now()) return null

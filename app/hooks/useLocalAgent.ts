@@ -11,7 +11,8 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { workbenchStore } from '@/app/stores/workbench'
-import type { AgentMessage, SessionOptions, ProviderId, AgentTool } from '@/lib/conveyor/api/ai-agent-api'
+import { aiAgent } from '@/app/api/sidecar'
+import type { AgentMessage, SessionOptions, ProviderId, AgentTool } from '@/lib/conveyor/schemas/ai-agent-schema'
 
 // Tools to disable - AskUserQuestion requires special UI handling that isn't fully reliable yet
 const DISALLOWED_TOOLS = ['AskUserQuestion']
@@ -158,7 +159,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
       try {
         const afterSeq = getLastSeq(sessionId)
         console.log('[useLocalAgent] Replaying buffered messages', { sessionId, afterSeq })
-        const replay = await window.conveyor.aiAgent.getBackgroundMessages(sessionId, afterSeq)
+        const replay = await aiAgent.getBackgroundMessages(sessionId, afterSeq)
         console.log('[useLocalAgent] Buffered message replay result', {
           sessionId,
           success: replay.success,
@@ -195,7 +196,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         unsubscribeRef.current()
       }
 
-      unsubscribeRef.current = window.conveyor.aiAgent.onStreamMessage(
+      unsubscribeRef.current = aiAgent.onStreamMessage(
         streamChannel,
         (msg) => {
           console.log('[useLocalAgent] Stream message received:', msg.type)
@@ -232,12 +233,16 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
    * Attempt to attach to a running background session. Polls briefly for the
    * stream channel to be published (it is set in a setImmediate on the main
    * process side, so it may not be available immediately after prompt() returns).
+   *
+   * @param skipReplay  When true, skip replaying buffered messages. Use this
+   *                    when the caller has already loaded messages from storage
+   *                    (e.g., readSession) to avoid duplicating content.
    */
   const reconnectToRunningSession = useCallback(
-    async (sessionId: string, maxAttempts = 8, delayMs = 200): Promise<boolean> => {
-      console.log('[useLocalAgent] Attempting to reconnect to running session', { sessionId, maxAttempts, delayMs })
+    async (sessionId: string, { maxAttempts = 8, delayMs = 200, skipReplay = false } = {}): Promise<boolean> => {
+      console.log('[useLocalAgent] Attempting to reconnect to running session', { sessionId, maxAttempts, delayMs, skipReplay })
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const result = await window.conveyor.aiAgent.getBackgroundSessionById(sessionId)
+        const result = await aiAgent.getBackgroundSessionById(sessionId)
         const bgSession = result.session
         console.log('[useLocalAgent] Reconnect attempt', {
           sessionId,
@@ -261,7 +266,11 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         }
 
         subscribeToStream(sessionId, bgSession.streamChannel)
-        await replayBufferedMessages(sessionId)
+        if (!skipReplay) {
+          await replayBufferedMessages(sessionId)
+        } else {
+          console.log('[useLocalAgent] Skipping buffered message replay (messages loaded from storage)')
+        }
         console.log('[useLocalAgent] Successfully reconnected to session', { sessionId, streamChannel: bgSession.streamChannel })
         return true
       }
@@ -296,7 +305,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     const reconnect = async () => {
       try {
         console.log('[useLocalAgent] Checking for background session for project:', options.projectId)
-        const result = await window.conveyor.aiAgent.getBackgroundSession(options.projectId!)
+        const result = await aiAgent.getBackgroundSession(options.projectId!)
 
         if (!result.success || !result.session) {
           console.log('[useLocalAgent] No background session found')
@@ -324,7 +333,9 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
         if (bgSession.status === 'running') {
           setState((prev) => ({ ...prev, isRunning: true }))
-          const attached = await reconnectToRunningSession(bgSession.sessionId)
+          // Skip replay: Chat.tsx loads past messages from readSession() on mount.
+          // Replaying buffered frames would duplicate already-loaded content.
+          const attached = await reconnectToRunningSession(bgSession.sessionId, { skipReplay: true })
           if (!attached) {
             // Keep session selected even if currently unattached
             setState((prev) => ({ ...prev, isRunning: false }))
@@ -336,14 +347,14 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
           onCompleteRef.current?.()
 
           // Clean up the completed background session
-          window.conveyor.aiAgent.unregisterBackgroundSession(bgSession.sessionId)
+          aiAgent.unregisterBackgroundSession(bgSession.sessionId)
         } else if (bgSession.status === 'error') {
           // Session errored while user was away
           console.log('[useLocalAgent] Background session errored')
           onErrorRef.current?.('Agent session encountered an error while running in the background')
 
           // Clean up the errored background session
-          window.conveyor.aiAgent.unregisterBackgroundSession(bgSession.sessionId)
+          aiAgent.unregisterBackgroundSession(bgSession.sessionId)
         }
       } catch (error) {
         console.error('[useLocalAgent] Failed to reconnect to background session:', error)
@@ -369,7 +380,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         sessionId: sessionIdRef.current,
       })
       // Terminate the old session (CWD change means different project context)
-      window.conveyor.aiAgent.terminateSession(sessionIdRef.current)
+      aiAgent.terminateSession(sessionIdRef.current)
       sessionIdRef.current = null
       setState((prev) => ({ ...prev, sessionId: null }))
     }
@@ -379,7 +390,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   // Check if provider is authenticated (CLI-based)
   const checkAuthentication = useCallback(async (providerId: ProviderId = 'claude') => {
     try {
-      const isAuth = await window.conveyor.aiAgent.isAuthenticated(providerId)
+      const isAuth = await aiAgent.isAuthenticated(providerId)
       setState((prev) => ({ ...prev, isConnected: isAuth }))
       return isAuth
     } catch (error) {
@@ -438,7 +449,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
       console.log('[useLocalAgent] Resume Session ID:', options.resumeSessionId)
     }
     console.log('[useLocalAgent] ========================================')
-    const result = await window.conveyor.aiAgent.createSession(sessionOptions)
+    const result = await aiAgent.createSession(sessionOptions)
 
     if (!result.success || !result.sessionId) {
       const error = result.error || 'Failed to create session'
@@ -481,7 +492,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
         console.log('[useLocalAgent] Sending prompt to session:', sessionId)
         console.log('[useLocalAgent] Prompt message:', message)
-        const result = await window.conveyor.aiAgent.prompt(sessionId, message)
+        const result = await aiAgent.prompt(sessionId, message)
 
         if (!result.success || !result.streamChannel) {
           throw new Error(result.error || 'Failed to send prompt')
@@ -508,7 +519,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   const stop = useCallback(async () => {
     if (sessionIdRef.current) {
       console.log('[useLocalAgent] Interrupting session:', sessionIdRef.current)
-      await window.conveyor.aiAgent.interrupt(sessionIdRef.current)
+      await aiAgent.interrupt(sessionIdRef.current)
       setState((prev) => ({ ...prev, isRunning: false }))
     }
   }, [])
@@ -539,7 +550,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     async (sessionId: string): Promise<boolean> => {
       try {
         console.log('[useLocalAgent] reconnectToSession called for:', sessionId)
-        const result = await window.conveyor.aiAgent.getBackgroundSessionById(sessionId)
+        const result = await aiAgent.getBackgroundSessionById(sessionId)
         const bgSession = result.session
 
         if (!result.success || !bgSession || bgSession.status !== 'running') {
@@ -561,7 +572,9 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
           streamChannel: bgSession.streamChannel || null,
         })
 
-        return reconnectToRunningSession(canonicalSessionId)
+        // Skip replay: Chat.tsx already loaded persisted messages via readSession()
+        // before calling reconnectToSession. Replaying would duplicate content.
+        return reconnectToRunningSession(canonicalSessionId, { skipReplay: true })
       } catch (error) {
         console.error('[useLocalAgent] Failed to reconnect to session:', error)
         return false
@@ -580,7 +593,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
     if (sessionIdRef.current) {
       console.log('[useLocalAgent] Terminating session:', sessionIdRef.current)
-      await window.conveyor.aiAgent.terminateSession(sessionIdRef.current)
+      await aiAgent.terminateSession(sessionIdRef.current)
       sessionIdRef.current = null
     }
 
@@ -595,7 +608,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
   // Get available providers
   const getProviders = useCallback(async () => {
-    return window.conveyor.aiAgent.getProviders()
+    return aiAgent.getProviders()
   }, [])
 
   return {

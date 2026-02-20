@@ -1,23 +1,23 @@
 {
-  "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
-  "include": [
-    "app/index.d.ts",
-    "app/**/*",
-    "lib/**/*",
-    "lib/conveyor/*.d.ts",
-    "resources/**/*"
-  ],
   "compilerOptions": {
     "composite": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
     "jsx": "react-jsx",
     "baseUrl": ".",
-    "types": [
-      "electron-vite/node"
-    ],
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./*"]
     }
-  }
+  },
+  "include": [
+    "app/**/*",
+    "lib/**/*",
+    "resources/**/*"
+  ]
 }
