@@ -41,28 +41,27 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   useEffect(() => {
     if (!open) return
 
-    const handleOAuthSuccess = (_event: any, data: { message: string }) => {
-      // Update both Google and Convex status when OAuth succeeds
-      // The backend will have already saved the correct integration
+    // Listen for OAuth callbacks via custom events (works in both Electron and Tauri)
+    const handleOAuthSuccess = ((e: CustomEvent) => {
+      const data = e.detail as { message: string }
       setGoogleConnected(true)
       setConvexConnected(true)
-      setGoogleStatusMessage({ type: 'success', message: data.message || 'Connected successfully' })
+      setGoogleStatusMessage({ type: 'success', message: data?.message || 'Connected successfully' })
       setTimeout(() => setGoogleStatusMessage(null), 5000)
-    }
+    }) as EventListener
 
-    const handleOAuthError = (_event: any, data: { message: string }) => {
-      setGoogleStatusMessage({ type: 'error', message: data.message || 'Connection failed' })
+    const handleOAuthError = ((e: CustomEvent) => {
+      const data = e.detail as { message: string }
+      setGoogleStatusMessage({ type: 'error', message: data?.message || 'Connection failed' })
       setTimeout(() => setGoogleStatusMessage(null), 5000)
-    }
+    }) as EventListener
 
-    // Add IPC listeners
-    window.electron?.ipcRenderer.on('oauth-success', handleOAuthSuccess)
-    window.electron?.ipcRenderer.on('oauth-error', handleOAuthError)
+    window.addEventListener('oauth-success', handleOAuthSuccess)
+    window.addEventListener('oauth-error', handleOAuthError)
 
-    // Cleanup listeners
     return () => {
-      window.electron?.ipcRenderer.removeListener('oauth-success', handleOAuthSuccess)
-      window.electron?.ipcRenderer.removeListener('oauth-error', handleOAuthError)
+      window.removeEventListener('oauth-success', handleOAuthSuccess)
+      window.removeEventListener('oauth-error', handleOAuthError)
     }
   }, [open])
 

@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { Titlebar, TitlebarProps } from './Titlebar'
 import { TitlebarContextProvider } from './TitlebarContext'
 import type { ChannelReturn } from '@/lib/conveyor/schemas'
-import { useConveyor } from '@/app/hooks/use-conveyor'
+import { window as windowApi } from '@/app/api/sidecar'
 
 type WindowInitProps = ChannelReturn<'window-init'>
 
@@ -26,29 +26,23 @@ export const WindowContextProvider = ({
   titlebar?: TitlebarProps
 }) => {
   const [initProps, setInitProps] = useState<WindowInitProps>()
-  const windowApi = useConveyor('window')
 
   useEffect(() => {
-    if (windowApi?.windowInit) {
-      windowApi.windowInit().then(setInitProps)
-    }
+    windowApi.windowInit().then(setInitProps)
 
     // Add class to parent element
     const parent = document.querySelector('.window-content')?.parentElement
     parent?.classList.add('window-frame')
 
     // Track fullscreen state via CSS class on document element
-    if (windowApi?.windowIsFullscreen) {
-      windowApi.windowIsFullscreen().then((isFs) => {
-        document.documentElement.classList.toggle('is-fullscreen', isFs)
-      })
-    }
-    if (windowApi?.onFullscreenChange) {
-      return windowApi.onFullscreenChange((isFs) => {
-        document.documentElement.classList.toggle('is-fullscreen', isFs)
-      })
-    }
-  }, [windowApi])
+    windowApi.windowIsFullscreen().then((isFs) => {
+      document.documentElement.classList.toggle('is-fullscreen', isFs)
+    })
+
+    return windowApi.onFullscreenChange((isFs) => {
+      document.documentElement.classList.toggle('is-fullscreen', isFs)
+    })
+  }, [])
 
   return (
     <WindowContext.Provider value={{ titlebar, window: initProps }}>

@@ -7,11 +7,11 @@ import { motion } from 'framer-motion'
 import { workbenchStore } from '@/app/stores/workbench'
 import { projectStore } from '@/app/stores/project-store'
 import { localProjectsStore } from '@/app/stores/local-projects'
-import { useConveyor } from '@/app/hooks/use-conveyor'
 import type { FileMap, Project } from '@/app/types/project'
 import type { ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { Button } from '@/app/components/ui/button'
 import { ProjectContent } from './ProjectContent'
+import { filesystem, terminal, aiAgent } from '@/app/api/sidecar'
 import './styles.css'
 
 function ProjectPageContent() {
@@ -39,7 +39,6 @@ function ProjectPageContent() {
   const projectPath = useStore(projectStore.projectPath)
   const storeError = useStore(projectStore.error)
 
-  const filesystemApi = useConveyor('filesystem')
   const hasRegisteredApi = useRef(false)
   const hasStartedSync = useRef(false)
 
@@ -78,13 +77,13 @@ function ProjectPageContent() {
     loadProject()
   }, [id])
 
-  // Register filesystem API once it's available
+  // Register filesystem API once
   useEffect(() => {
-    if (filesystemApi && !hasRegisteredApi.current) {
-      workbenchStore.registerFilesystemApi(filesystemApi)
+    if (!hasRegisteredApi.current) {
+      workbenchStore.registerFilesystemApi(filesystem)
       hasRegisteredApi.current = true
     }
-  }, [filesystemApi])
+  }, [])
 
   // Initialize projectStore IPC listener on mount
   useEffect(() => {
@@ -144,6 +143,18 @@ function ProjectPageContent() {
             .then(() => {
               console.log('[ProjectPage] Closing project on unmount')
               return projectStore.close()
+            })
+            .then(() => {
+              // Kill all terminal PTY processes and agent sessions
+              console.log('[ProjectPage] Killing all terminals and agent sessions')
+              return Promise.all([
+                terminal.killAll().catch((err: Error) => {
+                  console.error('[ProjectPage] Failed to kill terminals:', err)
+                }),
+                aiAgent.terminateAllSessions().catch((err: Error) => {
+                  console.error('[ProjectPage] Failed to terminate agent sessions:', err)
+                }),
+              ])
             })
             .catch((err: Error) => {
               console.error('[ProjectPage] Failed during cleanup:', err)

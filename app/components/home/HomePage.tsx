@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
@@ -16,11 +16,11 @@ import {
   Globe,
 } from 'lucide-react'
 import { useStore } from '@/app/hooks/useStore'
-import { useConveyor } from '@/app/hooks/use-conveyor'
+import { aiAgent } from '@/app/api/sidecar'
 import { localProjectsStore } from '@/app/stores/local-projects'
 import type { AppType, Project } from '@/app/types/project'
 import type { ProviderId, ProviderInfo } from '@/lib/conveyor/schemas/ai-agent-schema'
-import { ChatInput, type ImageAttachment, type ModelOption } from '@/app/components/chat'
+import { ChatInput, type ImageAttachment } from '@/app/components/chat'
 import { HomeSidebar } from './HomeSidebar'
 import { HomeRightPanel } from './HomeRightPanel'
 import { themeStore } from '@/app/stores/theme'
@@ -29,19 +29,6 @@ import './home-sidebar.css'
 import logoDark from '@/app/assets/plain-icon-dark.png'
 import logoLight from '@/app/assets/plain-icon-light.png'
 
-// Model options for API Key provider (multi-provider support via direct API keys)
-const API_KEY_MODEL_OPTIONS: ModelOption[] = [
-  // Anthropic models
-  { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', description: 'Anthropic' },
-  { id: 'claude-opus-4-5-20251101', label: 'Claude Opus 4.5', description: 'Anthropic' },
-  { id: 'claude-3-5-haiku-20241022', label: 'Claude Haiku 3.5', description: 'Anthropic' },
-  // KIMI (Moonshot AI)
-  { id: 'kimi-k2.5', label: 'KIMI K2.5', description: 'Moonshot AI' },
-  // MiniMax
-  { id: 'MiniMax-M2.1', label: 'MiniMax M2.1', description: 'MiniMax' },
-  // ZAI (ZhipuAI)
-  { id: 'glm-4.7', label: 'GLM-4.7', description: 'ZhipuAI' },
-]
 
 // Format relative time
 function formatRelativeTime(dateString?: string): string {
@@ -79,14 +66,25 @@ export default function HomePage() {
   const [createError, setCreateError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
-  const [selectedProvider, setSelectedProvider] = useState<ProviderId>('claude')
+  const [selectedProvider, _setSelectedProvider] = useState<ProviderId>('claude')
   const [selectedModel, setSelectedModel] = useState<string>('claude-sonnet-4-20250514')
+
+  // Default models per provider
+  const defaultModelForProvider: Record<ProviderId, string> = {
+    claude: 'claude-sonnet-4-20250514',
+    codex: 'o4-mini',
+  }
+
+  // When switching providers, also update the model to the provider's default
+  const setSelectedProvider = useCallback((id: ProviderId) => {
+    _setSelectedProvider(id)
+    setSelectedModel(defaultModelForProvider[id] || '')
+  }, [])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [backgroundProjectIds, setBackgroundProjectIds] = useState<Set<string>>(new Set())
 
-  const aiAgentApi = useConveyor('aiAgent')
   const projects = useStore(localProjectsStore.sortedProjects)
   const isLoadingProjects = useStore(localProjectsStore.isLoading)
   const resolvedTheme = useStore(themeStore.resolvedTheme)
@@ -98,10 +96,8 @@ export default function HomePage() {
 
   // Poll for background agent sessions (for indicators on project cards)
   useEffect(() => {
-    if (!aiAgentApi) return
-
     const fetchBackgroundSessions = () => {
-      aiAgentApi
+      aiAgent
         .listBackgroundSessions()
         .then((sessions) => {
           const activeIds = new Set(sessions.map((s) => s.projectId))
@@ -116,38 +112,40 @@ export default function HomePage() {
     fetchBackgroundSessions()
     const interval = setInterval(fetchBackgroundSessions, 5000)
     return () => clearInterval(interval)
-  }, [aiAgentApi])
+  }, [])
 
-  // Fetch providers
+  // Fetch provider auth status
   useEffect(() => {
-    if (aiAgentApi) {
-      aiAgentApi
-        .getProviders()
-        .then((providerList) => {
-          setProviders(providerList)
-          const authenticatedProvider = providerList.find((p) => p.isAuthenticated)
-          if (authenticatedProvider) {
-            setSelectedProvider(authenticatedProvider.id)
-          }
-        })
-        .catch((error) => {
-          console.error('Failed to fetch providers:', error)
-        })
-    }
-  }, [aiAgentApi])
+    aiAgent
+      .getProviders()
+      .then((providerList) => {
+        setProviders(providerList)
+        const authenticatedProvider = providerList.find((p) => p.isAuthenticated)
+        if (authenticatedProvider) {
+          setSelectedProvider(authenticatedProvider.id)
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to fetch providers:', error)
+      })
+  }, [])
 
-  // Filter providers
-  const visibleProviders = useMemo(
-    () => providers.filter((p) => p.id !== 'codex'),
-    [providers],
-  )
+  // Always show both Claude and Codex, with auth status from the API
+  const visibleProviders: ProviderInfo[] = useMemo(() => {
+    const claudeInfo = providers.find((p) => p.id === 'claude')
+    const codexInfo = providers.find((p) => p.id === 'codex')
+    return [
+      { id: 'claude' as const, name: 'Claude', isAuthenticated: claudeInfo?.isAuthenticated ?? false },
+      { id: 'codex' as const, name: 'Codex', isAuthenticated: codexInfo?.isAuthenticated ?? false },
+    ]
+  }, [providers])
 
   const isProviderAuthenticated = providers.find((p) => p.id === selectedProvider)?.isAuthenticated ?? false
 
   const handleSubmit = async (_prompt: string, attachments: ImageAttachment[] = []) => {
     console.log('[HomePage] handleSubmit called, prompt:', _prompt.substring(0, 50), 'attachments:', attachments.length)
     if (!_prompt.trim() && attachments.length === 0) return
-    if (isCreating || !isProviderAuthenticated) return
+    if (isCreating) return
 
     setIsCreating(true)
     setCreateError(null)
@@ -170,17 +168,15 @@ export default function HomePage() {
     try {
       // Generate project name using AI (with fallback)
       let projectName: string | undefined
-      if (aiAgentApi) {
-        try {
-          console.log('[HomePage] Generating project name using AI...')
-          const nameResult = await aiAgentApi.generateProjectName(_prompt.trim(), selectedProvider)
-          if (nameResult.success && nameResult.name) {
-            projectName = nameResult.name
-            console.log('[HomePage] AI generated project name:', projectName, '(source:', nameResult.source, ')')
-          }
-        } catch (nameError) {
-          console.warn('[HomePage] AI name generation failed, using fallback:', nameError)
+      try {
+        console.log('[HomePage] Generating project name using AI...')
+        const nameResult = await aiAgent.generateProjectName(_prompt.trim(), selectedProvider)
+        if (nameResult.success && nameResult.name) {
+          projectName = nameResult.name
+          console.log('[HomePage] AI generated project name:', projectName, '(source:', nameResult.source, ')')
         }
+      } catch (nameError) {
+        console.warn('[HomePage] AI name generation failed, using fallback:', nameError)
       }
 
       const project = await localProjectsStore.createFromPrompt(_prompt.trim(), appType, projectName)
@@ -188,7 +184,7 @@ export default function HomePage() {
       navigate(`/projects/${project.id}`, {
         state: {
           provider: selectedProvider,
-          model: selectedProvider === 'bfloat' ? selectedModel : undefined,
+          model: selectedModel,
           images: imageDataForNavigation.length > 0 ? imageDataForNavigation : undefined,
         },
       })
@@ -318,13 +314,11 @@ export default function HomePage() {
               providerSelector={{
                 provider: selectedProvider,
                 onProviderChange: (id) => setSelectedProvider(id as ProviderId),
-                selectedModel: selectedProvider === 'bfloat' ? selectedModel : undefined,
                 onModelChange: (modelId) => setSelectedModel(modelId),
                 options: visibleProviders.map((p) => ({
                   id: p.id,
-                  label: p.id === 'claude' ? 'Claude' : p.id === 'bfloat' ? 'API Keys' : 'Codex',
+                  label: p.id === 'claude' ? 'Claude' : 'Codex',
                   isAuthenticated: p.isAuthenticated,
-                  models: p.id === 'bfloat' ? API_KEY_MODEL_OPTIONS : undefined,
                 })),
                 isAuthenticated: isProviderAuthenticated,
               }}

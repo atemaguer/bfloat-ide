@@ -13,7 +13,7 @@ interface LocalSessionInfo {
   sessionId: string
   lastModified: number
   name?: string
-  provider?: 'claude' | 'codex' | 'bfloat'
+  provider?: 'claude' | 'codex'
 }
 
 interface SessionModelOption {
@@ -22,7 +22,7 @@ interface SessionModelOption {
 }
 
 interface SessionAgentOption {
-  id: 'claude' | 'bfloat' | 'codex'
+  id: 'claude' | 'codex'
   label: string
   models?: SessionModelOption[]
 }
@@ -32,10 +32,10 @@ interface SessionTabsProps {
   activeSessionId: string | null // null = unsaved new session
   sessionModelLabelById?: Record<string, string>
   newSessionAgentOptions?: SessionAgentOption[]
-  selectedNewSessionProviderId?: 'claude' | 'bfloat' | 'codex'
+  selectedNewSessionProviderId?: 'claude' | 'codex'
   selectedNewSessionModelId?: string
   onSelectSession: (session: LocalSessionInfo) => void
-  onNewSession: (providerId?: 'claude' | 'bfloat' | 'codex', modelId?: string) => void
+  onNewSession: (providerId?: 'claude' | 'codex', modelId?: string) => void
   onDeleteSession: (session: LocalSessionInfo) => void
 }
 

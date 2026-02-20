@@ -48,7 +48,8 @@ At the end of every response, emit a <suggestions> tag containing a JSON array o
 Guidelines:
 - Be specific to what was just done (not generic like "Continue" or "Review changes")
 - Each suggestion should be a concrete, actionable instruction under 60 characters
-- Suggestions should cover different directions (e.g. test, extend, fix)
+- Focus on feature additions and user-facing improvements, not implementation details
+- Suggestions should cover different directions (e.g. add a feature, improve UX, integrate with another service)
 
 Format: <suggestions>["Run the tests", "Add error handling to the API", "Deploy to staging"]</suggestions>
 `.trim()

@@ -16,6 +16,7 @@ import { ConvexIntegration } from '@/app/components/integrations/ConvexIntegrati
 import { ProjectSettings } from '@/app/components/project/ProjectSettings'
 import { PaymentsOverview } from '@/app/components/payments/PaymentsOverview'
 import { AppTypeProvider } from '@/app/contexts/AppTypeContext'
+import { terminal, filesystem, aiAgent, projectSync, projectFiles } from '@/app/api/sidecar'
 import './styles.css'
 
 // Export interface for external access to workbench terminal commands
@@ -224,14 +225,37 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
     // Dev server detection - parse actual URL/port from terminal output
     // Detect when "Local: http://localhost:PORT" appears - this is the definitive signal
+
+    // For Expo: always check for the authoritative "Web is waiting on" URL.
+    // This can appear AFTER an initial generic URL was already detected, so we
+    // allow it to override the current previewUrl to ensure the correct port.
+    const expoWebUrlInData = cleanData.match(/Web is waiting on https?:\/\/localhost:(\d+)/i)
+    if (expoWebUrlInData) {
+      const webPort = parseInt(expoWebUrlInData[1], 10)
+      const webUrl = `http://localhost:${webPort}`
+      if (webUrl !== previewUrl) {
+        console.log('[Workbench] Expo Web URL detected:', webUrl, '(overriding previous:', previewUrl || 'none', ')')
+        actualPortRef.current = webPort
+        setPreviewUrl(webUrl)
+        setServerStatus('running')
+      }
+    }
+
     if (!previewUrl) {
-      // Look for localhost URL in the current data chunk (most reliable)
-      // Pattern: "Local:" followed by localhost URL (Vite, Next.js format)
-      // Or just a localhost URL with common dev ports
+      const expoWebUrlInBuffer = terminalOutputBuffer.current.match(/Web is waiting on https?:\/\/localhost:(\d+)/i)
+      const expoWebMatch = expoWebUrlInData || expoWebUrlInBuffer
+
+      // Also look for Vite/Next.js "Local:" pattern specifically
+      const localUrlInData = cleanData.match(/Local:\s*https?:\/\/localhost:(\d+)/i)
+      const localUrlInBuffer = terminalOutputBuffer.current.match(/Local:\s*https?:\/\/localhost:(\d+)/i)
+      const localUrlMatch = localUrlInData || localUrlInBuffer
+
+      // Generic localhost URL fallback
       const urlInData = cleanData.match(/https?:\/\/localhost:(\d+)\/?/i)
       const urlInBuffer = terminalOutputBuffer.current.match(/https?:\/\/localhost:(\d+)\/?/i)
 
-      const urlMatch = urlInData || urlInBuffer
+      // Prefer specific matches: Expo Web URL > Local: URL > generic URL
+      const urlMatch = expoWebMatch || localUrlMatch || urlInData || urlInBuffer
 
       // Trigger on: seeing a localhost URL AND any server ready indicator
       // Includes patterns for: Vite/Next.js ("Local:"), Expo ("waiting on", "Press j"), general ("ready", "started")
@@ -253,7 +277,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         const detectedPort = parseInt(urlMatch[1], 10)
         actualPortRef.current = detectedPort
         const detectedUrl = `http://localhost:${detectedPort}`
-        console.log('[Workbench] Dev server detected at:', detectedUrl)
+        console.log('[Workbench] Dev server detected at:', detectedUrl, expoWebMatch ? '(Expo Web)' : localUrlMatch ? '(Local:)' : '(generic)')
         setPreviewUrl(detectedUrl)
         setServerStatus('running')
       } else if (!urlMatch && hasReadyIndicator) {
@@ -457,9 +481,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     await new Promise(resolve => setTimeout(resolve, 100))
     
     // Use the terminal API to run the command
-    if (window.conveyor?.terminal) {
-      await window.conveyor.terminal.runCommand(targetTerminalId, command)
-    }
+    await terminal.runCommand(targetTerminalId, command)
   }, [isTerminalOpen, activeTerminalId])
 
   // Register the runCommand function with the workbench store for global access
@@ -476,9 +498,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   // Auto-create/remove tabs when the agent spawns or kills terminal sessions
   useEffect(() => {
-    if (!window.conveyor?.terminal) return
-
-    const cleanupCreated = window.conveyor.terminal.onAgentTerminalCreated((terminalId: string) => {
+    const cleanupCreated = terminal.onAgentTerminalCreated((terminalId: string) => {
       agentTerminalCountRef.current += 1
       const count = agentTerminalCountRef.current
       const name = count === 1 ? 'Agent' : `Agent ${count}`
@@ -491,7 +511,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       setIsTerminalOpen(true)
     })
 
-    const cleanupClosed = window.conveyor.terminal.onAgentTerminalClosed((terminalId: string) => {
+    const cleanupClosed = terminal.onAgentTerminalClosed((terminalId: string) => {
       setTerminalTabs(prev => {
         const newTabs = prev.filter(t => t.id !== terminalId)
         if (newTabs.length === prev.length) return prev
@@ -521,8 +541,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // Listen for agent-triggered dev server restart events
   const handleRestartServerRef = useRef<() => void>()
   useEffect(() => {
-    if (!window.conveyor?.terminal) return
-    const cleanup = window.conveyor.terminal.onRestartDevServer(() => {
+    const cleanup = terminal.onRestartDevServer(() => {
       handleRestartServerRef.current?.()
     })
     return cleanup
@@ -596,9 +615,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       actualPortRef.current = portRange.start
 
       // Cleanup old project's temp directory if it exists
-      if (tempDirPathRef.current && window.conveyor?.filesystem) {
+      if (tempDirPathRef.current) {
         console.log('[Workbench] Cleaning up temp directory for previous project')
-        window.conveyor.filesystem.cleanupTempDir(tempDirPathRef.current).catch(err =>
+        filesystem.cleanupTempDir(tempDirPathRef.current).catch(err =>
           console.error('[Workbench] Error cleaning up temp directory:', err)
         )
         tempDirPathRef.current = null
@@ -656,7 +675,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       let actualPort = range.start
 
       try {
-        const portResult = await window.conveyor?.terminal?.findAvailablePort(range.start, range.end)
+        const portResult = await terminal.findAvailablePort(range.start, range.end)
         if (portResult?.success && portResult.port) {
           actualPort = portResult.port
           console.log(`[Workbench] Using dynamically assigned port: ${actualPort}`)
@@ -677,7 +696,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       // Track which terminal is running the dev server (for sending keypresses like 'i' for iOS)
       devServerTerminalIdRef.current = capturedTerminalId
 
-      const result = await window.conveyor?.terminal?.runCommand(capturedTerminalId, command)
+      const result = await terminal.runCommand(capturedTerminalId, command)
       if (result && !result.success) {
         console.error('[Workbench] Failed to run command:', result.error)
       } else {
@@ -689,11 +708,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       // Wait for React to render the terminal panel before proceeding
       // This ensures the Terminal component has mounted
       await new Promise(resolve => setTimeout(resolve, 300))
-
-      if (!window.conveyor?.terminal) {
-        console.error('[Workbench] Terminal API not available')
-        return
-      }
 
       // If using git-based project path, skip temp directory creation
       // Files are already in the cloned repo
@@ -724,16 +738,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       }
 
       // Legacy temp directory flow for non-git projects
-      if (!window.conveyor?.filesystem) {
-        console.error('[Workbench] Filesystem API not available for legacy flow')
-        return
-      }
-
       try {
         // Step 1: Create a temporary directory for this project
         console.log(`[Workbench] Creating temp directory for project: ${project.id}`)
-        const createResult = await window.conveyor.filesystem.createTempDir(project.id)
-        
+        const createResult = await filesystem.createTempDir(project.id)
+
         if (!createResult.success || !createResult.path) {
           console.error('[Workbench] Failed to create temp directory:', createResult.error)
           return
@@ -742,7 +751,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         const tempPath = createResult.path
         tempDirPathRef.current = tempPath
         console.log(`[Workbench] Temp directory created: ${tempPath}`)
-        
+
         // Set the project path in the store for file saving
         workbenchStore.projectPath.setState(tempPath, true)
 
@@ -790,8 +799,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
         // Step 3: Write all files to the temp directory
         console.log(`[Workbench] Writing ${fileEntries.length} files to temp directory...`)
-        const writeResult = await window.conveyor.filesystem.writeFiles(tempPath, fileEntries)
-        
+        const writeResult = await filesystem.writeFiles(tempPath, fileEntries)
+
         if (!writeResult.success) {
           console.error('[Workbench] Failed to write files:', writeResult.error)
           return
@@ -899,11 +908,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
       // Cleanup temp directory (only for legacy non-git projects)
       // Git-based projects are managed by projectStore and should NOT be deleted here
-      if (tempDirPathRef.current && window.conveyor?.filesystem) {
+      if (tempDirPathRef.current) {
         // Check if this is a git project path (managed by projectStore)
         const isGitProject = tempDirPathRef.current.includes('/.bfloat-ide/projects/')
         if (!isGitProject) {
-          window.conveyor.filesystem.cleanupTempDir(tempDirPathRef.current)
+          filesystem.cleanupTempDir(tempDirPathRef.current)
             .catch(err => console.error('[Workbench] Error cleaning up temp directory:', err))
         }
         workbenchStore.projectPath.setState(null, true)
@@ -958,14 +967,16 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // Handle screenshot from Preview component — add to chat as pending attachment
   const handleScreenshot = useCallback((dataUrl: string) => {
     workbenchStore.pendingScreenshot.setState(dataUrl, true)
+    // Ensure chat panel is visible so the attachment can be consumed
+    workbenchStore.setIsChatCollapsed(false)
   }, [])
 
   // Launch app in iOS Simulator (sends 'i' to Expo dev server)
   const handleLaunchIOSSimulator = useCallback(() => {
     const terminalId = devServerTerminalIdRef.current
-    if (terminalId && window.conveyor?.terminal) {
+    if (terminalId) {
       console.log('[Workbench] Launching iOS Simulator...')
-      window.conveyor.terminal.write(terminalId, 'i')
+      terminal.write(terminalId, 'i')
     } else {
       console.warn('[Workbench] Cannot launch iOS Simulator - no dev server terminal')
     }
@@ -974,7 +985,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // Restart the dev server (kill current process and re-run)
   const handleRestartServer = useCallback(async () => {
     const terminalId = devServerTerminalIdRef.current
-    if (!terminalId || !window.conveyor?.terminal) {
+    if (!terminalId) {
       console.warn('[Workbench] Cannot restart server - no dev server terminal')
       return
     }
@@ -988,7 +999,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     terminalOutputBuffer.current = ''
 
     // Send Ctrl+C to kill the current process
-    window.conveyor.terminal.write(terminalId, '\x03')
+    terminal.write(terminalId, '\x03')
 
     // Wait for the process to be interrupted
     await new Promise(resolve => setTimeout(resolve, 500))
@@ -1019,7 +1030,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     let actualPort = range.start
 
     try {
-      const portResult = await window.conveyor.terminal.findAvailablePort(range.start, range.end)
+      const portResult = await terminal.findAvailablePort(range.start, range.end)
       if (portResult?.success && portResult.port) {
         actualPort = portResult.port
       }
@@ -1033,7 +1044,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     const command = buildFullCommand(launchConfig, projectDir, actualPort)
     console.log('[Workbench] Restarting with command:', command)
 
-    const result = await window.conveyor.terminal.runCommand(terminalId, command)
+    const result = await terminal.runCommand(terminalId, command)
     if (result && !result.success) {
       console.error('[Workbench] Failed to restart dev server:', result.error)
       setServerStatus('error')
@@ -1046,9 +1057,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // Launch app in Android Emulator (sends 'a' to Expo dev server)
   const handleLaunchAndroidEmulator = useCallback(() => {
     const terminalId = devServerTerminalIdRef.current
-    if (terminalId && window.conveyor?.terminal) {
+    if (terminalId) {
       console.log('[Workbench] Launching Android Emulator...')
-      window.conveyor.terminal.write(terminalId, 'a')
+      terminal.write(terminalId, 'a')
     } else {
       console.warn('[Workbench] Cannot launch Android Emulator - no dev server terminal')
     }

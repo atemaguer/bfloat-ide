@@ -6,11 +6,15 @@
  * the raw terminal output to users.
  */
 
+import { deploy, terminal } from '@/app/api/sidecar'
 import { createProgressTracker, type ProgressUpdate, type DeployStep } from './eas-output-parser'
 
 /**
  * Extract ASC App ID from build logs and save to eas.json
  * This enables non-interactive auto-submit for future deployments
+ *
+ * Uses the conveyor filesystem bridge (sidecar HTTP) instead of Node.js fs/path
+ * so the function works in both Electron and Tauri renderers.
  */
 async function extractAndSaveAscAppId(projectPath: string, logs: string): Promise<void> {
   // Match "ASC App ID: 1234567890" from EAS build output
@@ -20,12 +24,12 @@ async function extractAndSaveAscAppId(projectPath: string, logs: string): Promis
   const ascAppId = ascAppIdMatch[1]
 
   try {
-    const fs = await import('fs')
-    const path = await import('path')
-    const easJsonPath = path.join(projectPath, 'eas.json')
+    const easJsonPath = `${projectPath}/eas.json`
 
-    // Read current eas.json
-    const easJsonContent = fs.readFileSync(easJsonPath, 'utf-8')
+    // Read current eas.json via the sidecar filesystem API
+    const easJsonContent = await deploy.filesystem.readFile(easJsonPath)
+    if (!easJsonContent) return
+
     const easConfig = JSON.parse(easJsonContent)
 
     // Check if ascAppId is already set
@@ -39,8 +43,8 @@ async function extractAndSaveAscAppId(projectPath: string, logs: string): Promis
     if (!easConfig.submit.production.ios) easConfig.submit.production.ios = {}
     easConfig.submit.production.ios.ascAppId = ascAppId
 
-    // Write updated eas.json
-    fs.writeFileSync(easJsonPath, JSON.stringify(easConfig, null, 2))
+    // Write updated eas.json via the sidecar filesystem API
+    await deploy.filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
     console.log(`[BackgroundDeploy] Saved ASC App ID to eas.json: ${ascAppId}`)
   } catch (error) {
     console.error('[BackgroundDeploy] Failed to save ASC App ID:', error)
@@ -104,11 +108,11 @@ export async function runBackgroundDeployment(
     trackProgress(data)
   }
 
-  window.conveyor.terminal.onData(terminalId, handleData)
+  terminal.onData(terminalId, handleData)
 
   try {
     // Create hidden terminal
-    const createResult = await window.conveyor.terminal.create(terminalId, projectPath)
+    const createResult = await terminal.create(terminalId, projectPath)
 
     if (!createResult.success) {
       throw new Error(createResult.error || 'Failed to create terminal')
@@ -125,7 +129,7 @@ export async function runBackgroundDeployment(
     })
 
     // Run the command
-    await window.conveyor.terminal.runCommand(terminalId, command)
+    await terminal.runCommand(terminalId, command)
 
     // Wait for completion with pattern detection
     const result = await waitForCompletion(logs, () => logs, buildUrl)
@@ -154,8 +158,8 @@ export async function runBackgroundDeployment(
   } finally {
     // Cleanup
     try {
-      window.conveyor.terminal.removeListeners(terminalId)
-      window.conveyor.terminal.kill(terminalId)
+      terminal.removeListeners(terminalId)
+      terminal.kill(terminalId)
     } catch {
       // Ignore cleanup errors
     }
@@ -165,7 +169,7 @@ export async function runBackgroundDeployment(
     cancel: () => {
       isCancelled = true
       try {
-        window.conveyor.terminal.kill(terminalId)
+        terminal.kill(terminalId)
       } catch {
         // Ignore
       }
@@ -340,21 +344,21 @@ export async function checkCredentialsExist(projectPath: string): Promise<boolea
   let output = ''
 
   // Set up output listener FIRST (before creating terminal to avoid race condition)
-  window.conveyor.terminal.onData(terminalId, (id, data) => {
+  terminal.onData(terminalId, (id, data) => {
     if (id === terminalId) {
       output += data
     }
   })
 
   try {
-    const result = await window.conveyor.terminal.create(terminalId, projectPath)
+    const result = await terminal.create(terminalId, projectPath)
 
     if (!result.success) {
       return false
     }
 
     // Run credentials check command
-    await window.conveyor.terminal.runCommand(
+    await terminal.runCommand(
       terminalId,
       'npx -y eas-cli credentials --platform ios --json 2>/dev/null || echo "NO_CREDENTIALS"'
     )
@@ -368,8 +372,8 @@ export async function checkCredentialsExist(projectPath: string): Promise<boolea
     return false
   } finally {
     try {
-      window.conveyor.terminal.removeListeners(terminalId)
-      window.conveyor.terminal.kill(terminalId)
+      terminal.removeListeners(terminalId)
+      terminal.kill(terminalId)
     } catch {
       // Ignore cleanup errors
     }

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useWindowContext } from '@/app/components/window'
 import { useTitlebarContext } from './TitlebarContext'
-import { useConveyor } from '@/app/hooks/use-conveyor'
+import { window as windowApi } from '@/app/api/sidecar'
 
 const TitlebarMenu = () => {
   const { menuItems } = useWindowContext().titlebar
@@ -90,13 +90,12 @@ const TitlebarMenuPopup = ({ menu }: { menu: TitlebarMenu }) => (
 
 const TitlebarMenuPopupItem = ({ item }: { item: TitlebarMenuItem }) => {
   const { setActiveMenuIndex } = useTitlebarContext()
-  const { invoke } = useConveyor('window')
 
   const handleAction = () => {
     if (typeof item.actionCallback === 'function') {
       item.actionCallback()
-    } else if (item.action) {
-      invoke(item.action as any, ...(item.actionParams || []))
+    } else if (item.action && (windowApi as any)[item.action]) {
+      (windowApi as any)[item.action](...(item.actionParams || []))
     }
     setActiveMenuIndex(null)
   }

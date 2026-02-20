@@ -72,42 +72,47 @@ function getCodexAuthPathCandidates(): string[] {
 }
 
 /**
- * Find the Codex binary path from the SDK's vendor directory.
- * The SDK uses import.meta.url which doesn't work correctly in Electron,
- * so we need to find the binary ourselves.
+ * Find the Codex binary path.
+ *
+ * The SDK ships the binary in platform-specific packages (e.g.
+ * `@openai/codex-darwin-arm64`) rather than in `@openai/codex-sdk` itself.
+ * The SDK's own resolution uses `createRequire(import.meta.url)` which
+ * doesn't work in Electron's bundled context, so we resolve manually.
  */
 function findCodexBinaryPath(): string | undefined {
   const { platform, arch } = process
 
-  // Map platform/arch to SDK's target triple
-  const targetTripleMap: Record<string, string> = {
-    'darwin-arm64': 'aarch64-apple-darwin',
-    'darwin-x64': 'x86_64-apple-darwin',
-    'linux-arm64': 'aarch64-unknown-linux-musl',
-    'linux-x64': 'x86_64-unknown-linux-musl',
-    'win32-arm64': 'aarch64-pc-windows-msvc',
-    'win32-x64': 'x86_64-pc-windows-msvc',
+  // Map platform/arch to SDK's target triple and platform package name
+  const platformMap: Record<string, { triple: string; pkg: string }> = {
+    'darwin-arm64': { triple: 'aarch64-apple-darwin', pkg: '@openai/codex-darwin-arm64' },
+    'darwin-x64': { triple: 'x86_64-apple-darwin', pkg: '@openai/codex-darwin-x64' },
+    'linux-arm64': { triple: 'aarch64-unknown-linux-musl', pkg: '@openai/codex-linux-arm64' },
+    'linux-x64': { triple: 'x86_64-unknown-linux-musl', pkg: '@openai/codex-linux-x64' },
+    'win32-arm64': { triple: 'aarch64-pc-windows-msvc', pkg: '@openai/codex-win32-arm64' },
+    'win32-x64': { triple: 'x86_64-pc-windows-msvc', pkg: '@openai/codex-win32-x64' },
   }
 
   const key = `${platform}-${arch}`
-  const targetTriple = targetTripleMap[key]
+  const entry = platformMap[key]
 
-  if (!targetTriple) {
+  if (!entry) {
     console.warn(`${LOG_PREFIX} Unsupported platform: ${key}`)
     return undefined
   }
 
+  const { triple, pkg } = entry
   const binaryName = platform === 'win32' ? 'codex.exe' : 'codex'
+  const pkgDir = pkg.replace('@openai/', '')
 
-  // Try various possible locations for the SDK's vendor directory
+  // Search in the platform-specific package (where the binary actually lives)
   const searchPaths = [
     // Development: from cwd
-    path.join(process.cwd(), 'node_modules', '@openai', 'codex-sdk', 'vendor', targetTriple, 'codex', binaryName),
+    path.join(process.cwd(), 'node_modules', '@openai', pkgDir, 'vendor', triple, 'codex', binaryName),
     // Production: from __dirname (main process), go up to find node_modules
-    path.join(__dirname, '..', '..', 'node_modules', '@openai', 'codex-sdk', 'vendor', targetTriple, 'codex', binaryName),
-    path.join(__dirname, '..', '..', '..', 'node_modules', '@openai', 'codex-sdk', 'vendor', targetTriple, 'codex', binaryName),
+    path.join(__dirname, '..', '..', 'node_modules', '@openai', pkgDir, 'vendor', triple, 'codex', binaryName),
+    path.join(__dirname, '..', '..', '..', 'node_modules', '@openai', pkgDir, 'vendor', triple, 'codex', binaryName),
     // Electron app.asar.unpacked
-    path.join(__dirname, '..', '..', 'app.asar.unpacked', 'node_modules', '@openai', 'codex-sdk', 'vendor', targetTriple, 'codex', binaryName),
+    path.join(__dirname, '..', '..', 'app.asar.unpacked', 'node_modules', '@openai', pkgDir, 'vendor', triple, 'codex', binaryName),
   ]
 
   for (const p of searchPaths) {
@@ -241,7 +246,7 @@ function convertThreadItem(item: ThreadItem): AgentMessage | null {
       const msgItem = item as AgentMessageItem
       return {
         type: 'text',
-        content: msgItem.message, // SDK uses 'message' not 'text'
+        content: msgItem.text,
         metadata: {
           timestamp: Date.now(),
         },
@@ -485,7 +490,9 @@ class CodexAgentSession implements AgentSession {
         ...permissionOptions,
       }
 
-      if (this.options.model) {
+      // Only pass the model if it's a valid Codex model — ignore Claude model IDs
+      // that may leak through from provider switching in the UI
+      if (this.options.model && !this.options.model.startsWith('claude-')) {
         threadOptions.model = this.options.model
       }
 

@@ -1,0 +1,12 @@
+/*
+ * Desktop-specific base styles.
+ *
+ * The main app styles (Tailwind theme, component classes, fonts) are loaded
+ * via app/app.tsx → app/styles/app.css → globals.css, fonts.css, window.css.
+ *
+ * This file only provides a minimal reset for the loading/error screens that
+ * render before the app component mounts.
+ */
+@import "tailwindcss";
+@source "../../../app";
+@source "../../../lib";

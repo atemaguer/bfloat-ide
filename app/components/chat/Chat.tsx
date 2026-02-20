@@ -14,10 +14,10 @@ import type { ChatMessage, MessagePart } from '@/app/types/project'
 import { useLocalAgent } from '@/app/hooks/useLocalAgent'
 import { useSessions, useSaveSession, useDeleteSession, useUpdateSession } from '@/app/hooks/useSessions'
 import { getSystemPrompt } from '@/lib/launch/system-prompt'
-import { useConveyor } from '@/app/hooks/use-conveyor'
-import type { ProviderId, SessionMessageData } from '@/lib/conveyor/api/ai-agent-api'
+import { aiAgent, projectFiles, secrets, app } from '@/app/api/sidecar'
+import type { ProviderId, SessionMessageData } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { Messages } from './Messages'
-import { ChatInput, type ImageAttachment, type ModelOption } from './ChatInput'
+import { ChatInput, type ImageAttachment } from './ChatInput'
 import { ErrorMessage } from './ErrorMessage'
 import { ClaudeAuthBanner, isClaudeAuthError } from './ClaudeAuthBanner'
 import { ProviderAuthModal } from '@/app/components/integrations/ProviderAuthModal'
@@ -34,19 +34,6 @@ import { isIntegrationAvailableForAppType, type IntegrationId } from '@/app/type
 import toast from 'react-hot-toast'
 import './styles.css'
 
-// Model options for API Key provider (multi-provider support via direct API keys)
-const API_KEY_MODEL_OPTIONS: ModelOption[] = [
-  // Anthropic models
-  { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', description: 'Anthropic' },
-  { id: 'claude-opus-4-5-20251101', label: 'Claude Opus 4.5', description: 'Anthropic' },
-  { id: 'claude-3-5-haiku-20241022', label: 'Claude Haiku 3.5', description: 'Anthropic' },
-  // KIMI (Moonshot AI)
-  { id: 'kimi-k2.5', label: 'KIMI K2.5', description: 'Moonshot AI' },
-  // MiniMax
-  { id: 'MiniMax-M2.1', label: 'MiniMax M2.1', description: 'MiniMax' },
-  // ZAI (ZhipuAI)
-  { id: 'glm-4.7', label: 'GLM-4.7', description: 'ZhipuAI' },
-]
 
 // Image data passed from HomePage via navigation state
 interface InitialImageData {
@@ -68,10 +55,10 @@ interface ChatProps {
   projectPath?: string | null
   isWorkspaceReady?: boolean // Whether the workspace (git clone + files) is ready - for progressive loading
   initialProvider?: ProviderId
-  initialModel?: string // AI model selected during project creation (for multi-model providers like Bfloat)
+  initialModel?: string // AI model selected during project creation
   autoStart?: boolean // Whether to auto-start the AI on first message (only for new projects)
   initialSessionId?: string | null // Session ID to resume from (for existing projects)
-  onSessionIdChange?: (sessionId: string, provider: 'claude' | 'codex' | 'bfloat') => void // Callback when session ID changes
+  onSessionIdChange?: (sessionId: string, provider: 'claude' | 'codex') => void // Callback when session ID changes
   projectHasConvex?: boolean // Whether Convex is already provisioned on this project
   projectHasFirebase?: boolean // Whether Firebase is already provisioned on this project
   projectHasStripe?: boolean // Whether Stripe is already provisioned on this project
@@ -154,9 +141,9 @@ export function Chat({
     messagesRef.current = messages
   }, [messages])
 
-  // API access
-  const aiAgentApi = useConveyor('aiAgent')
-  const localProjectsApi = useConveyor('localProjects')
+  // API access (direct imports from sidecar)
+  const aiAgentApi = aiAgent
+  const localProjectsApi = null // Not used in this component
 
   // Session management hooks (local-first storage in projects.json)
   // Mirrors workbench pattern but reads from projects.json instead of backend API
@@ -212,27 +199,25 @@ export function Chat({
 
   // Fetch provider authentication status
   useEffect(() => {
-    if (aiAgentApi) {
-      aiAgentApi
-        .getProviders()
-        .then((providerList) => {
-          const authStatus: Record<string, boolean> = {}
-          for (const p of providerList) {
-            authStatus[p.id] = p.isAuthenticated
-          }
-          setProviderAuthStatus(authStatus)
-        })
-        .catch((err) => {
-          console.error('[Chat] Failed to fetch providers:', err)
-        })
-    }
-  }, [aiAgentApi])
+    aiAgentApi
+      .getProviders()
+      .then((providerList) => {
+        const authStatus: Record<string, boolean> = {}
+        for (const p of providerList) {
+          authStatus[p.id] = p.isAuthenticated
+        }
+        setProviderAuthStatus(authStatus)
+      })
+      .catch((err) => {
+        console.error('[Chat] Failed to fetch providers:', err)
+      })
+  }, [])
 
   // Check if integrations have their required secrets already configured
   useEffect(() => {
     if (!projectId) return
 
-    window.conveyor.secrets
+    secrets
       .readSecrets(projectId)
       .then((result) => {
         if (result.error || !result.secrets) return
@@ -268,9 +253,9 @@ export function Chat({
 
   // Re-fetch Stripe integration status after OAuth callback
   useEffect(() => {
-    if (!window.conveyor?.app?.onStripeCallback) return
+    if (!app?.onStripeCallback) return
 
-    const unsubscribe = window.conveyor.app.onStripeCallback(async (data) => {
+    const unsubscribe = app.onStripeCallback(async (data) => {
       if (data.success) {
         setIntegrationStatus((prev) => ({ ...prev, stripe: true }))
         setInput('Setting up Stripe...')
@@ -292,9 +277,9 @@ export function Chat({
 
   // Re-fetch RevenueCat integration status after OAuth callback
   useEffect(() => {
-    if (!window.conveyor?.app?.onRevenueCatCallback) return
+    if (!app?.onRevenueCatCallback) return
 
-    const unsubscribe = window.conveyor.app.onRevenueCatCallback(async (data) => {
+    const unsubscribe = app.onRevenueCatCallback(async (data) => {
       if (data.success) {
         setIntegrationStatus((prev) => ({ ...prev, revenuecat: true }))
         setInput('Setting up RevenueCat...')
@@ -338,20 +323,18 @@ export function Chat({
     await providerAuthStore.loadFromStorage()
 
     // Re-fetch actual provider auth status from the API
-    if (aiAgentApi) {
-      try {
-        const providerList = await aiAgentApi.getProviders()
-        const authStatus: Record<string, boolean> = {}
-        for (const p of providerList) {
-          authStatus[p.id] = p.isAuthenticated
-        }
-        setProviderAuthStatus(authStatus)
-        console.log('[Chat] Updated provider auth status after reconnect:', authStatus)
-      } catch (err) {
-        console.error('[Chat] Failed to refresh provider auth status:', err)
+    try {
+      const providerList = await aiAgentApi.getProviders()
+      const authStatus: Record<string, boolean> = {}
+      for (const p of providerList) {
+        authStatus[p.id] = p.isAuthenticated
       }
+      setProviderAuthStatus(authStatus)
+      console.log('[Chat] Updated provider auth status after reconnect:', authStatus)
+    } catch (err) {
+      console.error('[Chat] Failed to refresh provider auth status:', err)
     }
-  }, [aiAgentApi])
+  }, [])
 
   // Integration menu handlers
   const handleIntegrationConnect = useCallback(async (id: string) => {
@@ -458,7 +441,7 @@ export function Chat({
     const sessionIdToLoad = initialSessionIdAtMount.current
 
     // Only load if we have a session ID at mount time and haven't already loaded
-    if (!sessionIdToLoad || !aiAgentApi || hasLoadedSession.current) {
+    if (!sessionIdToLoad || hasLoadedSession.current) {
       return
     }
 
@@ -614,12 +597,11 @@ export function Chat({
       // Save session to projects.json (mutation handles refresh automatically)
       saveSessionMutation.mutate({
         sessionId,
-        provider: provider as 'claude' | 'codex' | 'bfloat',
-        model: provider === 'bfloat' ? selectedModel : undefined,
+        provider: provider as 'claude' | 'codex',
       })
 
       // Notify parent if callback provided
-      onSessionIdChange?.(sessionId, provider as 'claude' | 'codex' | 'bfloat')
+      onSessionIdChange?.(sessionId, provider as 'claude' | 'codex')
     },
     [onSessionIdChange, provider, selectedModel, saveSessionMutation]
   )
@@ -633,7 +615,7 @@ export function Chat({
   const localAgent = useLocalAgent({
     cwd: projectPath || '',
     provider,
-    model: provider === 'bfloat' ? selectedModel : undefined, // Use selected model for Bfloat provider
+    model: selectedModel,
     projectId, // Project ID for background session tracking
     systemPrompt, // System prompt for project exploration (new sessions only)
     resumeSessionId: agentSessionId, // Resume from previous session if available
@@ -878,7 +860,7 @@ export function Chat({
         let fullPrompt = messageContent
 
         // If there are initial images, save them and append paths to prompt
-        if (initialImages && initialImages.length > 0 && window.conveyor?.projectFiles) {
+        if (initialImages && initialImages.length > 0) {
           console.log('[Chat] Processing', initialImages.length, 'initial images')
           const attachmentPaths: string[] = []
 
@@ -898,7 +880,7 @@ export function Chat({
             })
 
             try {
-              const filePath = await window.conveyor.projectFiles.saveAttachment(imageData.filename, imageData.base64)
+              const filePath = await projectFiles.saveAttachment(imageData.filename, imageData.base64)
               console.log('[Chat] Saved initial image to:', filePath)
               attachmentPaths.push(filePath)
             } catch (err) {
@@ -985,7 +967,7 @@ export function Chat({
         console.log('[DEBUG-IMG] Processing', attachments.length, 'attachments')
       }
 
-      if (attachments.length > 0 && window.conveyor?.projectFiles) {
+      if (attachments.length > 0) {
         const attachmentPaths: string[] = []
         for (let i = 0; i < attachments.length; i++) {
           const attachment = attachments[i]
@@ -1004,7 +986,7 @@ export function Chat({
               attachment.url.substring(0, 50)
             )
 
-            const filePath = await window.conveyor.projectFiles.saveAttachment(filename, attachment.url)
+            const filePath = await projectFiles.saveAttachment(filename, attachment.url)
             console.log('[DEBUG-IMG] Saved attachment to:', filePath)
             attachmentPaths.push(filePath)
           } catch (err) {
@@ -1070,20 +1052,6 @@ export function Chat({
         return
       }
 
-      // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
-      if (/\bconvex\b/i.test(text) && !projectHasConvex && !convexProvisioned && !hasIntegrationSecrets.convex) {
-        const guidanceMessage: ChatMessage = {
-          id: generateId(),
-          role: 'assistant',
-          content: '',
-          parts: [{ type: 'convex-setup-prompt' } as MessagePart],
-          createdAt: new Date().toISOString(),
-        }
-        setMessages((prev) => [...prev, userMessage, guidanceMessage])
-        setInput('')
-        return
-      }
-
       setMessages((prev) => [...prev, userMessage])
       setIsStreaming(true)
 
@@ -1115,8 +1083,8 @@ export function Chat({
 
   // Handle session switching - load a different session from CLI storage
   const handleSelectSession = useCallback(
-    async (session: { sessionId: string; lastModified: number; name?: string; provider?: 'claude' | 'codex' | 'bfloat' }) => {
-      if (!aiAgentApi || !projectPath || session.sessionId === agentSessionId) return
+    async (session: { sessionId: string; lastModified: number; name?: string; provider?: 'claude' | 'codex' }) => {
+      if (!projectPath || session.sessionId === agentSessionId) return
 
       console.log('[Chat] Switching to session:', session.sessionId)
 
@@ -1145,7 +1113,7 @@ export function Chat({
       setIsLoadingSession(true)
       try {
         const sessionProvider = session.provider || provider
-        const result = await aiAgentApi.readSession(session.sessionId, sessionProvider, projectPath)
+        const result = await aiAgent.readSession(session.sessionId, sessionProvider, projectPath)
         if (result.success && result.session?.messages) {
           console.log('[Chat] Loaded session messages:', result.session.messages.length)
           const loadedMessages = result.session.messages.map(convertSessionMessage)
@@ -1168,7 +1136,7 @@ export function Chat({
         setIsStreaming(true)
       }
     },
-    [aiAgentApi, projectPath, agentSessionId, provider, localAgent, convertSessionMessage, updateSessionMutation]
+    [projectPath, agentSessionId, provider, localAgent, convertSessionMessage, updateSessionMutation]
   )
 
   // Handle session deletion - remove from projects.json
@@ -1200,7 +1168,7 @@ export function Chat({
 
   // Handle creating a new session (with optional provider/model selection)
   const handleNewSession = useCallback(async (
-    providerId?: 'claude' | 'bfloat' | 'codex',
+    providerId?: 'claude' | 'codex',
     modelId?: string
   ) => {
     console.log('[Chat] Creating new session', { providerId: providerId || provider })
@@ -1215,11 +1183,8 @@ export function Chat({
     // Starting from tab "+" optionally sets provider/model for the next session
     if (providerId) {
       setProvider(providerId)
-      if (providerId === 'bfloat' && modelId) {
-        setSelectedModel(modelId)
-      }
-    } else if (modelId) {
-      setProvider('bfloat')
+    }
+    if (modelId) {
       setSelectedModel(modelId)
     }
 
@@ -1359,7 +1324,6 @@ export function Chat({
   const newSessionAgentOptions = useMemo(() => {
     return [
       { id: 'claude' as const, label: 'Claude' },
-      { id: 'bfloat' as const, label: 'API Keys', models: API_KEY_MODEL_OPTIONS.map((m) => ({ id: m.id, label: m.label })) },
       ...(codexBetaEnabled ? [{ id: 'codex' as const, label: 'Codex' }] : []),
     ]
   }, [codexBetaEnabled])
@@ -1374,7 +1338,7 @@ export function Chat({
         sessions={allSessions}
         activeSessionId={agentSessionId}
         newSessionAgentOptions={newSessionAgentOptions}
-        selectedNewSessionProviderId={provider as 'claude' | 'bfloat' | 'codex'}
+        selectedNewSessionProviderId={provider as 'claude' | 'codex'}
         selectedNewSessionModelId={selectedModel}
         onSelectSession={handleSelectSession}
         onNewSession={handleNewSession}
@@ -1455,12 +1419,16 @@ export function Chat({
           showHint={true}
           providerSelector={{
             provider,
-            onProviderChange: (p) => setProvider(p as ProviderId),
-            selectedModel: provider === 'bfloat' ? selectedModel : undefined,
+            onProviderChange: (p) => {
+              const pid = p as ProviderId
+              setProvider(pid)
+              // Reset model to the provider's default to avoid passing e.g. a Claude model to Codex
+              const defaults: Record<ProviderId, string> = { claude: 'claude-sonnet-4-20250514', codex: 'o4-mini' }
+              setSelectedModel(defaults[pid] || '')
+            },
             onModelChange: (modelId) => setSelectedModel(modelId),
             options: [
               { id: 'claude', label: 'Claude', isAuthenticated: providerAuthStatus['claude'] },
-              { id: 'bfloat', label: 'API Keys', isAuthenticated: providerAuthStatus['bfloat'], models: API_KEY_MODEL_OPTIONS },
               ...(codexBetaEnabled
                 ? [{ id: 'codex', label: 'Codex', isAuthenticated: providerAuthStatus['codex'] }]
                 : []),

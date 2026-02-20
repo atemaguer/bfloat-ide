@@ -4,6 +4,7 @@ import { Loader2, Download, ExternalLink } from 'lucide-react'
 import { Button } from '@/app/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/app/components/ui/dialog'
 import { providerAuthStore } from '@/app/stores/provider-auth'
+import { provider as providerApi, window as windowApi } from '@/app/api/sidecar'
 
 type AuthProvider = 'anthropic' | 'openai'
 
@@ -119,15 +120,10 @@ export function ProviderAuthModal({ open, provider, onOpenChange, onComplete }: 
       setErrorMessage(null)
       pendingErrorRef.current = null
 
-      if (!window.conveyor?.provider) {
-        finishError('Provider API unavailable. Please restart the app.')
-        return
-      }
-
       // On Windows, check if Claude Code CLI is installed before proceeding
       if (isWindows && provider === 'anthropic') {
         try {
-          const cliCheck = await window.conveyor.provider.checkClaudeCliInstalled()
+          const cliCheck = await providerApi.checkClaudeCliInstalled()
           if (!cliCheck.installed) {
             setClaudeCliMissing(true)
             setStatus('idle')
@@ -152,8 +148,8 @@ export function ProviderAuthModal({ open, provider, onOpenChange, onComplete }: 
       try {
         const result =
           provider === 'anthropic'
-            ? await window.conveyor.provider.connectAnthropic()
-            : await window.conveyor.provider.connectOpenAI()
+            ? await providerApi.connectAnthropic()
+            : await providerApi.connectOpenAI()
 
         if (resolved) return
 
@@ -187,9 +183,9 @@ export function ProviderAuthModal({ open, provider, onOpenChange, onComplete }: 
   }, [open, provider, attempt])
 
   useEffect(() => {
-    if (!open || !window.conveyor?.provider?.on) return
+    if (!open) return
 
-    const unsubscribe = window.conveyor.provider.on<{ provider: AuthProvider; data: string }>(
+    const unsubscribe = providerApi.on<{ provider: AuthProvider; data: string }>(
       'provider:auth-output',
       ({ provider: outputProvider, data }) => {
         if (outputProvider !== provider || !data) return
@@ -212,7 +208,7 @@ export function ProviderAuthModal({ open, provider, onOpenChange, onComplete }: 
           const urlMatch = data.match(/https?:\/\/[^\s]+/i)
           if (urlMatch && urlMatch[0]) {
             openedUrlRef.current = urlMatch[0]
-            window.conveyor?.window?.webOpenUrl(urlMatch[0])
+            windowApi?.webOpenUrl(urlMatch[0])
           }
         }
       }
@@ -238,11 +234,10 @@ export function ProviderAuthModal({ open, provider, onOpenChange, onComplete }: 
     errorMessage.toLowerCase().includes('git bash')
 
   const handleSelectGitBash = async () => {
-    if (!window.conveyor?.provider?.selectGitBashPath) return
     setIsSelectingGitBash(true)
 
     try {
-      const result = await window.conveyor.provider.selectGitBashPath()
+      const result = await providerApi.selectGitBashPath()
       if (result.success && result.path) {
         setErrorMessage(null)
         setStatus('connecting')
@@ -258,11 +253,11 @@ export function ProviderAuthModal({ open, provider, onOpenChange, onComplete }: 
   }
 
   const handleInstallGitBash = () => {
-    window.conveyor?.window?.webOpenUrl('https://git-scm.com/download/win')
+    windowApi?.webOpenUrl('https://git-scm.com/download/win')
   }
 
   const handleDownloadClaude = () => {
-    window.conveyor?.window?.webOpenUrl('https://claude.ai/download')
+    windowApi?.webOpenUrl('https://claude.ai/download')
   }
 
   const handleRetryAfterInstall = () => {

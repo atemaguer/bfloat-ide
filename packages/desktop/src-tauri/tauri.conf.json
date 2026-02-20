@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Bfloat IDE Dev",
+  "identifier": "com.bfloat.ide.dev",
+  "mainBinaryName": "Bfloat",
+  "version": "../package.json",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "create": false
+      }
+    ],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "icon": [
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "active": true,
+    "targets": ["dmg", "nsis", "app", "deb"],
+    "externalBin": ["sidecars/bfloat-sidecar"],
+    "macOS": {
+      "entitlements": "./entitlements.plist"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["bfloat"]
+      }
+    }
+  }
+}
