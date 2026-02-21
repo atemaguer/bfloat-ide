@@ -5,6 +5,8 @@
  * Uses CLI commands to get available accounts.
  */
 
+import { deploy, terminal, provider } from '@/app/api/sidecar'
+
 export interface EasAccount {
   name: string
   role: 'owner' | 'admin' | 'developer' | 'viewer'
@@ -101,31 +103,26 @@ function parseWhoamiOutput(output: string): EasAccountsResult {
  * Fetch available EAS accounts using the CLI
  */
 export async function fetchEasAccounts(): Promise<EasAccountsResult> {
-  if (!window.conveyor?.terminal) {
-    console.warn('[EasAccounts] Terminal API not available')
-    return { success: false, accounts: [], error: 'Terminal API not available' }
-  }
-
   const terminalId = `eas-whoami-${Date.now()}`
   let output = ''
 
   try {
     // Set up output listener
-    window.conveyor.terminal.onData(terminalId, (id, data) => {
+    terminal.onData(terminalId, (id, data) => {
       if (id === terminalId) {
         output += data
       }
     })
 
     // Create terminal
-    const result = await window.conveyor.terminal.create(terminalId)
+    const result = await terminal.create(terminalId)
     if (!result.success) {
       console.warn('[EasAccounts] Failed to create terminal')
       return { success: false, accounts: [], error: 'Failed to create terminal' }
     }
 
     // Run whoami command
-    await window.conveyor.terminal.runCommand(terminalId, 'npx -y eas-cli whoami 2>&1')
+    await terminal.runCommand(terminalId, 'npx -y eas-cli whoami 2>&1')
 
     // Wait for output (eas-cli can be slow, especially first run)
     await new Promise((resolve) => setTimeout(resolve, 8000))
@@ -146,8 +143,8 @@ export async function fetchEasAccounts(): Promise<EasAccountsResult> {
     }
   } finally {
     try {
-      window.conveyor.terminal.removeListeners(terminalId)
-      window.conveyor.terminal.kill(terminalId)
+      terminal.removeListeners(terminalId)
+      terminal.kill(terminalId)
     } catch {
       // Ignore cleanup errors
     }
@@ -158,11 +155,9 @@ export async function fetchEasAccounts(): Promise<EasAccountsResult> {
  * Get the current project's EAS owner from app.json
  */
 export async function getProjectOwner(projectPath: string): Promise<string | null> {
-  if (!window.conveyor?.filesystem) return null
-
   try {
     const appJsonPath = `${projectPath}/app.json`
-    const result = await window.conveyor.filesystem.readFile(appJsonPath)
+    const result = await provider.filesystem.readFile(appJsonPath)
 
     if (result.success && result.content) {
       const appConfig = JSON.parse(result.content)
@@ -183,13 +178,9 @@ export async function setProjectOwner(
   projectPath: string,
   owner: string
 ): Promise<{ success: boolean; error?: string }> {
-  if (!window.conveyor?.filesystem) {
-    return { success: false, error: 'Filesystem API not available' }
-  }
-
   try {
     const appJsonPath = `${projectPath}/app.json`
-    const result = await window.conveyor.filesystem.readFile(appJsonPath)
+    const result = await provider.filesystem.readFile(appJsonPath)
 
     if (!result.success || !result.content) {
       return { success: false, error: 'Could not read app.json' }
@@ -227,7 +218,7 @@ export async function setProjectOwner(
     const newContent = JSON.stringify(appConfig, null, 2)
     console.log('[setProjectOwner] Writing app.json with owner:', owner)
 
-    await window.conveyor.filesystem.writeFile(appJsonPath, newContent)
+    await provider.filesystem.writeFile(appJsonPath, newContent)
 
     return { success: true }
   } catch (error) {

@@ -1,3 +1,4 @@
+import { secrets } from '@/app/api/sidecar'
 import { workbenchStore } from '@/app/stores/workbench'
 
 /**
@@ -12,7 +13,7 @@ export async function writeIntegrationEnvVars(
 
   for (const [key, value] of Object.entries(envVars)) {
     if (value) {
-      await window.conveyor.secrets.setSecret(projectId, key, value)
+      await secrets.setSecret(projectId, key, value)
       written[key] = value
     }
   }

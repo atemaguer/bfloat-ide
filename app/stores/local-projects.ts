@@ -7,6 +7,7 @@
 
 import { createStore } from 'zustand/vanilla'
 import type { Project, AppType } from '@/app/types/project'
+import { localProjects } from '@/app/api/sidecar'
 
 // Generate a unique project ID
 function generateProjectId(): string {
@@ -51,7 +52,7 @@ class LocalProjectsStore {
   async load(): Promise<void> {
     this.isLoading.setState(true, true)
     try {
-      const projects = await window.conveyor.localProjects.list()
+      const projects = await localProjects.list()
       const projectMap: Record<string, Project> = {}
       for (const project of projects) {
         projectMap[project.id] = project
@@ -93,7 +94,7 @@ class LocalProjectsStore {
     }
 
     // Save to IPC storage
-    await window.conveyor.localProjects.create(project)
+    await localProjects.create(project)
 
     // Update local state
     const current = { ...this.projects.getState() }
@@ -127,7 +128,7 @@ class LocalProjectsStore {
     }
 
     // Save to IPC storage
-    await window.conveyor.localProjects.create(project)
+    await localProjects.create(project)
 
     // Update local state
     const current = { ...this.projects.getState() }
@@ -161,7 +162,7 @@ class LocalProjectsStore {
     }
 
     // Save to IPC storage
-    await window.conveyor.localProjects.create(project)
+    await localProjects.create(project)
 
     // Update local state
     const current = { ...this.projects.getState() }
@@ -189,7 +190,7 @@ class LocalProjectsStore {
     }
 
     // Save to IPC storage
-    await window.conveyor.localProjects.update(updated)
+    await localProjects.update(updated)
 
     // Update local state
     current[id] = updated
@@ -201,7 +202,7 @@ class LocalProjectsStore {
    */
   async delete(id: string): Promise<void> {
     // Delete from IPC storage
-    await window.conveyor.localProjects.delete(id)
+    await localProjects.delete(id)
 
     // Update local state
     const current = { ...this.projects.getState() }

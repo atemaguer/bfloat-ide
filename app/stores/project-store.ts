@@ -7,6 +7,7 @@
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla'
+import { projectFiles } from '@/app/api/sidecar'
 
 // Types matching main process
 export type ProjectStatus = 'idle' | 'opening' | 'ready' | 'error'
@@ -161,8 +162,8 @@ class ProjectStoreImpl {
   initializeListener(): void {
     if (this.listenerSetUp) return
 
-    if (typeof window !== 'undefined' && window.conveyor?.projectFiles) {
-      window.conveyor.projectFiles.onFileChange((event: FileChangeEvent) => {
+    if (typeof window !== 'undefined') {
+      projectFiles.onFileChange((event: FileChangeEvent) => {
         this.handleFileChange(event)
       })
       this.listenerSetUp = true
@@ -265,7 +266,11 @@ class ProjectStoreImpl {
     this.projectId.setState(projectId, true)
 
     try {
-      const result = await window.conveyor.projectFiles.open(projectId, remoteUrl, appType)
+      const result = await projectFiles.open(projectId, remoteUrl, appType)
+
+      if (!result) {
+        throw new Error('Failed to open project: no response from sidecar')
+      }
 
       if (result.status === 'error') {
         throw new Error(result.error || 'Failed to open project')
@@ -275,13 +280,15 @@ class ProjectStoreImpl {
 
       // Build file tree from result
       const tree: Record<string, FileNode> = {}
-      for (const node of result.fileTree) {
-        tree[node.path] = node
+      if (result.fileTree) {
+        for (const node of result.fileTree) {
+          tree[node.path] = node
+        }
       }
       this.fileTree.setState(tree, true)
 
       this.status.setState('ready', true)
-      console.log(`[ProjectStore] Project ready with ${result.fileTree.length} files`)
+      console.log(`[ProjectStore] Project ready with ${result.fileTree?.length ?? 0} files`)
     } catch (err) {
       console.error(`[ProjectStore] Failed to open project:`, err)
       this.status.setState('error', true)
@@ -298,7 +305,7 @@ class ProjectStoreImpl {
     const closingProjectId = this.projectId.getState()
     console.log(`[ProjectStore] Closing project: ${closingProjectId}`)
 
-    await window.conveyor.projectFiles.close()
+    await projectFiles.close()
 
     // Only reset state if no new project has been opened while we were closing
     // This prevents race condition when navigating away and back quickly
@@ -340,7 +347,7 @@ class ProjectStoreImpl {
    * Fetch file content from main process
    */
   private async fetchFileContent(path: string): Promise<OpenFile> {
-    const result = await window.conveyor.projectFiles.readFile(path)
+    const result = await projectFiles.readFile(path)
 
     const openFile: OpenFile = {
       path: result.path,
@@ -385,7 +392,7 @@ class ProjectStoreImpl {
       throw new Error(`File not open: ${path}`)
     }
 
-    await window.conveyor.projectFiles.writeFile(path, file.content)
+    await projectFiles.writeFile(path, file.content)
 
     // Update cache - no longer dirty
     const updated = { ...open }
@@ -448,7 +455,7 @@ class ProjectStoreImpl {
    * Create a new file
    */
   async createFile(path: string, content: string = ''): Promise<void> {
-    await window.conveyor.projectFiles.writeFile(path, content)
+    await projectFiles.writeFile(path, content)
     // Watcher will pick up the add event
   }
 
@@ -456,7 +463,7 @@ class ProjectStoreImpl {
    * Delete a file
    */
   async deleteFile(path: string): Promise<void> {
-    await window.conveyor.projectFiles.deleteFile(path)
+    await projectFiles.deleteFile(path)
     // Watcher will pick up the unlink event
   }
 
@@ -464,7 +471,7 @@ class ProjectStoreImpl {
    * Create a directory
    */
   async createDirectory(path: string): Promise<void> {
-    await window.conveyor.projectFiles.createDirectory(path)
+    await projectFiles.createDirectory(path)
     // Watcher will pick up the addDir event
   }
 
@@ -472,7 +479,7 @@ class ProjectStoreImpl {
    * Rename/move a file or directory
    */
   async rename(oldPath: string, newPath: string): Promise<void> {
-    await window.conveyor.projectFiles.rename(oldPath, newPath)
+    await projectFiles.rename(oldPath, newPath)
     // Watcher will pick up the unlink + add events
   }
 
@@ -480,28 +487,28 @@ class ProjectStoreImpl {
    * Commit and push changes
    */
   async commitAndPush(message: string): Promise<void> {
-    await window.conveyor.projectFiles.commitAndPush(message)
+    await projectFiles.commitAndPush(message)
   }
 
   /**
    * Sync local changes to remote with a fresh authenticated URL
    */
   async syncToRemote(authenticatedUrl: string): Promise<void> {
-    await window.conveyor.projectFiles.syncToRemote(authenticatedUrl)
+    await projectFiles.syncToRemote(authenticatedUrl)
   }
 
   /**
    * Pull latest changes
    */
   async pull(): Promise<void> {
-    await window.conveyor.projectFiles.pull()
+    await projectFiles.pull()
   }
 
   /**
    * Check if there are uncommitted git changes
    */
   async hasGitChanges(): Promise<boolean> {
-    return window.conveyor.projectFiles.hasChanges()
+    return projectFiles.hasChanges()
   }
 
   /**
@@ -524,7 +531,7 @@ class ProjectStoreImpl {
     console.log('[ProjectStore] Refreshing file tree...')
 
     try {
-      const newTree = await window.conveyor.projectFiles.rescanTree()
+      const newTree = await projectFiles.rescanTree()
 
       // Build new tree record
       const tree: Record<string, FileNode> = {}

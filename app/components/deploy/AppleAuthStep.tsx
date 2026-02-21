@@ -16,6 +16,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { AppleSessionInfo } from '@/lib/conveyor/schemas/deploy-schema'
+import { deploy } from '@/app/api/sidecar'
 
 interface AppleAuthStepProps {
   onSubmit: (appleId: string, password: string) => void
@@ -77,7 +78,7 @@ export function AppleAuthStep({
     const checkSession = async () => {
       setIsCheckingSession(true)
       try {
-        const info = await window.conveyor.deploy.checkAppleSession(appleId)
+        const info = await deploy.checkAppleSession(appleId)
         setSessionInfo(info)
       } catch {
         setSessionInfo(null)
@@ -108,7 +109,7 @@ export function AppleAuthStep({
     if (!appleId) return
     setIsClearingSession(true)
     try {
-      await window.conveyor.deploy.clearAppleSession(appleId)
+      await deploy.clearAppleSession(appleId)
       setSessionInfo({ exists: false })
     } catch {
       // Ignore errors

@@ -23,6 +23,7 @@ import { Button } from '../ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import type { AppType } from '@/app/types/project'
 import { WebPreview, WebPreviewNavigation, WebPreviewNavigationButton } from '../ai-elements/web-preview'
+import { screenshot } from '@/app/api/sidecar'
 
 // Electron webview element type
 interface WebviewElement extends HTMLElement {
@@ -42,6 +43,9 @@ interface WebviewElement extends HTMLElement {
   removeEventListener: (event: string, callback: (e: unknown) => void) => void
 }
 
+/** True when running inside a Tauri webview (no Electron webview tag support). */
+const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+
 interface PreviewProps {
   previewUrl: string
   serverStatus: 'starting' | 'running' | 'error'
@@ -58,6 +62,7 @@ interface PreviewProps {
 
 export function Preview(props: PreviewProps) {
   const webviewRef = useRef<WebviewElement | null>(null)
+  const webIframeRef = useRef<HTMLIFrameElement | null>(null) // For Tauri web preview (replaces webview)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isDevToolsOpen, setIsDevToolsOpen] = useState(false)
@@ -98,8 +103,10 @@ export function Preview(props: PreviewProps) {
   // Track the webview's webContentsId for screenshot capture
   const [webContentsId, setWebContentsId] = useState<number | null>(null)
 
-  // Setup webview event listeners
+  // Setup webview event listeners (Electron only — Tauri uses iframe events)
   useEffect(() => {
+    if (isTauri) return // Tauri uses onLoad/onError on the iframe directly
+
     const webview = webviewRef.current
     if (!webview) return
 
@@ -196,23 +203,41 @@ export function Preview(props: PreviewProps) {
     [urlInput, navigateToUrl]
   )
 
-  // Navigation handlers
+  // Navigation handlers — work with both Electron webview and Tauri iframe
   const handleGoBack = useCallback(() => {
-    webviewRef.current?.goBack()
+    if (isTauri) {
+      try { webIframeRef.current?.contentWindow?.history.back() } catch { /* cross-origin */ }
+    } else {
+      webviewRef.current?.goBack()
+    }
   }, [])
 
   const handleGoForward = useCallback(() => {
-    webviewRef.current?.goForward()
+    if (isTauri) {
+      try { webIframeRef.current?.contentWindow?.history.forward() } catch { /* cross-origin */ }
+    } else {
+      webviewRef.current?.goForward()
+    }
   }, [])
 
   const handleRefresh = useCallback(() => {
-    if (webviewRef.current) {
+    if (isTauri) {
+      const iframe = webIframeRef.current
+      if (iframe) {
+        // Force reload by re-assigning the src
+        const src = iframe.src
+        iframe.src = ''
+        iframe.src = src
+      }
+    } else if (webviewRef.current) {
       webviewRef.current.reload()
     }
     props.onRefresh()
   }, [props])
 
   const handleToggleDevTools = useCallback(() => {
+    if (isTauri) return // DevTools not available for iframes in Tauri
+
     const webview = webviewRef.current
     if (!webview) return
 
@@ -255,22 +280,92 @@ export function Preview(props: PreviewProps) {
     }
   }, [props.expoUrl])
 
+  /**
+   * Crop a full-window screenshot to match a DOM element's bounding rect.
+   * Returns a PNG data URL of the cropped region.
+   */
+  const cropToElement = useCallback(
+    (fullDataUrl: string, element: HTMLElement): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const rect = element.getBoundingClientRect()
+        const dpr = window.devicePixelRatio || 1
+        const img = new Image()
+        img.onload = () => {
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.round(rect.width * dpr)
+          canvas.height = Math.round(rect.height * dpr)
+          const ctx = canvas.getContext('2d')
+          if (!ctx) {
+            reject(new Error('Failed to get canvas 2d context'))
+            return
+          }
+          ctx.drawImage(
+            img,
+            Math.round(rect.x * dpr),
+            Math.round(rect.y * dpr),
+            Math.round(rect.width * dpr),
+            Math.round(rect.height * dpr),
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          )
+          resolve(canvas.toDataURL('image/png'))
+        }
+        img.onerror = () => reject(new Error('Failed to load screenshot image for cropping'))
+        img.src = fullDataUrl
+      })
+    },
+    []
+  )
+
   const handleScreenshot = useCallback(async () => {
-    if (!currentUrl || isCapturing || !props.onScreenshot) return
+    const url = currentUrl || props.previewUrl
+    if (!url || isCapturing || !props.onScreenshot) return
+
     setIsCapturing(true)
     try {
-      const result = await window.conveyor.screenshot.capture(currentUrl, webContentsId ?? undefined)
-      if (result.success && result.dataUrl) {
-        props.onScreenshot(result.dataUrl)
-      } else {
+      // Path 1: Electron <webview> — capture directly from its webContents
+      if (webContentsId && webContentsId > 0) {
+        const result = await screenshot.capture(webContentsId)
+        if (result.success && result.dataUrl) {
+          props.onScreenshot(result.dataUrl)
+          return
+        }
+        console.warn('[Preview] webContents capture failed, trying window capture')
+      }
+
+      // Path 2: Full window capture → crop to the preview element
+      const result = await screenshot.capture()
+      if (!result.success || !result.dataUrl) {
         console.error('[Preview] Screenshot failed:', result.error)
+        return
+      }
+
+      // Find the preview element to crop to
+      const previewEl =
+        (webviewRef.current as HTMLElement | null) ||
+        webIframeRef.current ||
+        iframeRef.current
+
+      if (previewEl) {
+        try {
+          const cropped = await cropToElement(result.dataUrl, previewEl)
+          props.onScreenshot(cropped)
+        } catch {
+          // Crop failed — send the full window capture anyway
+          props.onScreenshot(result.dataUrl)
+        }
+      } else {
+        // No preview element ref — send the full window capture
+        props.onScreenshot(result.dataUrl)
       }
     } catch (err) {
       console.error('[Preview] Screenshot error:', err)
     } finally {
       setIsCapturing(false)
     }
-  }, [currentUrl, isCapturing, props, webContentsId])
+  }, [currentUrl, props, isCapturing, webContentsId, cropToElement])
 
   console.log(
     '[Preview] Current URL:',
@@ -309,13 +404,15 @@ export function Preview(props: PreviewProps) {
               className="h-8 flex-1 text-sm bg-background border border-border/30 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-foreground/20 rounded-lg px-3"
             />
 
-            <WebPreviewNavigationButton
-              tooltip="DevTools"
-              onClick={handleToggleDevTools}
-              className={isDevToolsOpen ? 'bg-foreground/10' : ''}
-            >
-              <Bug className="size-5" />
-            </WebPreviewNavigationButton>
+            {!isTauri && (
+              <WebPreviewNavigationButton
+                tooltip="DevTools"
+                onClick={handleToggleDevTools}
+                className={isDevToolsOpen ? 'bg-foreground/10' : ''}
+              >
+                <Bug className="size-5" />
+              </WebPreviewNavigationButton>
+            )}
             <WebPreviewNavigationButton tooltip="Open in browser" onClick={handleOpenExternal} disabled={!currentUrl}>
               <ExternalLink className="size-5" />
             </WebPreviewNavigationButton>
@@ -361,8 +458,25 @@ export function Preview(props: PreviewProps) {
             </div>
           ) : currentUrl ? (
             <div className="flex-1 relative bg-white">
-              {/* @ts-expect-error - webview is an Electron-specific element */}
-              <webview ref={webviewRef} src={currentUrl} style={{ width: '100%', height: '100%' }} allowpopups="true" />
+              {isTauri ? (
+                <iframe
+                  ref={webIframeRef}
+                  src={currentUrl}
+                  className="w-full h-full border-0 bg-white"
+                  allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-presentation allow-top-navigation"
+                  loading="eager"
+                  title="Web Preview"
+                  onLoad={() => setIsLoading(false)}
+                  onError={() => {
+                    setIsLoading(false)
+                    if (props.onError) props.onError('Failed to load preview')
+                  }}
+                />
+              ) : (
+                // @ts-expect-error - webview is an Electron-specific element
+                <webview ref={webviewRef} src={currentUrl} style={{ width: '100%', height: '100%' }} allowpopups="true" />
+              )}
               {isLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/20">
                   <Loader2 className="animate-spin h-8 w-8 text-white" />
@@ -387,8 +501,8 @@ export function Preview(props: PreviewProps) {
     <div className="w-full h-full flex flex-col">
       <div className="flex-1 min-h-0 flex items-center justify-center gap-8 p-4">
         {/* iPhone Preview */}
-        <div className="flex flex-col items-center">
-          <div className="flex items-center gap-1 mb-4">
+        <div className="flex flex-col items-center h-full max-h-full min-h-0">
+          <div className="flex items-center gap-1 mb-2 flex-shrink-0">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="sm" onClick={props.onRefresh}>
@@ -414,7 +528,7 @@ export function Preview(props: PreviewProps) {
             {props.onScreenshot && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="sm" onClick={handleScreenshot} disabled={!props.previewUrl || isCapturing}>
+                  <Button variant="ghost" size="sm" onClick={handleScreenshot} disabled={!(currentUrl || props.previewUrl) || isCapturing}>
                     <Camera className={`h-4 w-4 ${isCapturing ? 'animate-pulse' : ''}`} />
                   </Button>
                 </TooltipTrigger>
@@ -425,7 +539,7 @@ export function Preview(props: PreviewProps) {
             )}
           </div>
 
-          <IPhoneFrame showStatusBar={false} showHomeIndicator={false}>
+          <IPhoneFrame showStatusBar={false} showHomeIndicator={false} className="flex-1 min-h-0">
             {props.serverStatus === 'error' ? (
               <div className="w-full h-full flex flex-col items-center justify-center bg-black p-4 text-white">
                 <AlertCircle className="h-8 w-8 text-red-500 mb-2" />

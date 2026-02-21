@@ -7,7 +7,6 @@
 
 import path from 'path'
 import fs from 'fs'
-import { app } from 'electron'
 
 export interface ShellConfig {
   /** Path to the shell executable */
@@ -32,18 +31,16 @@ export interface ShellPaths {
 }
 
 /**
- * Get the vendor directory path based on whether we're in development or production
+ * Get the vendor directory path based on whether we're in development or production.
+ * Uses BFLOAT_RESOURCES_PATH env var (set by Tauri/sidecar) or falls back to cwd.
  */
 function getVendorDir(): string {
-  const isDev = !app.isPackaged
-
-  if (isDev) {
-    // Development: resources/vendor
-    return path.join(app.getAppPath(), 'resources', 'vendor')
-  } else {
-    // Production: resources/vendor (inside asar or extraResources)
-    return path.join(process.resourcesPath, 'vendor')
+  const resourcesPath = process.env.BFLOAT_RESOURCES_PATH
+  if (resourcesPath) {
+    return path.join(resourcesPath, 'vendor')
   }
+  // Development fallback: resources/vendor relative to project root
+  return path.join(process.cwd(), 'resources', 'vendor')
 }
 
 /**

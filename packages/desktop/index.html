@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/src/assets/tauri.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bfloat IDE</title>
+    <!--
+      Apply dark/light theme class BEFORE any CSS/React loads to prevent FOUC.
+      This mirrors app/theme-init.js from the Electron build.
+      The dark class is required by globals.css for dark mode CSS variables.
+    -->
+    <script>
+      ;(function () {
+        var theme = localStorage.getItem("app_theme") || "dark"
+        if (theme === "system") {
+          theme = window.matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light"
+        }
+        if (theme === "dark") {
+          document.documentElement.classList.add("dark")
+          document.documentElement.style.backgroundColor = "#171717"
+        } else {
+          document.documentElement.classList.remove("dark")
+        }
+      })()
+    </script>
+    <style>
+      /* Ensure full-height layout before React mounts */
+      html, body, #root {
+        height: 100%;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/entry.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "@bfloat/sidecar",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/server.ts",
+    "build": "bun build --compile --target=bun src/server.ts --outfile=dist/bfloat-sidecar",
+    "build:mac-arm64": "bun build --compile --target=bun-darwin-arm64 src/server.ts --outfile=dist/bfloat-sidecar-aarch64-apple-darwin",
+    "build:mac-x64": "bun build --compile --target=bun-darwin-x64 src/server.ts --outfile=dist/bfloat-sidecar-x86_64-apple-darwin",
+    "build:linux-x64": "bun build --compile --target=bun-linux-x64 src/server.ts --outfile=dist/bfloat-sidecar-x86_64-unknown-linux-gnu",
+    "build:win-x64": "bun build --compile --target=bun-windows-x64 src/server.ts --outfile=dist/bfloat-sidecar-x86_64-pc-windows-msvc.exe"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.47",
+    "bun-pty": "0.4.8",
+    "hono": "^4.0.0",
+    "node-pty": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.0.0"
+  }
+}

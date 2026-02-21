@@ -17,6 +17,7 @@ import {
 import { LogTerminal } from './LogTerminal'
 import { deployStore } from '@/app/stores/deploy'
 import type { HumanizedPrompt } from '@/lib/conveyor/schemas/deploy-schema'
+import { deploy } from '@/app/api/sidecar'
 
 interface TerminalFallbackStepProps {
   onCancel: () => void
@@ -49,7 +50,7 @@ export function TerminalFallbackStep({
 
     setIsSending(true)
     try {
-      await window.conveyor.deploy.submitTerminalInput(input + '\n')
+      await deploy.submitTerminalInput(input + '\n')
       setInput('')
       // Reset auth state after successful submission - go back to progress view
       deployStore.resetInteractiveAuth()
@@ -65,7 +66,7 @@ export function TerminalFallbackStep({
 
     setIsSending(true)
     try {
-      await window.conveyor.deploy.submitTerminalInput(value)
+      await deploy.submitTerminalInput(value)
       // Reset auth state after successful submission - go back to progress view
       deployStore.resetInteractiveAuth()
     } catch {
@@ -80,7 +81,7 @@ export function TerminalFallbackStep({
 
     setIsSending(true)
     try {
-      await window.conveyor.deploy.submitTerminalInput(key)
+      await deploy.submitTerminalInput(key)
       // Reset auth state after successful submission - go back to progress view
       deployStore.resetInteractiveAuth()
     } catch {

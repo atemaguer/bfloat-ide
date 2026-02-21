@@ -29,6 +29,13 @@ export const terminalIpcSchema = {
       error: z.string().optional(),
     }),
   },
+  'terminal-kill-all': {
+    args: z.tuple([]),
+    return: z.object({
+      success: z.boolean(),
+      killed: z.number(),
+    }),
+  },
   'terminal-get-cwd': {
     args: z.tuple([]),
     return: z.string(),

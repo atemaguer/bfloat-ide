@@ -3,6 +3,7 @@ import { useStore } from '@/app/hooks/useStore'
 import { Smartphone, Check, Loader2, ArrowLeft, ArrowRight, ExternalLink } from 'lucide-react'
 import { providerAuthStore } from '@/app/stores/provider-auth'
 import ExpoLogo from '@/app/components/ui/icons/expo-logo'
+import { provider } from '@/app/api/sidecar'
 
 interface ExpoStepProps {
   onNext: () => void
@@ -27,7 +28,7 @@ export function ExpoStep({ onNext, onBack, canProceed }: ExpoStepProps) {
     setIsLoading(true)
     setError(null)
     try {
-      const result = await window.conveyor.provider.connectExpo({
+      const result = await provider.connectExpo({
         username,
         password,
         otp: otp || undefined,

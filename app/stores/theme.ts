@@ -1,4 +1,5 @@
 import { createStore } from 'zustand/vanilla'
+import { window as sidecarWindow } from '@/app/api/sidecar'
 
 export type ThemePreference = 'light' | 'dark' | 'system'
 export type ResolvedTheme = 'light' | 'dark'
@@ -32,9 +33,9 @@ function applyThemeToDocument(resolved: ResolvedTheme) {
   // Update Electron window background color
   const bgColor = resolved === 'dark' ? '#1a1a1a' : '#fefefe'
   try {
-    window.conveyor?.window?.windowSetBackgroundColor?.(bgColor)
+    sidecarWindow.windowSetBackgroundColor(bgColor)
   } catch {
-    // conveyor may not be available yet during initial load
+    // sidecar may not be available yet during initial load
   }
 }
 

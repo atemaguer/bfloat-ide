@@ -6,6 +6,8 @@
  * - Automated deployment can proceed
  */
 
+import { deploy, provider } from '@/app/api/sidecar'
+
 export interface iOSCredentialStatus {
   /** Whether EXPO_TOKEN is available for authentication */
   hasExpoToken: boolean
@@ -25,13 +27,9 @@ export interface iOSCredentialStatus {
  * Check if EAS project is initialized by looking for projectId in app.json
  */
 async function checkEasProject(projectPath: string): Promise<boolean> {
-  if (!window.conveyor?.filesystem) {
-    return false
-  }
-
   try {
     const appJsonPath = `${projectPath}/app.json`
-    const readResult = await window.conveyor.filesystem.readFile(appJsonPath)
+    const readResult = await provider.filesystem.readFile(appJsonPath)
 
     if (!readResult.success || !readResult.content) {
       return false
@@ -52,23 +50,17 @@ async function checkEasProject(projectPath: string): Promise<boolean> {
  */
 async function checkAscApiKey(projectPath: string): Promise<boolean> {
   // Try using the IPC call first (validates key file exists)
-  if (window.conveyor?.deploy?.checkASCApiKey) {
-    try {
-      const result = await window.conveyor.deploy.checkASCApiKey(projectPath)
-      return result.configured
-    } catch {
-      // Fall back to file-based check
-    }
+  try {
+    const result = await deploy.checkASCApiKey(projectPath)
+    return result.configured
+  } catch {
+    // Fall back to file-based check
   }
 
   // Fallback: check eas.json directly
-  if (!window.conveyor?.filesystem) {
-    return false
-  }
-
   try {
     const easJsonPath = `${projectPath}/eas.json`
-    const readResult = await window.conveyor.filesystem.readFile(easJsonPath)
+    const readResult = await provider.filesystem.readFile(easJsonPath)
 
     if (!readResult.success || !readResult.content) {
       return false
@@ -98,10 +90,6 @@ async function checkDistributionCredentials(projectPath: string): Promise<boolea
   // 2. There's a previous iOS build in history
   // This is a heuristic - the real check would require running `eas credentials --json`
 
-  if (!window.conveyor?.filesystem) {
-    return false
-  }
-
   try {
     // Check for .easignore or other indicators of previous builds
     const hasEasProject = await checkEasProject(projectPath)
@@ -115,7 +103,7 @@ async function checkDistributionCredentials(projectPath: string): Promise<boolea
     // and checking if there are iOS-specific configurations
 
     const easJsonPath = `${projectPath}/eas.json`
-    const readResult = await window.conveyor.filesystem.readFile(easJsonPath)
+    const readResult = await provider.filesystem.readFile(easJsonPath)
 
     if (!readResult.success || !readResult.content) {
       return false

@@ -10,7 +10,6 @@ import {
   Keyboard,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useConveyor } from '@/app/hooks/use-conveyor'
 import { PreferencesSection } from './sections/PreferencesSection'
 import { AppearanceSection } from './sections/AppearanceSection'
 import { ConnectedAccountsSection } from './sections/ConnectedAccountsSection'
@@ -50,16 +49,13 @@ export function SettingsPage() {
   const navigate = useNavigate()
   const [activeSection, setActiveSection] = useState<SettingsSection>('preferences')
   const [appVersion, setAppVersion] = useState<string>('')
-  const updateApi = useConveyor('update')
 
+  // TODO: Update namespace doesn't exist in the new API - need to implement version fetching
   // Fetch app version on mount
   useEffect(() => {
-    if (updateApi) {
-      updateApi.getStatus().then((status) => {
-        setAppVersion(status.currentVersion || '')
-      })
-    }
-  }, [updateApi])
+    // Placeholder - update API not yet available in new sidecar
+    // Will implement when update namespace is added
+  }, [])
 
   const handleBackToApp = () => {
     navigate('/')

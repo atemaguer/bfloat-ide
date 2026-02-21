@@ -1,13 +1,10 @@
 /**
  * MCP server exports.
  *
- * The IDE now uses hosted MCP servers (Stripe, RevenueCat, etc.) directly,
- * so no local server factories are required for those integrations.
- * The terminal MCP server is still needed for agent terminal sessions.
+ * The IDE uses hosted MCP servers (Stripe, RevenueCat, etc.) configured
+ * via the MCP registry. Terminal and screenshot MCP servers have been
+ * moved to the sidecar process.
  */
-
-export { createTerminalMcpServer, type TerminalMcpOptions } from './terminal-mcp-server'
-export { createScreenshotMcpServer, type ScreenshotMcpOptions } from './screenshot-mcp-server'
 
 // Registry
 export { getMcpRegistry, McpServerRegistry } from './registry'
