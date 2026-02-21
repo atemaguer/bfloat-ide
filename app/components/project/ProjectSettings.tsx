@@ -12,7 +12,7 @@ import { ImageDropzone } from '@/app/components/ui/image-dropzone'
 import { Switch } from '@/app/components/ui/Switch'
 import { localProjectsStore } from '@/app/stores/local-projects'
 import { SecretModal } from '@/app/components/settings/sections/SecretModal'
-import { secrets } from '@/app/api/sidecar'
+import { secrets as secretsApi } from '@/app/api/sidecar'
 import './styles.css'
 
 interface ProjectSettingsProps {
@@ -75,7 +75,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     try {
       setIsLoadingSecrets(true)
       setSecretsError(null)
-      const result = await secrets.readSecrets(project.id)
+      const result = await secretsApi.readSecrets(project.id)
       if (result.error) {
         setSecretsError(result.error)
       } else {
@@ -105,7 +105,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const handleSaveSecret = async (key: string, value: string) => {
     if (!project.id) return
 
-    const result = await secrets.setSecret(project.id, key, value)
+    const result = await secretsApi.setSecret(project.id, key, value)
     if (!result.success) {
       throw new Error(result.error || 'Failed to save secret')
     }
@@ -118,7 +118,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
 
     setDeletingSecretKey(key)
     try {
-      const result = await secrets.deleteSecret(project.id, key)
+      const result = await secretsApi.deleteSecret(project.id, key)
       if (!result.success) {
         setSecretsError(result.error || 'Failed to delete secret')
       } else {
