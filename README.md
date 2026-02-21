@@ -4,9 +4,10 @@ A local-first, open-source AI-powered IDE for building software with integrated 
 
 <br />
 
-![Electron](https://img.shields.io/badge/Electron-47.3.1-blue)
+![Tauri](https://img.shields.io/badge/Tauri-2-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
+![Bun](https://img.shields.io/badge/Bun-1.1-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 <br />
@@ -26,18 +27,27 @@ A local-first, open-source AI-powered IDE for building software with integrated 
 
 ## Tech Stack
 
-- **[Electron](https://www.electronjs.org)** - Cross-platform desktop application framework
+- **[Tauri](https://tauri.app)** - Lightweight cross-platform desktop shell (Rust)
+- **[Bun](https://bun.sh)** - Sidecar HTTP API server (replaces Electron main process)
+- **[Hono](https://hono.dev)** - Fast web framework for the sidecar API
 - **[React](https://react.dev)** - UI framework
 - **[TypeScript](https://www.typescriptlang.org)** - Type-safe JavaScript
+- **[Zustand](https://zustand-demo.pmnd.rs)** - State management
 - **[Shadcn UI](https://ui.shadcn.com)** - Component library
 - **[TailwindCSS](https://tailwindcss.com)** - Utility-first CSS framework
-- **[Electron Vite](https://electron-vite.org)** - Fast build tool with HMR
+- **[Vite](https://vite.dev)** - Fast build tool with HMR
 - **[Claude SDK](https://docs.anthropic.com)** - Anthropic's Claude AI integration
 - **[Codex SDK](https://openai.com)** - OpenAI's Codex integration
 
 <br />
 
 ## Installation
+
+### Prerequisites
+
+- [Rust](https://rustup.rs) (for Tauri)
+- [Bun](https://bun.sh) (for the sidecar and package management)
+- [Node.js](https://nodejs.org) 20+ (for some tooling)
 
 ```bash
 # Clone the repository
@@ -46,8 +56,14 @@ git clone https://github.com/atemaguer/bfloat-ide.git
 # Change directory
 cd bfloat-ide
 
-# Install dependencies
+# Install root dependencies
 pnpm install
+
+# Install sidecar dependencies
+cd packages/sidecar && bun install && cd ../..
+
+# Install desktop dependencies
+cd packages/desktop && bun install && cd ../..
 ```
 
 <br />
@@ -57,10 +73,12 @@ pnpm install
 Start the development server:
 
 ```bash
-pnpm dev
-```
+# Build and run the sidecar
+cd packages/sidecar && bun run build && cd ../..
 
-This launches Electron with hot-reload enabled.
+# Start the Tauri dev environment (launches the desktop app with hot-reload)
+cd packages/desktop && bunx tauri dev
+```
 
 <br />
 
@@ -87,17 +105,26 @@ cp .env.example .env
 
 ```
 bfloat-ide/
-├── app/                    # Renderer process (React UI)
+├── app/                    # Frontend (React UI)
+│   ├── api/                # Sidecar API client imports
 │   ├── components/         # React components
 │   ├── hooks/              # Custom React hooks
-│   ├── stores/             # State management
+│   ├── stores/             # Zustand state management
 │   └── styles/             # Global styles
 ├── lib/
 │   ├── agents/             # AI agent providers (Claude, Codex)
-│   ├── conveyor/           # Type-safe IPC system
-│   ├── main/               # Electron main process
+│   ├── conveyor/schemas/   # Shared TypeScript types/schemas
+│   ├── launch/             # System prompt and launch config
 │   ├── mcp/                # MCP server integrations
-│   └── preload/            # Preload scripts
+│   └── platform/           # Platform utilities
+├── packages/
+│   ├── desktop/            # Tauri desktop shell
+│   │   ├── src/            # Conveyor bridge, entry point, platform layer
+│   │   └── src-tauri/      # Rust Tauri application
+│   └── sidecar/            # Bun HTTP API server (Hono)
+│       └── src/
+│           ├── routes/     # API route handlers
+│           └── services/   # Agent session management
 └── resources/
     ├── skills/             # AI agent skills
     └── templates/          # Project templates
@@ -108,17 +135,19 @@ bfloat-ide/
 ## Building for Production
 
 ```bash
-# For macOS
-pnpm build:mac:prod
+# Build the sidecar binary for the current platform
+cd packages/sidecar
+bun build --compile src/server.ts --outfile dist/bfloat-sidecar
 
-# For Windows
-pnpm build:win:prod
+# Copy the sidecar binary to the Tauri sidecars directory
+cp dist/bfloat-sidecar ../desktop/src-tauri/sidecars/
 
-# For Linux
-pnpm build:linux:prod
+# Build the Tauri app
+cd ../desktop
+bunx tauri build
 ```
 
-Distribution files will be in the `dist` directory.
+Distribution files will be in `packages/desktop/src-tauri/target/release/bundle/`.
 
 <br />
 
