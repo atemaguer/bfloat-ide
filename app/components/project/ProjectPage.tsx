@@ -147,8 +147,13 @@ function ProjectPageContent() {
             .then(() => {
               // Kill all terminal PTY processes and agent sessions
               console.log('[ProjectPage] Killing all terminals and agent sessions')
+              const killAllTerminals =
+                typeof (terminal as { killAll?: () => Promise<unknown> }).killAll === 'function'
+                  ? (terminal as { killAll: () => Promise<unknown> }).killAll()
+                  : Promise.resolve()
+
               return Promise.all([
-                terminal.killAll().catch((err: Error) => {
+                killAllTerminals.catch((err: Error) => {
                   console.error('[ProjectPage] Failed to kill terminals:', err)
                 }),
                 aiAgent.terminateAllSessions().catch((err: Error) => {

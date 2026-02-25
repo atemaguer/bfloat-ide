@@ -26,6 +26,18 @@ export default defineConfig(async () => {
         "@/resources": resolve(repoRoot, "resources"),
         "@": repoRoot,
       },
+      // Avoid duplicate CodeMirror module instances across workspace package
+      // boundaries (which breaks instanceof checks for extensions).
+      dedupe: [
+        "codemirror",
+        "@codemirror/state",
+        "@codemirror/view",
+        "@codemirror/language",
+        "@codemirror/commands",
+        "@codemirror/lang-javascript",
+        "@codemirror/lang-json",
+        "@codemirror/lang-css",
+      ],
     },
 
     // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

@@ -582,6 +582,13 @@ export const terminalBridge = {
   kill: (terminalId: string) =>
     getSidecarApiSync().terminal.kill(terminalId),
 
+  killAll: async () => {
+    const api = getSidecarApiSync()
+    const { sessions } = await api.terminal.list()
+    await Promise.allSettled(sessions.map((session) => api.terminal.kill(session.terminalId)))
+    return { success: true }
+  },
+
   getCwd: (terminalId?: string) =>
     getSidecarApiSync().terminal.getCwd(terminalId),
 
@@ -946,6 +953,13 @@ export const aiAgentBridge = {
 
   terminateSession: (sessionId: string) =>
     getSidecarApiSync().agent.terminateSession(sessionId),
+
+  terminateAllSessions: async () => {
+    const api = getSidecarApiSync()
+    const sessions = await api.agent.getActiveSessions()
+    await Promise.allSettled(sessions.map((session) => api.agent.terminateSession(session.id)))
+    return { success: true }
+  },
 
   // Streaming — maps the Electron "channel string + callback" pattern to
   // a SidecarWebSocket opened against the session stream URL.
