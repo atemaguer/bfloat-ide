@@ -16,6 +16,7 @@ import {
   Play,
   RotateCw,
   Camera,
+  ChevronDown,
 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { IPhoneFrame } from './IPhoneFrame'
@@ -49,6 +50,8 @@ const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTER
 interface PreviewProps {
   previewUrl: string
   serverStatus: 'starting' | 'running' | 'error'
+  isTerminalOpen: boolean
+  terminalHeight: number
   onRefresh: () => void
   onRestartServer?: () => void
   expoUrl?: string
@@ -60,10 +63,15 @@ interface PreviewProps {
   onScreenshot?: (dataUrl: string) => void
 }
 
+// Compact mode should only activate on genuinely small preview panes.
+const COMPACT_PANE_PX = 520
+const TIGHT_PANE_PX = 420
+
 export function Preview(props: PreviewProps) {
   const webviewRef = useRef<WebviewElement | null>(null)
   const webIframeRef = useRef<HTMLIFrameElement | null>(null) // For Tauri web preview (replaces webview)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  const mobileLayoutRef = useRef<HTMLDivElement | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isDevToolsOpen, setIsDevToolsOpen] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -76,6 +84,9 @@ export function Preview(props: PreviewProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [canGoBack, setCanGoBack] = useState(false)
   const [canGoForward, setCanGoForward] = useState(false)
+  const [mobileLayoutWidth, setMobileLayoutWidth] = useState(0)
+  const [mobileLayoutHeight, setMobileLayoutHeight] = useState(0)
+  const [expandedSection, setExpandedSection] = useState<'simulator' | 'qr' | null>(null)
 
   // Update URL when auto-detected from terminal or set programmatically
   // Only depends on props.previewUrl to avoid missing updates
@@ -252,6 +263,29 @@ export function Preview(props: PreviewProps) {
 
   // Determine if this is a web app or mobile app using the context hook
   const isWebApp = useIsWebApp()
+
+  // Adapt mobile preview layout to container dimensions (not viewport size).
+  useEffect(() => {
+    if (isWebApp) return
+    const el = mobileLayoutRef.current
+    if (!el) return
+
+    const updateSize = () => {
+      setMobileLayoutWidth(el.clientWidth)
+      setMobileLayoutHeight(el.clientHeight)
+    }
+    updateSize()
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      setMobileLayoutWidth(entry.contentRect.width)
+      setMobileLayoutHeight(entry.contentRect.height)
+    })
+    observer.observe(el)
+
+    return () => observer.disconnect()
+  }, [isWebApp])
 
   const handleOpenExternal = useCallback(() => {
     if (currentUrl) {
@@ -497,11 +531,72 @@ export function Preview(props: PreviewProps) {
   }
 
   // Mobile app preview (Expo) - iPhone frame with QR code
+  const isCompactMobilePreview = mobileLayoutWidth > 0 && mobileLayoutWidth < COMPACT_PANE_PX
+  const isTightMobilePreview = mobileLayoutWidth > 0 && mobileLayoutWidth < TIGHT_PANE_PX
+  const qrSize = isTightMobilePreview ? 128 : isCompactMobilePreview ? 152 : 180
+  const hasSimulatorControls = !!(props.onLaunchIOSSimulator || props.onLaunchAndroidEmulator)
+  const hasQrPanel = !!props.expoUrl
+  const paneWidth = mobileLayoutWidth || 1200
+  const paneHeight = mobileLayoutHeight || 900
+  const compactHeightBucket = !isCompactMobilePreview ? 'roomy' : paneHeight < 640 ? 'tight' : paneHeight < 780 ? 'medium' : 'roomy'
+  const aspect = 163.4 / 78
+  const targetPhoneWidth = isCompactMobilePreview
+    ? Math.round(paneWidth * 0.66)
+    : Math.round(paneWidth * 0.42)
+  const widthConstrained = Math.min(Math.max(targetPhoneWidth, 220), 340)
+  const widthDerivedHeight = Math.round(widthConstrained * aspect)
+  const compactMinPhoneHeight = props.isTerminalOpen ? 360 : 380
+  const compactMaxPhoneHeight = 520
+  const compactVerticalPadding = 52
+  const collapsedCardsCount = (hasSimulatorControls ? 1 : 0) + (hasQrPanel ? 1 : 0)
+  const reservedCollapsedCards = collapsedCardsCount === 2 ? 164 : collapsedCardsCount === 1 ? 92 : 24
+  const compactHeightBudget = paneHeight - compactVerticalPadding - reservedCollapsedCards
+  const compactBudgetClamped = Math.min(
+    compactMaxPhoneHeight,
+    Math.max(compactMinPhoneHeight, compactHeightBudget)
+  )
+  const phoneHeight = isCompactMobilePreview
+    ? Math.min(
+        compactMaxPhoneHeight,
+        Math.max(compactMinPhoneHeight, Math.min(widthDerivedHeight, compactBudgetClamped))
+      )
+    : Math.min(Math.max(widthDerivedHeight, 420), 620)
+  const phoneWidth = Math.round(phoneHeight / aspect)
+  const isSimulatorExpanded = !isCompactMobilePreview || expandedSection === 'simulator'
+  const isQrExpanded = !isCompactMobilePreview || expandedSection === 'qr'
+
+  useEffect(() => {
+    if (!isCompactMobilePreview) {
+      setExpandedSection(null)
+      return
+    }
+
+    // Compact mode defaults to collapsed controls while terminal is open or on very tight heights.
+    if (props.isTerminalOpen || compactHeightBucket === 'tight') {
+      setExpandedSection(null)
+    }
+  }, [isCompactMobilePreview, compactHeightBucket, props.isTerminalOpen, props.terminalHeight])
+
+  const toggleSection = (section: 'simulator' | 'qr') => {
+    setExpandedSection((current) => (current === section ? null : section))
+  }
+
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex-1 min-h-0 flex items-center justify-center gap-8 p-4">
+      <div
+        ref={mobileLayoutRef}
+        className={`flex-1 min-h-0 p-4 ${
+          isCompactMobilePreview
+            ? 'flex flex-col items-center gap-4 overflow-y-auto'
+            : 'flex items-center justify-center gap-8 overflow-hidden'
+        }`}
+      >
         {/* iPhone Preview */}
-        <div className="flex flex-col items-center h-full max-h-full min-h-0">
+        <div
+          className={`flex flex-col items-center min-h-0 ${
+            isCompactMobilePreview ? 'w-full max-w-[520px] pb-2 shrink-0' : 'h-full max-h-full flex-1'
+          }`}
+        >
           <div className="flex items-center gap-1 mb-2 flex-shrink-0">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -539,128 +634,186 @@ export function Preview(props: PreviewProps) {
             )}
           </div>
 
-          <IPhoneFrame showStatusBar={false} showHomeIndicator={false} className="flex-1 min-h-0">
-            {props.serverStatus === 'error' ? (
-              <div className="w-full h-full flex flex-col items-center justify-center bg-black p-4 text-white">
-                <AlertCircle className="h-8 w-8 text-red-500 mb-2" />
-                <p className="text-sm text-center">Dev server failed to start</p>
-                <p className="text-xs text-white/50 text-center mt-2">Check terminal for details</p>
-                {props.onRestartServer && (
-                  <button
-                    onClick={props.onRestartServer}
-                    className="mt-4 flex items-center gap-2 px-4 py-2 text-sm bg-white/10 hover:bg-white/15 rounded-lg text-white transition-colors"
-                  >
-                    <RotateCw className="h-4 w-4" />
-                    Restart server
-                  </button>
+          <div className={`w-full flex justify-center ${isCompactMobilePreview ? 'shrink-0' : 'min-h-0 flex-1 items-center'}`}>
+            <div
+              style={{
+                width: `${phoneWidth}px`,
+                height: `${phoneHeight}px`,
+                maxWidth: '100%',
+              }}
+            >
+              <IPhoneFrame showStatusBar={false} showHomeIndicator={false} className="w-full h-full">
+                {props.serverStatus === 'error' ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-black p-4 text-white">
+                    <AlertCircle className="h-8 w-8 text-red-500 mb-2" />
+                    <p className="text-sm text-center">Dev server failed to start</p>
+                    <p className="text-xs text-white/50 text-center mt-2">Check terminal for details</p>
+                    {props.onRestartServer && (
+                      <button
+                        onClick={props.onRestartServer}
+                        className="mt-4 flex items-center gap-2 px-4 py-2 text-sm bg-white/10 hover:bg-white/15 rounded-lg text-white transition-colors"
+                      >
+                        <RotateCw className="h-4 w-4" />
+                        Restart server
+                      </button>
+                    )}
+                  </div>
+                ) : props.previewUrl ? (
+                  <iframe
+                    className="w-full h-full border-0 bg-white"
+                    ref={iframeRef}
+                    src={props.previewUrl}
+                    allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
+                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-presentation allow-top-navigation"
+                    loading="eager"
+                    style={{ display: 'block', overflow: 'hidden' }}
+                    name="app-preview"
+                    id="app-preview"
+                    title="App Preview"
+                    onLoad={handleIframeLoad}
+                    onError={handleIframeError}
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-black text-white">
+                    <Loader2 className="animate-spin h-8 w-8 mb-2" />
+                    <p className="text-sm">Starting dev server...</p>
+                  </div>
                 )}
-              </div>
-            ) : props.previewUrl ? (
-              <iframe
-                className="w-full h-full border-0 bg-white"
-                ref={iframeRef}
-                src={props.previewUrl}
-                allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
-                sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-presentation allow-top-navigation"
-                loading="eager"
-                style={{ display: 'block', overflow: 'hidden' }}
-                name="app-preview"
-                id="app-preview"
-                title="App Preview"
-                onLoad={handleIframeLoad}
-                onError={handleIframeError}
-              />
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center bg-black text-white">
-                <Loader2 className="animate-spin h-8 w-8 mb-2" />
-                <p className="text-sm">Starting dev server...</p>
-              </div>
-            )}
-          </IPhoneFrame>
+              </IPhoneFrame>
+            </div>
+          </div>
         </div>
 
+        {isCompactMobilePreview && <div className="w-full max-w-[520px] border-t border-border/60" />}
+
         {/* Right Panel - Simulators and QR Code */}
-        <div className="flex flex-col gap-4">
+        <div
+          className={`flex gap-4 ${
+            isCompactMobilePreview ? 'w-full max-w-[520px] flex-col self-center shrink-0' : 'w-[min(320px,36%)] flex-col flex-shrink-0'
+          }`}
+        >
           {/* Simulator Launch Buttons */}
-          {props.serverStatus === 'running' && (props.onLaunchIOSSimulator || props.onLaunchAndroidEmulator) && (
-            <div className="flex flex-col items-center gap-3 p-5 bg-background border border-border rounded-2xl">
-              <div className="flex items-center gap-2 text-foreground/90">
-                <Play className="h-5 w-5" />
-                <span className="font-medium">Run on Simulator</span>
-              </div>
+          {hasSimulatorControls && (
+            <div className="w-full bg-background border border-border rounded-2xl overflow-hidden">
+              {isCompactMobilePreview && (
+                <button
+                  onClick={() => toggleSection('simulator')}
+                  className="w-full flex items-center justify-between px-4 py-3 border-b border-border/70 text-foreground/90"
+                >
+                  <span className="flex items-center gap-2">
+                    <Play className="h-4 w-4" />
+                    <span className="text-sm font-medium">Run on Simulator</span>
+                  </span>
+                  <ChevronDown
+                    className={`h-4 w-4 transition-transform ${isSimulatorExpanded ? 'rotate-180' : ''}`}
+                  />
+                </button>
+              )}
 
-              <div className="flex gap-3 w-full">
-                {props.onLaunchIOSSimulator && (
-                  <button
-                    onClick={props.onLaunchIOSSimulator}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-b from-foreground/10 to-foreground/5 hover:from-foreground/15 hover:to-foreground/10 border border-border rounded-xl text-foreground/90 font-medium transition-all"
-                  >
-                    <Smartphone className="h-5 w-5" />
-                    <span>iOS</span>
-                  </button>
-                )}
-                {props.onLaunchAndroidEmulator && (
-                  <button
-                    onClick={props.onLaunchAndroidEmulator}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-b from-foreground/10 to-foreground/5 hover:from-foreground/15 hover:to-foreground/10 border border-border rounded-xl text-foreground/90 font-medium transition-all"
-                  >
-                    <Tablet className="h-5 w-5" />
-                    <span>Android</span>
-                  </button>
-                )}
-              </div>
+              {isSimulatorExpanded && (
+                <div className={`${isCompactMobilePreview ? 'px-4 py-4' : 'p-5'} flex flex-col items-center gap-3`}>
+                  {!isCompactMobilePreview && (
+                    <div className="flex items-center gap-2 text-foreground/90">
+                      <Play className="h-5 w-5" />
+                      <span className="font-medium">Run on Simulator</span>
+                    </div>
+                  )}
 
-              <p className="text-xs text-muted-foreground text-center">
-                Requires Xcode (iOS) or Android Studio (Android)
-              </p>
+                  <div className="flex gap-3 w-full">
+                    {props.onLaunchIOSSimulator && (
+                      <button
+                        onClick={props.onLaunchIOSSimulator}
+                        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-b from-foreground/10 to-foreground/5 hover:from-foreground/15 hover:to-foreground/10 border border-border rounded-xl text-foreground/90 font-medium transition-all"
+                      >
+                        <Smartphone className="h-5 w-5" />
+                        <span>iOS</span>
+                      </button>
+                    )}
+                    {props.onLaunchAndroidEmulator && (
+                      <button
+                        onClick={props.onLaunchAndroidEmulator}
+                        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-b from-foreground/10 to-foreground/5 hover:from-foreground/15 hover:to-foreground/10 border border-border rounded-xl text-foreground/90 font-medium transition-all"
+                      >
+                        <Tablet className="h-5 w-5" />
+                        <span>Android</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-muted-foreground text-center">
+                    Requires Xcode (iOS) or Android Studio (Android)
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
           {/* QR Code Panel - Only show when expoUrl is available */}
           {props.expoUrl && (
-            <div className="flex flex-col items-center gap-4 p-6 bg-background border border-border rounded-2xl max-w-[280px]">
-              <div className="flex items-center gap-2 text-foreground/90">
-                <Smartphone className="h-5 w-5" />
-                <span className="font-medium">Preview on your phone</span>
-              </div>
-
-              {/* QR Code */}
-              <div className="p-4 bg-white rounded-xl">
-                <QRCodeSVG
-                  value={props.expoUrl}
-                  size={180}
-                  level="M"
-                  includeMargin={false}
-                  imageSettings={{
-                    src: 'https://expo.dev/static/brand/expo-go-app-icon.png',
-                    height: 36,
-                    width: 36,
-                    excavate: true,
-                  }}
-                />
-              </div>
-
-              {/* URL with copy button */}
-              <div className="w-full flex items-center gap-2 px-3 py-2 bg-muted rounded-lg border border-border">
-                <span className="flex-1 text-sm text-muted-foreground truncate font-mono">{props.expoUrl}</span>
+            <div className="w-full bg-background border border-border rounded-2xl overflow-hidden">
+              {isCompactMobilePreview && (
                 <button
-                  onClick={handleCopyExpoUrl}
-                  className="p-1.5 hover:bg-foreground/10 rounded transition-colors"
-                  title="Copy URL"
+                  onClick={() => toggleSection('qr')}
+                  className="w-full flex items-center justify-between px-4 py-3 border-b border-border/70 text-foreground/90"
                 >
-                  {copied ? (
-                    <Check className="h-4 w-4 text-green-400" />
-                  ) : (
-                    <Copy className="h-4 w-4 text-muted-foreground" />
-                  )}
+                  <span className="flex items-center gap-2">
+                    <Smartphone className="h-4 w-4" />
+                    <span className="text-sm font-medium">Preview on your phone</span>
+                  </span>
+                  <ChevronDown className={`h-4 w-4 transition-transform ${isQrExpanded ? 'rotate-180' : ''}`} />
                 </button>
-              </div>
+              )}
 
-              {/* Instructions */}
-              <p className="text-xs text-muted-foreground text-center leading-relaxed">
-                Scan with the <span className="text-foreground/70 font-medium">Expo Go</span> app on your iOS or Android
-                device to preview natively.
-              </p>
+              {isQrExpanded && (
+                <div className={`${isCompactMobilePreview ? 'px-4 py-4' : 'p-6'} flex flex-col items-center gap-4`}>
+                  {!isCompactMobilePreview && (
+                    <div className="flex items-center gap-2 text-foreground/90">
+                      <Smartphone className="h-5 w-5" />
+                      <span className="font-medium">Preview on your phone</span>
+                    </div>
+                  )}
+
+                  {/* QR Code */}
+                  <div className={`${isTightMobilePreview ? 'p-2' : 'p-4'} bg-white rounded-xl`}>
+                    <QRCodeSVG
+                      value={props.expoUrl}
+                      size={qrSize}
+                      level="M"
+                      includeMargin={false}
+                      imageSettings={{
+                        src: 'https://expo.dev/static/brand/expo-go-app-icon.png',
+                        height: Math.round(qrSize * 0.2),
+                        width: Math.round(qrSize * 0.2),
+                        excavate: true,
+                      }}
+                    />
+                  </div>
+
+                  {/* URL with copy button */}
+                  <div className="w-full flex items-center gap-2 px-3 py-2 bg-muted rounded-lg border border-border">
+                    <span className={`${isTightMobilePreview ? 'text-xs' : 'text-sm'} flex-1 text-muted-foreground truncate font-mono`}>
+                      {props.expoUrl}
+                    </span>
+                    <button
+                      onClick={handleCopyExpoUrl}
+                      className="p-1.5 hover:bg-foreground/10 rounded transition-colors"
+                      title="Copy URL"
+                    >
+                      {copied ? (
+                        <Check className="h-4 w-4 text-green-400" />
+                      ) : (
+                        <Copy className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Instructions */}
+                  <p className={`${isTightMobilePreview ? 'text-[11px]' : 'text-xs'} text-muted-foreground text-center leading-relaxed`}>
+                    Scan with the <span className="text-foreground/70 font-medium">Expo Go</span> app on your iOS or Android
+                    device to preview natively.
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>

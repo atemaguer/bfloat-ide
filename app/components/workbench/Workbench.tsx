@@ -1106,6 +1106,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 <Preview
                   previewUrl={previewUrl}
                   serverStatus={serverStatus}
+                  isTerminalOpen={isTerminalOpen}
+                  terminalHeight={terminalHeight}
                   onRefresh={handleRefresh}
                   onRestartServer={handleRestartServer}
                   expoUrl={expoUrl}
@@ -1193,6 +1195,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 <Preview
                   previewUrl={previewUrl}
                   serverStatus={serverStatus}
+                  isTerminalOpen={isTerminalOpen}
+                  terminalHeight={terminalHeight}
                   onRefresh={handleRefresh}
                   onRestartServer={handleRestartServer}
                   expoUrl={expoUrl}
