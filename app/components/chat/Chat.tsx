@@ -169,6 +169,7 @@ export function Chat({
   console.log('[Chat] Calling useSessions with projectId:', projectId)
   const { sessions: allSessions, refresh: refreshSessions } = useSessions(projectId)
   const activeTab = useStore(workbenchStore.activeTab)
+  const secretsVersion = useStore(workbenchStore.secretsVersion)
 
   // Debug: Log sessions when they change
   useEffect(() => {
@@ -246,7 +247,7 @@ export function Chat({
         setHasIntegrationSecrets(detectIntegrationSecretsPresence(secretKeys, normalizedAppType))
       })
       .catch(() => {})
-  }, [projectId, normalizedAppType, activeTab])
+  }, [projectId, normalizedAppType, activeTab, secretsVersion])
 
   // Handle Claude re-authentication - opens the auth modal
   const handleClaudeReconnect = useCallback(() => {
@@ -1035,7 +1036,13 @@ export function Chat({
       }
 
       // Intercept Firebase-related prompts when Firebase is not provisioned and secrets are not configured
-      if (/\bfirebase\b/i.test(text) && !projectHasFirebase && !firebaseProvisioned && !hasIntegrationSecrets.firebase) {
+      if (
+        /\bfirebase\b/i.test(text) &&
+        !projectHasFirebase &&
+        !firebaseProvisioned &&
+        !hasIntegrationSecrets.firebase &&
+        !/\/firebase-setup\b/i.test(text)
+      ) {
         const guidanceMessage: ChatMessage = {
           id: generateId(),
           role: 'assistant',
@@ -1049,7 +1056,13 @@ export function Chat({
       }
 
       // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
-      if (/\bconvex\b/i.test(text) && !projectHasConvex && !convexProvisioned && !hasIntegrationSecrets.convex) {
+      if (
+        /\bconvex\b/i.test(text) &&
+        !projectHasConvex &&
+        !convexProvisioned &&
+        !hasIntegrationSecrets.convex &&
+        !/\/convex-setup\b/i.test(text)
+      ) {
         const guidanceMessage: ChatMessage = {
           id: generateId(),
           role: 'assistant',
@@ -1063,7 +1076,7 @@ export function Chat({
       }
 
       // Intercept Stripe-related prompts when Stripe is not provisioned and secrets are not configured
-      if (/\bstripe\b/i.test(text) && !projectHasStripe && !hasIntegrationSecrets.stripe) {
+      if (/\bstripe\b/i.test(text) && !projectHasStripe && !hasIntegrationSecrets.stripe && !/\/add-stripe\b/i.test(text)) {
         const guidanceMessage: ChatMessage = {
           id: generateId(),
           role: 'assistant',
@@ -1081,7 +1094,8 @@ export function Chat({
         /\brevenue\s*cat\b/i.test(text) &&
         !projectHasRevenuecat &&
         !revenuecatProvisioned &&
-        !hasIntegrationSecrets.revenuecat
+        !hasIntegrationSecrets.revenuecat &&
+        !/\/add-revenuecat\b/i.test(text)
       ) {
         const guidanceMessage: ChatMessage = {
           id: generateId(),

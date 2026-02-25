@@ -7,6 +7,12 @@ export type IntegrationSecretsPresence = {
 
 export type NormalizedAppType = 'web' | 'mobile'
 
+const CONVEX_SECRET_KEYS = ['CONVEX_URL', 'NEXT_PUBLIC_CONVEX_URL', 'EXPO_PUBLIC_CONVEX_URL'] as const
+
+export function isConvexSecretKey(key: string): boolean {
+  return CONVEX_SECRET_KEYS.includes(key as (typeof CONVEX_SECRET_KEYS)[number])
+}
+
 export function detectIntegrationSecretsPresence(
   secretKeys: string[],
   appType: NormalizedAppType

@@ -15,6 +15,7 @@ import { useStore } from '@/app/hooks/useStore'
 import { workbenchStore } from '@/app/stores/workbench'
 import { SecretModal } from '@/app/components/settings/sections/SecretModal'
 import { secrets as secretsApi } from '@/app/api/sidecar'
+import { isConvexSecretKey } from '@/app/lib/integrations/secrets'
 import './styles.css'
 
 interface ProjectSettingsProps {
@@ -131,12 +132,24 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const handleSaveSecret = async (key: string, value: string) => {
     if (!project.id) return
 
+    const nextValue = value.trim()
+    const previousSecret = secrets.find((s) => s.key === key)
+    const previousValue = previousSecret?.value.trim() || ''
+    const isChanged = previousValue !== nextValue
+
     const result = await secretsApi.setSecret(project.id, key, value)
     if (!result.success) {
       throw new Error(result.error || 'Failed to save secret')
     }
 
     await loadSecrets()
+    workbenchStore.bumpSecretsVersion()
+
+    // Auto-run Convex setup when URL secret is newly added or changed.
+    if (isConvexSecretKey(key) && nextValue && isChanged) {
+      workbenchStore.triggerChatPrompt('Use the /convex-setup skill to set up Convex backend integration for this project')
+      toast.success('Convex URL saved. Starting Convex setup in chat...')
+    }
   }
 
   const handleDeleteSecret = async (key: string) => {
@@ -149,6 +162,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         setSecretsError(result.error || 'Failed to delete secret')
       } else {
         await loadSecrets()
+        workbenchStore.bumpSecretsVersion()
       }
     } catch (err) {
       setSecretsError(err instanceof Error ? err.message : 'Failed to delete secret')

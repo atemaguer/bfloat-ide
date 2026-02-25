@@ -77,6 +77,9 @@ export class WorkbenchStore {
   // Pending integration connect request - consumed by ProjectSettings
   pendingIntegrationConnect = createStore<PendingIntegrationConnectRequest | null>(() => null)
 
+  // Invalidation counter for secret mutations (settings -> chat status refresh)
+  secretsVersion = createStore<number>(() => 0)
+
   /**
    * Register the filesystem API for file operations
    * Called once when the conveyor is available
@@ -235,6 +238,13 @@ export class WorkbenchStore {
    */
   clearPendingIntegrationConnect(): void {
     this.pendingIntegrationConnect.setState(null, true)
+  }
+
+  /**
+   * Increment secrets version to notify listeners that secrets changed
+   */
+  bumpSecretsVersion(): void {
+    this.secretsVersion.setState(this.secretsVersion.getState() + 1, true)
   }
 
   /**
@@ -634,6 +644,7 @@ export class WorkbenchStore {
     // Clear pending screenshot
     this.pendingScreenshot.setState(null, true)
     this.pendingIntegrationConnect.setState(null, true)
+    this.secretsVersion.setState(0, true)
 
     // Reset view state to defaults
     this.activeView.setState('preview', true)
