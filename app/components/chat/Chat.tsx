@@ -9,19 +9,18 @@ import { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import { useStore } from '@/app/hooks/useStore'
 import { generateId } from 'ai'
 
-import { workbenchStore } from '@/app/stores/workbench'
+import { workbenchStore, type PendingIntegrationId } from '@/app/stores/workbench'
 import type { ChatMessage, MessagePart } from '@/app/types/project'
 import { useLocalAgent } from '@/app/hooks/useLocalAgent'
 import { useSessions, useSaveSession, useDeleteSession, useUpdateSession } from '@/app/hooks/useSessions'
 import { getSystemPrompt } from '@/lib/launch/system-prompt'
-import { aiAgent, projectFiles, secrets, app } from '@/app/api/sidecar'
+import { aiAgent, projectFiles, secrets } from '@/app/api/sidecar'
 import type { ProviderId, SessionMessageData } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { Messages } from './Messages'
 import { ChatInput, type ImageAttachment } from './ChatInput'
 import { ErrorMessage } from './ErrorMessage'
-import { ClaudeAuthBanner, isClaudeAuthError } from './ClaudeAuthBanner'
+import { isClaudeAuthError } from './ClaudeAuthBanner'
 import { ProviderAuthModal } from '@/app/components/integrations/ProviderAuthModal'
-import { FirebaseSetupBanner } from './FirebaseSetupBanner'
 import { TaskProgress, type TodoItem } from './TaskProgress'
 import { SuggestionChips } from './SuggestionChips'
 import { generateSuggestions } from './generateSuggestions'
@@ -31,6 +30,10 @@ import ConvexLogo from '@/app/components/ui/icons/convex-logo'
 import RevenueCatLogo from '@/app/components/ui/icons/revenuecat-logo'
 import StripeLogo from '@/app/components/ui/icons/stripe-logo'
 import { isIntegrationAvailableForAppType, type IntegrationId } from '@/app/types/integrations'
+import {
+  detectIntegrationSecretsPresence,
+  type IntegrationSecretsPresence,
+} from '@/app/lib/integrations/secrets'
 import toast from 'react-hot-toast'
 import './styles.css'
 
@@ -62,6 +65,7 @@ interface ChatProps {
   projectHasConvex?: boolean // Whether Convex is already provisioned on this project
   projectHasFirebase?: boolean // Whether Firebase is already provisioned on this project
   projectHasStripe?: boolean // Whether Stripe is already provisioned on this project
+  projectHasRevenuecat?: boolean // Whether RevenueCat is already provisioned on this project
   appType?: string | null // Project app type (web, mobile, expo, nextjs, vite, etc.)
 }
 
@@ -79,6 +83,7 @@ export function Chat({
   projectHasConvex = false,
   projectHasFirebase = false,
   projectHasStripe = false,
+  projectHasRevenuecat = false,
   appType,
 }: ChatProps) {
   // Codex (OpenAI) provider is enabled by default
@@ -115,26 +120,40 @@ export function Chat({
   // Any session IDs received during streaming (current session) should NOT trigger a load
   const initialSessionIdAtMount = useRef(resolvedInitialSessionId)
   const usageRef = useRef<{ inputTokens: number; outputTokens: number }>({ inputTokens: 0, outputTokens: 0 })
-  const submitRef = useRef<(text: string, attachments?: ImageAttachment[]) => void>()
+  const submitRef = useRef<((text: string, attachments?: ImageAttachment[]) => void) | null>(null)
   const messagesRef = useRef<ChatMessage[]>(messages)
   const [providerAuthStatus, setProviderAuthStatus] = useState<Record<string, boolean>>({})
-  const [integrationStatus, setIntegrationStatus] = useState<Record<string, boolean>>({
-    firebase: false,
-    convex: false,
-    stripe: false,
-    revenuecat: false,
-  })
-  // Track if Firebase connection expired and needs reconnection
-  const [showFirebaseReconnect, setShowFirebaseReconnect] = useState(false)
   // Track if Claude auth modal should be shown
   const [showClaudeAuthModal, setShowClaudeAuthModal] = useState(false)
   // Track which integrations have their required secrets already configured
-  const [hasIntegrationSecrets, setHasIntegrationSecrets] = useState<Record<string, boolean>>({
+  const [hasIntegrationSecrets, setHasIntegrationSecrets] = useState<IntegrationSecretsPresence>({
     firebase: false,
     convex: false,
     stripe: false,
     revenuecat: false,
   })
+
+  const integrationStatus = useMemo(
+    () => ({
+      firebase: projectHasFirebase || firebaseProvisioned || hasIntegrationSecrets.firebase,
+      convex: projectHasConvex || convexProvisioned || hasIntegrationSecrets.convex,
+      stripe: projectHasStripe || hasIntegrationSecrets.stripe,
+      revenuecat: projectHasRevenuecat || revenuecatProvisioned || hasIntegrationSecrets.revenuecat,
+    }),
+    [
+      projectHasFirebase,
+      firebaseProvisioned,
+      hasIntegrationSecrets.firebase,
+      projectHasConvex,
+      convexProvisioned,
+      hasIntegrationSecrets.convex,
+      projectHasStripe,
+      hasIntegrationSecrets.stripe,
+      projectHasRevenuecat,
+      revenuecatProvisioned,
+      hasIntegrationSecrets.revenuecat,
+    ]
+  )
 
   // Keep messagesRef in sync
   useEffect(() => {
@@ -149,6 +168,7 @@ export function Chat({
   // Mirrors workbench pattern but reads from projects.json instead of backend API
   console.log('[Chat] Calling useSessions with projectId:', projectId)
   const { sessions: allSessions, refresh: refreshSessions } = useSessions(projectId)
+  const activeTab = useStore(workbenchStore.activeTab)
 
   // Debug: Log sessions when they change
   useEffect(() => {
@@ -223,82 +243,10 @@ export function Chat({
         if (result.error || !result.secrets) return
 
         const secretKeys = result.secrets.map((s) => s.key)
-
-        // Firebase requires at least API key and project ID
-        const firebasePrefix = normalizedAppType === 'web' ? 'NEXT_PUBLIC_FIREBASE_' : 'EXPO_PUBLIC_FIREBASE_'
-        const hasFirebaseSecrets =
-          secretKeys.includes(`${firebasePrefix}API_KEY`) &&
-          secretKeys.includes(`${firebasePrefix}PROJECT_ID`)
-
-        // Convex requires the URL
-        const convexUrlKey = normalizedAppType === 'web' ? 'NEXT_PUBLIC_CONVEX_URL' : 'EXPO_PUBLIC_CONVEX_URL'
-        const hasConvexSecrets =
-          secretKeys.includes('CONVEX_URL') || secretKeys.includes(convexUrlKey)
-
-        // Stripe requires the publishable key (web-only, always NEXT_PUBLIC_ prefix)
-        const hasStripeSecrets = secretKeys.includes('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY')
-
-        // RevenueCat requires the API key (mobile-only, always EXPO_PUBLIC_ prefix)
-        const hasRevenuecatSecrets = secretKeys.includes('EXPO_PUBLIC_REVENUECAT_API_KEY')
-
-        setHasIntegrationSecrets({
-          firebase: hasFirebaseSecrets,
-          convex: hasConvexSecrets,
-          stripe: hasStripeSecrets,
-          revenuecat: hasRevenuecatSecrets,
-        })
+        setHasIntegrationSecrets(detectIntegrationSecretsPresence(secretKeys, normalizedAppType))
       })
       .catch(() => {})
-  }, [projectId])
-
-  // Re-fetch Stripe integration status after OAuth callback
-  useEffect(() => {
-    if (!app?.onStripeCallback) return
-
-    const unsubscribe = app.onStripeCallback(async (data) => {
-      if (data.success) {
-        setIntegrationStatus((prev) => ({ ...prev, stripe: true }))
-        setInput('Setting up Stripe...')
-        setIsProvisioning(true)
-
-        setIsProvisioning(false)
-        const prompt = 'Use the /add-stripe skill to set up Stripe payments integration for this project'
-        setInput(prompt)
-        setTimeout(() => {
-          submitRef.current?.(prompt)
-        }, 100)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
-
-  // Re-fetch RevenueCat integration status after OAuth callback
-  useEffect(() => {
-    if (!app?.onRevenueCatCallback) return
-
-    const unsubscribe = app.onRevenueCatCallback(async (data) => {
-      if (data.success) {
-        setIntegrationStatus((prev) => ({ ...prev, revenuecat: true }))
-        setInput('Setting up RevenueCat...')
-        setIsProvisioning(true)
-
-        setIsProvisioning(false)
-        setRevenuecatProvisioned(true)
-        const prompt = 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project'
-        setInput(prompt)
-        setTimeout(() => {
-          submitRef.current?.(prompt)
-        }, 100)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
+  }, [projectId, normalizedAppType, activeTab])
 
   // Handle Claude re-authentication - opens the auth modal
   const handleClaudeReconnect = useCallback(() => {
@@ -338,15 +286,60 @@ export function Chat({
 
   // Integration menu handlers
   const handleIntegrationConnect = useCallback(async (id: string) => {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined
-    if (id === 'firebase') {
-      toast.error('Configure Firebase credentials in Project Settings > Integrations')
-      return
+    const setupPromptByIntegration: Record<string, MessagePart['type']> = {
+      firebase: 'firebase-setup-prompt',
+      convex: 'convex-setup-prompt',
+      stripe: 'stripe-setup-prompt',
+      revenuecat: 'revenuecat-setup-prompt',
     }
-    if (id === 'convex') window.open(`${backendUrl}/desktop/convex/connect`, '_blank')
-    if (id === 'stripe') window.open(`${backendUrl}/desktop/stripe/connect`, '_blank')
-    if (id === 'revenuecat') window.open(`${backendUrl}/desktop/revenuecat/connect`, '_blank')
-  }, [])
+    const suggestedKeyByIntegration: Record<PendingIntegrationId, string> = {
+      firebase:
+        normalizedAppType === 'web'
+          ? 'NEXT_PUBLIC_FIREBASE_API_KEY'
+          : 'EXPO_PUBLIC_FIREBASE_API_KEY',
+      convex:
+        normalizedAppType === 'web'
+          ? 'NEXT_PUBLIC_CONVEX_URL'
+          : 'EXPO_PUBLIC_CONVEX_URL',
+      stripe:
+        normalizedAppType === 'web'
+          ? 'NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY'
+          : 'EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY',
+      revenuecat: 'EXPO_PUBLIC_REVENUECAT_API_KEY',
+    }
+
+    const promptType = setupPromptByIntegration[id]
+    workbenchStore.setActiveTab('settings')
+    if (id in suggestedKeyByIntegration) {
+      workbenchStore.setPendingIntegrationConnect({
+        integrationId: id as PendingIntegrationId,
+        suggestedKey: suggestedKeyByIntegration[id as PendingIntegrationId],
+        source: 'chat',
+      })
+    }
+
+    if (!promptType) return
+
+    setMessages((prev) => {
+      const lastMessage = prev[prev.length - 1]
+      const isDuplicatePrompt =
+        lastMessage?.role === 'assistant' && !!lastMessage.parts?.some((part) => part?.type === promptType)
+
+      if (isDuplicatePrompt) {
+        return prev
+      }
+
+      const guidanceMessage: ChatMessage = {
+        id: generateId(),
+        role: 'assistant',
+        content: '',
+        parts: [{ type: promptType } as MessagePart],
+        createdAt: new Date().toISOString(),
+      }
+
+      return [...prev, guidanceMessage]
+    })
+  }, [normalizedAppType])
 
   const handleIntegrationUse = useCallback(
     async (id: string) => {
@@ -361,6 +354,9 @@ export function Chat({
       }
       if (id === 'convex') {
         setConvexProvisioned(true)
+      }
+      if (id === 'revenuecat') {
+        setRevenuecatProvisioned(true)
       }
 
       const prompt = prompts[id]
@@ -1052,6 +1048,53 @@ export function Chat({
         return
       }
 
+      // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
+      if (/\bconvex\b/i.test(text) && !projectHasConvex && !convexProvisioned && !hasIntegrationSecrets.convex) {
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          parts: [{ type: 'convex-setup-prompt' } as MessagePart],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
+      // Intercept Stripe-related prompts when Stripe is not provisioned and secrets are not configured
+      if (/\bstripe\b/i.test(text) && !projectHasStripe && !hasIntegrationSecrets.stripe) {
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          parts: [{ type: 'stripe-setup-prompt' } as MessagePart],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
+      // Intercept RevenueCat-related prompts when RevenueCat is not provisioned and secrets are not configured
+      if (
+        /\brevenue\s*cat\b/i.test(text) &&
+        !projectHasRevenuecat &&
+        !revenuecatProvisioned &&
+        !hasIntegrationSecrets.revenuecat
+      ) {
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          parts: [{ type: 'revenuecat-setup-prompt' } as MessagePart],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
       setMessages((prev) => [...prev, userMessage])
       setIsStreaming(true)
 
@@ -1069,7 +1112,24 @@ export function Chat({
 
       setInput('')
     },
-    [isStreaming, provider, localAgent, scrollToBottom, projectPath, projectHasConvex, convexProvisioned, projectHasFirebase, firebaseProvisioned, projectHasStripe, hasIntegrationSecrets]
+    [
+      isStreaming,
+      provider,
+      localAgent,
+      scrollToBottom,
+      projectPath,
+      projectHasConvex,
+      convexProvisioned,
+      hasIntegrationSecrets.convex,
+      projectHasFirebase,
+      firebaseProvisioned,
+      hasIntegrationSecrets.firebase,
+      projectHasStripe,
+      hasIntegrationSecrets.stripe,
+      projectHasRevenuecat,
+      revenuecatProvisioned,
+      hasIntegrationSecrets.revenuecat,
+    ]
   )
 
   // Keep submitRef in sync so handleIntegrationUse can auto-submit
@@ -1364,23 +1424,9 @@ export function Chat({
             isConvexConnected={integrationStatus.convex}
             isFirebaseConnected={integrationStatus.firebase}
             isStripeConnected={integrationStatus.stripe}
+            isRevenueCatConnected={integrationStatus.revenuecat}
             isClaudeAuthenticated={providerAuthStatus.claude}
           />
-        )}
-        {showFirebaseReconnect && (
-          <div style={{ padding: '0 16px', marginBottom: '8px' }}>
-            <div style={{ marginBottom: '8px', fontSize: '13px', color: 'var(--bfloat-text-secondary, #a0a0b8)' }}>
-              Your Google connection has expired. Please reconnect to continue with Firebase setup.
-            </div>
-            <FirebaseSetupBanner
-              isConnected={false}
-              onConnect={() => {
-                setShowFirebaseReconnect(false)
-                handleIntegrationConnect('firebase')
-              }}
-              onUse={() => {}}
-            />
-          </div>
         )}
         {/* Preview/Runtime Error with Fix button */}
         {promptError && !isStreaming && (

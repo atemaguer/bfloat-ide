@@ -12,7 +12,6 @@ import { Brain } from 'lucide-react'
 import type { ChatMessage } from '@/app/types/project'
 import { workbenchStore } from '@/app/stores/workbench'
 import { AssistantMessage } from './AssistantMessage'
-import { StripeSetupBanner } from './StripeSetupBanner'
 import { UserMessage } from './UserMessage'
 
 interface MessagesProps {
@@ -26,6 +25,7 @@ interface MessagesProps {
   isConvexConnected?: boolean
   isFirebaseConnected?: boolean
   isStripeConnected?: boolean
+  isRevenueCatConnected?: boolean
   isClaudeAuthenticated?: boolean
 }
 
@@ -49,6 +49,7 @@ export const Messages = memo(function Messages({
   isConvexConnected,
   isFirebaseConnected,
   isStripeConnected,
+  isRevenueCatConnected,
   isClaudeAuthenticated,
 }: MessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -64,7 +65,10 @@ export const Messages = memo(function Messages({
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Keep latest assistant cards fully visible, especially near the input edge.
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    })
   }, [messages])
 
   // Process tool calls to apply file operations ONLY during active streaming
@@ -173,6 +177,8 @@ export const Messages = memo(function Messages({
                 onClaudeAuthError={onClaudeAuthError}
                 isConvexConnected={isConvexConnected}
                 isFirebaseConnected={isFirebaseConnected}
+                isStripeConnected={isStripeConnected}
+                isRevenueCatConnected={isRevenueCatConnected}
                 isClaudeAuthenticated={isClaudeAuthenticated}
               />
               )}

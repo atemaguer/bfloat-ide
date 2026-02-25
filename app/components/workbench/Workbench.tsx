@@ -1138,8 +1138,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                       <ConvexIntegration
                         isConnected={hasConvexIntegration || false}
                         onConnect={() => {
-                          const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined
-                          window.open(`${backendUrl}/desktop/convex/connect`, '_blank')
+                          workbenchStore.setActiveTab('settings')
+                          workbenchStore.setPendingIntegrationConnect({
+                            integrationId: 'convex',
+                            suggestedKey: isWebApp ? 'NEXT_PUBLIC_CONVEX_URL' : 'EXPO_PUBLIC_CONVEX_URL',
+                          })
                         }}
                         onDisconnect={async () => {
                           console.log('[Workbench] Convex disconnect requested (local-first mode)')

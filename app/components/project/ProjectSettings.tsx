@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/app/componen
 import { ImageDropzone } from '@/app/components/ui/image-dropzone'
 import { Switch } from '@/app/components/ui/Switch'
 import { localProjectsStore } from '@/app/stores/local-projects'
+import { useStore } from '@/app/hooks/useStore'
+import { workbenchStore } from '@/app/stores/workbench'
 import { SecretModal } from '@/app/components/settings/sections/SecretModal'
 import { secrets as secretsApi } from '@/app/api/sidecar'
 import './styles.css'
@@ -50,7 +52,9 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [visibleSecrets, setVisibleSecrets] = useState<Set<string>>(new Set())
   const [isSecretModalOpen, setIsSecretModalOpen] = useState(false)
   const [editingSecret, setEditingSecret] = useState<Secret | null>(null)
+  const [secretModalDefaultKey, setSecretModalDefaultKey] = useState<string | null>(null)
   const [deletingSecretKey, setDeletingSecretKey] = useState<string | null>(null)
+  const pendingIntegrationConnect = useStore(workbenchStore.pendingIntegrationConnect)
 
   // Sync form with updated project prop
   useEffect(() => {
@@ -94,13 +98,35 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
 
   const handleAddSecret = () => {
     setEditingSecret(null)
+    setSecretModalDefaultKey(null)
     setIsSecretModalOpen(true)
   }
 
   const handleEditSecret = (secret: Secret) => {
     setEditingSecret(secret)
+    setSecretModalDefaultKey(null)
     setIsSecretModalOpen(true)
   }
+
+  // Handle "Connect integration" requests from chat/workbench by opening
+  // Development Variables modal with a relevant key prefilled.
+  useEffect(() => {
+    if (!pendingIntegrationConnect || isLoadingSecrets) return
+
+    const { suggestedKey } = pendingIntegrationConnect
+    const existingSecret = secrets.find((s) => s.key === suggestedKey)
+
+    if (existingSecret) {
+      setEditingSecret(existingSecret)
+      setSecretModalDefaultKey(null)
+    } else {
+      setEditingSecret(null)
+      setSecretModalDefaultKey(suggestedKey)
+    }
+
+    setIsSecretModalOpen(true)
+    workbenchStore.clearPendingIntegrationConnect()
+  }, [pendingIntegrationConnect, isLoadingSecrets, secrets])
 
   const handleSaveSecret = async (key: string, value: string) => {
     if (!project.id) return
@@ -566,6 +592,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         onSave={handleSaveSecret}
         existingSecrets={secrets}
         editingSecret={editingSecret}
+        defaultKey={secretModalDefaultKey}
       />
     </div>
   )

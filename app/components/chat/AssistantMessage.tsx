@@ -20,7 +20,9 @@ import { ToolAccordion } from './ToolAccordion'
 import { AskUserQuestion, type AskUserQuestionInput } from './AskUserQuestion'
 import { ConvexSetupBanner } from './ConvexSetupBanner'
 import { FirebaseSetupBanner } from './FirebaseSetupBanner'
-import { ClaudeAuthBanner, isClaudeAuthError } from './ClaudeAuthBanner'
+import { StripeSetupBanner } from './StripeSetupBanner'
+import { RevenueCatSetupBanner } from './RevenueCatSetupBanner'
+import { isClaudeAuthError } from './ClaudeAuthBanner'
 import type { MessagePart } from '@/app/types/project'
 import type { ToolAction } from './types'
 import { convertToolPartToAction } from './types'
@@ -51,12 +53,28 @@ interface FirebaseSetupSection {
   type: 'firebase_setup'
 }
 
+interface StripeSetupSection {
+  type: 'stripe_setup'
+}
+
+interface RevenueCatSetupSection {
+  type: 'revenuecat_setup'
+}
+
 interface ClaudeAuthSection {
   type: 'claude_auth'
 }
 
 // All section types
-type Section = TextSection | ToolGroupSection | AskUserSection | ConvexSetupSection | FirebaseSetupSection | ClaudeAuthSection
+type Section =
+  | TextSection
+  | ToolGroupSection
+  | AskUserSection
+  | ConvexSetupSection
+  | FirebaseSetupSection
+  | StripeSetupSection
+  | RevenueCatSetupSection
+  | ClaudeAuthSection
 
 interface AssistantMessageProps {
   parts: MessagePart[]
@@ -68,6 +86,8 @@ interface AssistantMessageProps {
   onClaudeAuthError?: () => void
   isConvexConnected?: boolean
   isFirebaseConnected?: boolean
+  isStripeConnected?: boolean
+  isRevenueCatConnected?: boolean
   isClaudeAuthenticated?: boolean
 }
 
@@ -104,6 +124,20 @@ function parseIntoSections(parts: MessagePart[]): Section[] {
     if (part.type === 'firebase-setup-prompt') {
       flushToolGroup()
       rawSections.push({ type: 'firebase_setup' })
+      continue
+    }
+
+    // Handle stripe setup prompt
+    if (part.type === 'stripe-setup-prompt') {
+      flushToolGroup()
+      rawSections.push({ type: 'stripe_setup' })
+      continue
+    }
+
+    // Handle revenuecat setup prompt
+    if (part.type === 'revenuecat-setup-prompt') {
+      flushToolGroup()
+      rawSections.push({ type: 'revenuecat_setup' })
       continue
     }
 
@@ -192,6 +226,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   onClaudeAuthError,
   isConvexConnected,
   isFirebaseConnected,
+  isStripeConnected,
+  isRevenueCatConnected,
   isClaudeAuthenticated,
 }: AssistantMessageProps) {
   // Track submitting state for AskUserQuestion
@@ -287,6 +323,28 @@ export const AssistantMessage = memo(function AssistantMessage({
               onSubmit={(answers) => handleAskUserSubmit(section.toolCallId, answers)}
               isSubmitting={submittingId === section.toolCallId}
               isAnswered={section.isAnswered}
+            />
+          )
+        }
+
+        if (section.type === 'stripe_setup') {
+          return (
+            <StripeSetupBanner
+              key={`stripe-setup-${index}`}
+              isConnected={!!isStripeConnected}
+              onConnect={() => onIntegrationConnect?.('stripe')}
+              onUse={() => onIntegrationUse?.('stripe')}
+            />
+          )
+        }
+
+        if (section.type === 'revenuecat_setup') {
+          return (
+            <RevenueCatSetupBanner
+              key={`revenuecat-setup-${index}`}
+              isConnected={!!isRevenueCatConnected}
+              onConnect={() => onIntegrationConnect?.('revenuecat')}
+              onUse={() => onIntegrationUse?.('revenuecat')}
             />
           )
         }

@@ -55,13 +55,26 @@ Format: <suggestions>["Run the tests", "Add error handling to the API", "Deploy 
 `.trim()
 
 /**
+ * Instruction to keep generated mobile UIs inside the preview viewport.
+ */
+const MOBILE_PREVIEW_PROMPT = `
+## Mobile Viewport Fit Requirements
+
+When generating or editing mobile apps (Expo/React Native), default to layouts that fit within a phone viewport without horizontal or vertical overflow in preview.
+
+- Prefer flex-based full-height layouts over fixed pixel heights
+- Avoid \`100vw\`, \`w-screen\`, large fixed widths, or nested containers that can exceed viewport width
+- Keep top-level containers width-constrained (\`width: '100%'\` / \`flex: 1\`) and avoid accidental sideways overflow
+`.trim()
+
+/**
  * Get the system prompt. Always returns a prompt string.
  * - New sessions: exploration instructions + suggestions instructions
  * - Resumed sessions: suggestions instructions only
  */
 export function getSystemPrompt(isResumedSession: boolean): string {
   if (isResumedSession) {
-    return TERMINAL_USAGE_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+    return TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
   }
-  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
 }
