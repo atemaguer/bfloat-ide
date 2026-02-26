@@ -335,6 +335,22 @@ function shutdown(signal: string): void {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
+process.on("exit", () => {
+  cleanupAllSessions();
+});
+
+process.on("uncaughtException", (err) => {
+  console.error(`[${timestamp()}] Uncaught exception:`, err);
+  cleanupAllSessions();
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error(`[${timestamp()}] Unhandled rejection:`, reason);
+  cleanupAllSessions();
+  process.exit(1);
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

@@ -103,6 +103,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
   const terminalOutputBuffer = useRef('')
   const devServerTerminalIdRef = useRef<string | null>(null)
+  const portConflictRef = useRef(false)
 
   // Terminal panel state
   const [isTerminalOpen, setIsTerminalOpen] = useState(false)
@@ -222,6 +223,22 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     const cleanData = stripAnsi(data)
     terminalOutputBuffer.current += cleanData
 
+    // Detect Expo port fallback — "Something is already running on port 19000"
+    // When this happens, clear the stale port so the fallback doesn't use it
+    const portConflict = cleanData.match(/already running on port (\d+)/i)
+      || terminalOutputBuffer.current.match(/already running on port (\d+)/i)
+    if (portConflict) {
+      portConflictRef.current = true
+    }
+
+    // Parse "Starting Metro on port XXXXX" to update actualPortRef after a port switch
+    const metroPortMatch = cleanData.match(/Starting Metro on port (\d+)/i)
+      || terminalOutputBuffer.current.match(/Starting Metro on port (\d+)/i)
+    if (metroPortMatch) {
+      actualPortRef.current = parseInt(metroPortMatch[1], 10)
+      portConflictRef.current = false
+    }
+
     // Look for Expo URL in the output for QR codes (native devices)
     // Matches:
     // - exp://192.168.1.12:19000 (Expo Go format)
@@ -257,6 +274,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       if (webUrl !== previewUrl) {
         console.log('[Workbench] Expo Web URL detected:', webUrl, '(overriding previous:', previewUrl || 'none', ')')
         actualPortRef.current = webPort
+        portConflictRef.current = false
         setPreviewUrl(webUrl)
         setServerStatus('running')
       }
@@ -310,7 +328,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           terminalOutputBuffer.current.includes('open debugger') ||
           terminalOutputBuffer.current.includes('Logs for your project')
 
-        if (isExpoReady && actualPortRef.current > 0) {
+        if (isExpoReady && actualPortRef.current > 0 && !portConflictRef.current) {
           const fallbackUrl = `http://localhost:${actualPortRef.current}`
           console.log('[Workbench] Dev server ready (using assigned port):', fallbackUrl)
           setPreviewUrl(fallbackUrl)
@@ -634,6 +652,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       setExpoUrl('')
       terminalOutputBuffer.current = ''
       actualPortRef.current = portRange.start
+      portConflictRef.current = false
 
       // Cleanup old project's temp directory if it exists
       if (tempDirPathRef.current) {
@@ -903,6 +922,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const mountTimeRef = useRef(Date.now())
   useEffect(() => {
     mountTimeRef.current = Date.now()
+  }, [])
+
+  // Clean up any stale terminal sessions from a previous crash
+  useEffect(() => {
+    terminal.killAll().catch((err: unknown) =>
+      console.warn('[Workbench] Failed to clean up stale sessions:', err)
+    )
   }, [])
 
   // Cleanup temp directory and kill all terminal sessions when workbench unmounts (user exits to landing page)
