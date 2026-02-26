@@ -75,6 +75,15 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+function isSameOriginWithHost(url?: string): boolean {
+  if (!url || typeof window === 'undefined') return false
+  try {
+    return new URL(url, window.location.href).origin === window.location.origin
+  } catch {
+    return false
+  }
+}
+
 export function Preview(props: PreviewProps) {
   const webviewRef = useRef<WebviewElement | null>(null)
   const webIframeRef = useRef<HTMLIFrameElement | null>(null) // For Tauri web preview (replaces webview)
@@ -226,34 +235,38 @@ export function Preview(props: PreviewProps) {
   // Navigation handlers — work with both Electron webview and Tauri iframe
   const handleGoBack = useCallback(() => {
     if (isTauri) {
+      if (!isSameOriginWithHost(currentUrl || webIframeRef.current?.src)) return
       try { webIframeRef.current?.contentWindow?.history.back() } catch { /* cross-origin */ }
     } else {
       webviewRef.current?.goBack()
     }
-  }, [])
+  }, [currentUrl])
 
   const handleGoForward = useCallback(() => {
     if (isTauri) {
+      if (!isSameOriginWithHost(currentUrl || webIframeRef.current?.src)) return
       try { webIframeRef.current?.contentWindow?.history.forward() } catch { /* cross-origin */ }
     } else {
       webviewRef.current?.goForward()
     }
-  }, [])
+  }, [currentUrl])
 
   const handleRefresh = useCallback(() => {
     if (isTauri) {
       // Best-effort same-origin reload; cross-origin fallback handled by
       // refreshKey remount triggered via onRefresh -> parent state update
-      try {
-        webIframeRef.current?.contentWindow?.location.reload()
-      } catch {
-        // Cross-origin — the refreshKey remount will handle it
+      if (isSameOriginWithHost(currentUrl || webIframeRef.current?.src)) {
+        try {
+          webIframeRef.current?.contentWindow?.location.reload()
+        } catch {
+          // Cross-origin — the refreshKey remount will handle it
+        }
       }
     } else if (webviewRef.current) {
       webviewRef.current.reload()
     }
     props.onRefresh()
-  }, [props])
+  }, [currentUrl, props])
 
   const handleToggleDevTools = useCallback(() => {
     if (isTauri) return // DevTools not available for iframes in Tauri
@@ -305,6 +318,7 @@ export function Preview(props: PreviewProps) {
   // Iframe handlers for mobile preview
   const applyMobileViewportGuards = useCallback((iframe: HTMLIFrameElement | null) => {
     if (!iframe) return
+    if (!isSameOriginWithHost(iframe.src)) return
 
     try {
       const doc = iframe.contentDocument || iframe.contentWindow?.document
@@ -538,7 +552,7 @@ export function Preview(props: PreviewProps) {
                   src={currentUrl}
                   className="w-full h-full border-0 bg-white"
                   allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
-                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-presentation allow-top-navigation"
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-top-navigation"
                   loading="eager"
                   title="Web Preview"
                   onLoad={() => setIsLoading(false)}
@@ -654,7 +668,7 @@ export function Preview(props: PreviewProps) {
                     ref={iframeRef}
                     src={props.previewUrl}
                     allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
-                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-presentation allow-top-navigation"
+                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-top-navigation"
                     loading="eager"
                     scrolling="no"
                     style={{ display: 'block', overflow: 'hidden' }}
