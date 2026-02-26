@@ -31,6 +31,7 @@ import * as os from "node:os";
 
 const BFLOAT_DIR = path.join(os.homedir(), ".bfloat-ide");
 const PROJECTS_FILE = path.join(BFLOAT_DIR, "projects.json");
+const PROJECTS_BASE = path.join(BFLOAT_DIR, "projects");
 
 // ---------------------------------------------------------------------------
 // Type definitions (mirror app/types/project)
@@ -101,6 +102,11 @@ async function readProjects(): Promise<Project[]> {
 async function writeProjects(projects: Project[]): Promise<void> {
   await ensureDir();
   await Bun.write(PROJECTS_FILE, JSON.stringify(projects, null, 2));
+}
+
+export async function getProjectById(projectId: string): Promise<Project | null> {
+  const projects = await readProjects();
+  return projects.find((project) => project.id === projectId) ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,11 +299,31 @@ localProjectsRouter.put("/:id", async (c) => {
 // ---------------------------------------------------------------------------
 localProjectsRouter.delete("/:id", async (c) => {
   const id = c.req.param("id");
+
+  // Path-traversal guard
+  if (/[/\\]|\.\./.test(id)) {
+    return c.json({ error: "Invalid project id" }, 400);
+  }
+
   try {
     const projects = await readProjects();
     const filtered = projects.filter((p) => p.id !== id);
     await writeProjects(filtered);
-    return c.json({ success: true });
+
+    // Clean up the project directory on disk
+    let warning: string | undefined;
+    const projectDir = path.join(PROJECTS_BASE, id);
+    try {
+      await fsp.rm(projectDir, { recursive: true, force: true });
+      console.log(`[LocalProjects] Removed project directory: ${projectDir}`);
+    } catch (rmErr: unknown) {
+      if ((rmErr as NodeJS.ErrnoException).code !== "ENOENT") {
+        warning = `Metadata removed but failed to delete project directory: ${(rmErr as Error).message}`;
+        console.warn(`[LocalProjects] ${warning}`);
+      }
+    }
+
+    return c.json({ success: true, ...(warning ? { warning } : {}) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: msg }, 500);
@@ -554,4 +580,3 @@ localProjectsRouter.delete("/:id/deployments/:deploymentId", async (c) => {
     return c.json({ error: msg }, 500);
   }
 });
-
