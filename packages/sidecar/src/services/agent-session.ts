@@ -25,6 +25,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { createScreenshotMcpServer } from "./screenshot-mcp.ts";
 import { buildWorkspaceProfile, shouldBlockScaffoldCommand } from "./workspace-profile.ts";
+import { updateSessionInProject } from "../routes/local-projects.ts";
 
 // ---------------------------------------------------------------------------
 // Frame types (wire format over WebSocket and HTTP responses)
@@ -1152,6 +1153,18 @@ async function runStream(sessionId: string, message: string): Promise<void> {
           }
           if (event.totalCostUsd) {
             liveSession.state.totalCostUsd += event.totalCostUsd;
+          }
+
+          // Persist token/cost to projects.json (fire-and-forget)
+          const projectId = sessionToProject.get(sessionId);
+          const realSid = liveSession.state.realSessionId;
+          if (projectId && realSid) {
+            updateSessionInProject(projectId, realSid, {
+              totalTokens: liveSession.state.totalTokens,
+              totalCostUsd: liveSession.state.totalCostUsd,
+            }).catch((err) =>
+              console.warn("[AgentSession] Failed to persist token/cost:", err)
+            );
           }
 
           // Save assistant turn to conversation history
