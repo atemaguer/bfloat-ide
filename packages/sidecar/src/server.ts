@@ -102,7 +102,7 @@ app.use("*", logger((message: string, ...rest: string[]) => {
 app.use(
   "*",
   cors({
-    origin: ["tauri://localhost", "http://tauri.localhost", "http://localhost"],
+    origin: ["tauri://localhost", "http://tauri.localhost", "http://localhost", "http://localhost:1420"],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type"],
     credentials: true,

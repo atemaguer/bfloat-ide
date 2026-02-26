@@ -482,8 +482,10 @@ export function IOSSetupWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep, authMethod])
 
-  // Subscribe to build events
+  // Subscribe to build events (only when a build is actually in progress)
   useEffect(() => {
+    if (!isBuilding) return
+
     const unsubProgress = deploy.onBuildProgress((progress) => {
       setBuildProgress(progress)
       if (progress.step === 'complete') {
@@ -532,7 +534,8 @@ export function IOSSetupWizard({
       unsubLogs()
       unsubAuth()
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBuilding])
 
   const startBuild = async () => {
     setIsBuilding(true)
