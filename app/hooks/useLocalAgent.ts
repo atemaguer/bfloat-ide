@@ -70,6 +70,8 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   /** Monotonically incrementing counter used to detect and discard stale subscription callbacks */
   const activeSubscriptionIdRef = useRef(0)
   const sessionIdRef = useRef<string | null>(null)
+  const providerSessionIdRef = useRef<string | null>(options.resumeSessionId || null)
+  const requestedResumeSessionIdRef = useRef<string | null>(options.resumeSessionId || null)
   const cwdRef = useRef<string>(options.cwd)
   const hasReconnected = useRef(false)
   /** Per-session last seen seq number for deduplication on reconnect */
@@ -86,6 +88,11 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     onCompleteRef.current = options.onComplete
     onSessionIdRef.current = options.onSessionId
     onErrorRef.current = options.onError
+
+    requestedResumeSessionIdRef.current = options.resumeSessionId || null
+    if (options.resumeSessionId && providerSessionIdRef.current !== options.resumeSessionId) {
+      providerSessionIdRef.current = options.resumeSessionId
+    }
   })
 
   const getLastSeq = useCallback((sessionId: string): number => {
@@ -138,6 +145,16 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         console.log('[useLocalAgent] Has onSessionId callback:', !!onSessionIdRef.current)
         console.log('[useLocalAgent] ========================================')
         if (initContent.sessionId) {
+          if (providerSessionIdRef.current && providerSessionIdRef.current !== initContent.sessionId) {
+            console.warn('[useLocalAgent] Provider session ID rotated during active session', {
+              previousProviderSessionId: providerSessionIdRef.current,
+              nextProviderSessionId: initContent.sessionId,
+              activeSidecarSessionId: sessionIdRef.current,
+              requestedResumeSessionId: requestedResumeSessionIdRef.current,
+            })
+          }
+
+          providerSessionIdRef.current = initContent.sessionId
           console.log('[useLocalAgent] Calling onSessionId callback...')
           onSessionIdRef.current?.(initContent.sessionId)
           console.log('[useLocalAgent] onSessionId callback completed')

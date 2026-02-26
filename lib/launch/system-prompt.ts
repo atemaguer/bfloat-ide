@@ -5,9 +5,11 @@
 export const PROJECT_EXPLORATION_PROMPT = `
 On a new session, keep project discovery minimal:
 
-- If the user asks to generate/build/fix immediately, do not run broad discovery first.
-- Only inspect context when needed, and cap it to 1-2 quick reads (for example: \`package.json\` and one top-level folder scan).
-- Avoid recursive/broad file scans before starting implementation.
+- Run a quick workspace check first: read \`package.json\` (if present) and do one top-level folder scan.
+- If existing app markers are present (for example Expo/React/Next/Vite files or dependencies), treat this as an existing project and implement changes in-place.
+- Do not scaffold a new app (\`create-expo-app\`, \`create-next-app\`, \`create vite\`, etc.) when the workspace already contains app files.
+- If the workspace appears empty (no package/app markers), scaffolding is allowed.
+- Avoid recursive/broad discovery before starting implementation.
 
 Start implementation quickly, then gather additional context incrementally only if blocked.
 `.trim()
