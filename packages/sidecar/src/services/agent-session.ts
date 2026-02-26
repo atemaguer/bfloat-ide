@@ -26,6 +26,7 @@ import * as os from "node:os";
 import { createScreenshotMcpServer } from "./screenshot-mcp.ts";
 import { buildWorkspaceProfile, shouldBlockScaffoldCommand } from "./workspace-profile.ts";
 import { updateSessionInProject } from "../routes/local-projects.ts";
+import { CodexProvider } from "./codex-provider.ts";
 
 // ---------------------------------------------------------------------------
 // Frame types (wire format over WebSocket and HTTP responses)
@@ -605,8 +606,9 @@ class ClaudeProvider implements AgentProvider {
   }
 }
 
-// Register the real Claude provider on module load
+// Register providers on module load
 registerProvider(new ClaudeProvider());
+registerProvider(new CodexProvider());
 
 // ---------------------------------------------------------------------------
 // Session registry
