@@ -121,10 +121,14 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     { id: 'terminal-1', name: 'Terminal' }
   ])
   const [activeTerminalId, setActiveTerminalId] = useState('terminal-1')
+  const activeTerminalIdRef = useRef(activeTerminalId)
+  activeTerminalIdRef.current = activeTerminalId
   const terminalCountRef = useRef(1)
   const agentTerminalCountRef = useRef(0)
   const terminalReadyRef = useRef<Set<string>>(new Set())
   const terminalExitedRef = useRef<Set<string>>(new Set())
+  const terminalFirstOutputRef = useRef<Set<string>>(new Set())
+  const shellReadyResolversRef = useRef<Map<string, () => void>>(new Map())
 
   // Re-mount the preview iframe when switching back to the preview tab.
   // Browsers may discard invisible cross-origin iframe content, causing a
@@ -175,6 +179,27 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     })
   }, [])
 
+  // Wait for the shell to emit its first output (prompt), indicating it's ready for input
+  const waitForShellReady = useCallback((terminalId: string, maxWaitMs = 5000): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (terminalFirstOutputRef.current.has(terminalId)) {
+        resolve(true)
+        return
+      }
+
+      const timeout = setTimeout(() => {
+        shellReadyResolversRef.current.delete(terminalId)
+        console.warn(`[Workbench] Shell for ${terminalId} did not produce output within ${maxWaitMs}ms`)
+        resolve(false)
+      }, maxWaitMs)
+
+      shellReadyResolversRef.current.set(terminalId, () => {
+        clearTimeout(timeout)
+        resolve(true)
+      })
+    })
+  }, [])
+
   const addTerminalTab = useCallback(() => {
     terminalCountRef.current += 1
     const newId = `terminal-${terminalCountRef.current}`
@@ -211,6 +236,18 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   // Handle terminal output to extract Expo URL and detect dev server status
   const handleTerminalOutput = useCallback((data: string) => {
+    // Mark shell as ready on first output (the shell prompt)
+    const currentTerminalId = activeTerminalIdRef.current
+    if (!terminalFirstOutputRef.current.has(currentTerminalId)) {
+      terminalFirstOutputRef.current.add(currentTerminalId)
+      console.log(`[Workbench] Shell first output detected for ${currentTerminalId}`)
+      const resolver = shellReadyResolversRef.current.get(currentTerminalId)
+      if (resolver) {
+        shellReadyResolversRef.current.delete(currentTerminalId)
+        resolver()
+      }
+    }
+
     // Helper function to strip ANSI escape codes (needed for colored terminal output)
     const stripAnsi = (str: string) => {
       return str
@@ -603,7 +640,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       setupInitiated: setupInitiatedRef.current,
       lastProjectId: lastProjectId.current,
       gitProjectPath,
-      hasSourceUrl: !!project?.sourceUrl
     })
 
     if (!project?.id) {
@@ -614,28 +650,16 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     // Check if this is a new project
     const isNewProject = project.id !== lastProjectId.current
 
-    // For git-based projects, wait for gitProjectPath to be available
-    const isGitBasedProject = !!project.sourceUrl
-    if (isGitBasedProject && !gitProjectPath) {
-      console.log('[Workbench] Git-based project, waiting for gitProjectPath...')
+    // All projects are managed by projectStore — wait for the path to be available
+    if (!gitProjectPath) {
+      console.log('[Workbench] Waiting for project path from projectStore...')
       return
     }
 
     // Check if we have files to work with
     const fileCount = Object.keys(files).length
-    // For git-based projects, we need files to be loaded from the clone
-    // For legacy projects, we can proceed with an empty project (files stored in DB might be empty)
-    if (fileCount === 0 && isGitBasedProject) {
-      console.log('[Workbench] Waiting for files to be loaded from git...')
-      return
-    }
-
-    // Don't auto-run while AI is still generating files (legacy non-git projects only)
-    // For git-based projects, template files are already in the repo, so we can start immediately
-    // AI will modify files after the dev server is running
-    // If we already have files (e.g., from template), proceed anyway
-    if (project.updateInProgress && !isGitBasedProject && fileCount === 0) {
-      console.log('[Workbench] AI is still generating files, waiting...')
+    if (fileCount === 0) {
+      console.log('[Workbench] Waiting for files to be loaded...')
       return
     }
 
@@ -666,11 +690,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     }
 
     // Prevent running multiple times for the same project
-    // Only skip if setup was initiated AND projectPath is set (setup actually completed)
-    const currentProjectPath = workbenchStore.projectPath.getState()
-    console.log('[Workbench] Setup check:', { setupInitiated: setupInitiatedRef.current, currentProjectPath, fileCount })
-    if (setupInitiatedRef.current && currentProjectPath) {
-      console.log('[Workbench] Setup already completed for this project, skipping')
+    // setupInitiatedRef is set synchronously (line 679) so it alone prevents re-entry,
+    // even before the async workbenchStore.projectPath.setState() has landed.
+    console.log('[Workbench] Setup check:', { setupInitiated: setupInitiatedRef.current, fileCount })
+    if (setupInitiatedRef.current) {
+      console.log('[Workbench] Setup already initiated for this project, skipping')
       return
     }
 
@@ -698,9 +722,14 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         console.log(`[Workbench] Terminal ${capturedTerminalId} is ready!`)
       }
 
-      // Add a delay to ensure shell has fully initialized
-      console.log('[Workbench] Waiting for shell to fully initialize...')
-      await new Promise(resolve => setTimeout(resolve, 500))
+      // Wait for shell to emit its first output (prompt) before sending commands
+      console.log('[Workbench] Waiting for shell prompt output...')
+      const shellReady = await waitForShellReady(capturedTerminalId, 5000)
+      if (shellReady) {
+        console.log(`[Workbench] Shell prompt detected for ${capturedTerminalId}`)
+      } else {
+        console.warn('[Workbench] Shell prompt not detected within timeout, proceeding anyway')
+      }
 
       // Check if terminal has exited
       if (terminalExitedRef.current.has(capturedTerminalId)) {
@@ -749,125 +778,30 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       // This ensures the Terminal component has mounted
       await new Promise(resolve => setTimeout(resolve, 300))
 
-      // If using git-based project path, skip temp directory creation
-      // Files are already in the cloned repo
-      if (gitProjectPath) {
-        console.log(`[Workbench] Using git project path: ${gitProjectPath}`)
-        tempDirPathRef.current = gitProjectPath
-        workbenchStore.projectPath.setState(gitProjectPath, true)
+      console.log(`[Workbench] Using project path: ${gitProjectPath}`)
+      tempDirPathRef.current = gitProjectPath
+      workbenchStore.projectPath.setState(gitProjectPath, true)
 
-        // Get launch config from project files, or auto-detect from package.json
-        let launchConfig = getLaunchConfig(files)
-        if (!launchConfig) {
-          // Try to detect from package.json (more accurate than database appType)
-          launchConfig = detectLaunchConfig(files)
-        }
-        if (!launchConfig) {
-          // Final fallback to database appType
-          console.log('[Workbench] Using fallback defaults for appType:', appType)
-          launchConfig = {
-            type: appType,
-            ...DEFAULT_CONFIGS[appType],
-          }
-        }
-        console.log('[Workbench] Using launch config:', launchConfig)
-
-        // Skip file writing, just run the dev server
-        await runDevServer(gitProjectPath, launchConfig)
-        return
+      // Get launch config from project files, or auto-detect from package.json
+      let launchConfig = getLaunchConfig(files)
+      if (!launchConfig) {
+        // Try to detect from package.json (more accurate than database appType)
+        launchConfig = detectLaunchConfig(files)
       }
-
-      // Legacy temp directory flow for non-git projects
-      try {
-        // Step 1: Create a temporary directory for this project
-        console.log(`[Workbench] Creating temp directory for project: ${project.id}`)
-        const createResult = await filesystem.createTempDir(project.id)
-
-        if (!createResult.success || !createResult.path) {
-          console.error('[Workbench] Failed to create temp directory:', createResult.error)
-          return
+      if (!launchConfig) {
+        // Final fallback to database appType
+        console.log('[Workbench] Using fallback defaults for appType:', appType)
+        launchConfig = {
+          type: appType,
+          ...DEFAULT_CONFIGS[appType],
         }
-
-        const tempPath = createResult.path
-        tempDirPathRef.current = tempPath
-        console.log(`[Workbench] Temp directory created: ${tempPath}`)
-
-        // Set the project path in the store for file saving
-        workbenchStore.projectPath.setState(tempPath, true)
-
-        // Step 2: Convert FileMap to array of file entries + clean package.json
-        // Use the snapshot to ensure we're using the same files that triggered this setup
-        const projectFiles = filesSnapshotRef.current || files
-        const fileEntries: Array<{ path: string; content: string }> = []
-        for (const [filePath, dirent] of Object.entries(projectFiles)) {
-          if (dirent?.type === 'file') {
-            let content = dirent.content
-
-            // Clean package.json by removing fake packages
-            if (filePath === 'package.json') {
-              try {
-                const packageJsonData = JSON.parse(content)
-                const fakePrefixes = ['convex/', '@auth0/auth0-react']
-
-                if (packageJsonData.dependencies) {
-                  for (const dep of Object.keys(packageJsonData.dependencies)) {
-                    if (fakePrefixes.some(prefix => dep.startsWith(prefix) || dep === prefix)) {
-                      delete packageJsonData.dependencies[dep]
-                      console.log(`[Workbench] Removed fake package: ${dep}`)
-                    }
-                  }
-                }
-
-                content = JSON.stringify(packageJsonData, null, 2)
-                console.log('[Workbench] Cleaned fake packages from package.json')
-              } catch (error) {
-                console.error('[Workbench] Failed to clean package.json:', error)
-              }
-            }
-
-            fileEntries.push({
-              path: filePath,
-              content,
-            })
-          }
-        }
-
-        if (fileEntries.length === 0) {
-          console.warn('[Workbench] No files to write - this should not happen')
-          return
-        }
-
-        // Step 3: Write all files to the temp directory
-        console.log(`[Workbench] Writing ${fileEntries.length} files to temp directory...`)
-        const writeResult = await filesystem.writeFiles(tempPath, fileEntries)
-
-        if (!writeResult.success) {
-          console.error('[Workbench] Failed to write files:', writeResult.error)
-          return
-        }
-        console.log(`[Workbench] Files written successfully`)
-
-        // Step 4: Get launch config and run dev server
-        let launchConfig = getLaunchConfig(projectFiles)
-        if (!launchConfig) {
-          // Try to detect from package.json
-          launchConfig = detectLaunchConfig(projectFiles)
-        }
-        if (!launchConfig) {
-          // Final fallback to database appType
-          console.log('[Workbench] Using fallback defaults for appType:', appType)
-          launchConfig = {
-            type: appType,
-            ...DEFAULT_CONFIGS[appType],
-          }
-        }
-        console.log('[Workbench] Using launch config:', launchConfig)
-
-        await runDevServer(tempPath, launchConfig)
-
-      } catch (error) {
-        console.error('[Workbench] Error setting up project:', error)
       }
+      console.log('[Workbench] Using launch config:', launchConfig)
+
+      // Cache launch config in projects.json (fire-and-forget)
+      window.conveyor?.localProjects?.updateLaunchConfig?.(project.id, launchConfig).catch(() => {})
+
+      await runDevServer(gitProjectPath, launchConfig)
     }
 
     setupProjectAndRunExpo().catch((error) => {
@@ -877,11 +811,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     // No cleanup needed here - cleanup happens when detecting a new project above
     // This ensures temp directory persists across tab switches and re-renders
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.id, project?.updateInProgress, Object.keys(files).length, gitProjectPath, project?.sourceUrl])
+  }, [project?.id, project?.updateInProgress, Object.keys(files).length, gitProjectPath])
   // Note: Using files.length instead of files object to detect when files are loaded
   // project?.updateInProgress is included so auto-run triggers when AI finishes generating
-  // gitProjectPath is included so git-based projects wait for the agent to clone
-  // sourceUrl is included so git-based projects wait until backend sets it
+  // gitProjectPath is included so projects wait for projectStore to resolve the path
   // activeTerminalId and waitForTerminalReady are captured at setup time
   // setupInitiatedRef prevents re-running after initial setup
 
@@ -934,6 +867,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // Cleanup temp directory and kill all terminal sessions when workbench unmounts (user exits to landing page)
   useEffect(() => {
     return () => {
+      // Always reset setup refs so the next mount can re-run auto-setup.
+      // This is safe even during StrictMode's quick remount.
+      setupInitiatedRef.current = false
+      devServerTerminalIdRef.current = null
+      terminalFirstOutputRef.current.clear()
+      shellReadyResolversRef.current.clear()
+
       // Don't cleanup if we haven't been mounted for at least 1 second
       // This prevents React StrictMode's double-mount from killing terminals
       const mountDuration = Date.now() - mountTimeRef.current
@@ -1069,6 +1009,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         ...DEFAULT_CONFIGS[appType],
       }
     }
+
+    // Cache launch config in projects.json (fire-and-forget)
+    window.conveyor?.localProjects?.updateLaunchConfig?.(project.id, launchConfig).catch(() => {})
 
     // Find a new available port
     const isWebProject = launchConfig.type === 'web'
