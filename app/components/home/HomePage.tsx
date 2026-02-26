@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   FolderOpen,
   Github,
@@ -58,6 +58,14 @@ function getProjectColor(title: string): string {
   return colors[Math.abs(hash) % colors.length]
 }
 
+const APP_GENERATION_MESSAGES = [
+  "Cooking your app idea...",
+  "Steaming pixels to perfection...",
+  "Gitifying your starter project...",
+  "Teaching components to behave...",
+  "Polishing screens and wiring APIs...",
+]
+
 export default function HomePage() {
   const navigate = useNavigate()
   const [prompt, setPrompt] = useState('')
@@ -84,6 +92,7 @@ export default function HomePage() {
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [backgroundProjectIds, setBackgroundProjectIds] = useState<Set<string>>(new Set())
+  const [generationMessageIndex, setGenerationMessageIndex] = useState(0)
 
   const projects = useStore(localProjectsStore.sortedProjects)
   const isLoadingProjects = useStore(localProjectsStore.isLoading)
@@ -129,6 +138,18 @@ export default function HomePage() {
         console.error('Failed to fetch providers:', error)
       })
   }, [])
+
+  // Rotate generation messages while creating
+  useEffect(() => {
+    if (!isCreating) {
+      setGenerationMessageIndex(0)
+      return
+    }
+    const interval = setInterval(() => {
+      setGenerationMessageIndex((i) => (i + 1) % APP_GENERATION_MESSAGES.length)
+    }, 1800)
+    return () => clearInterval(interval)
+  }, [isCreating])
 
   // Always show both Claude and Codex, with auth status from the API
   const visibleProviders: ProviderInfo[] = useMemo(() => {
@@ -260,6 +281,33 @@ export default function HomePage() {
 
       {/* Main Content */}
       <div className={`home-main ${projects.length === 0 && !isLoadingProjects ? 'empty-state' : ''}`}>
+        {/* Generation Overlay */}
+        <AnimatePresence>
+          {isCreating && (
+            <motion.div
+              className="home-generation-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25 }}
+            >
+              <motion.div
+                className="home-generation-card"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ duration: 0.25, delay: 0.05 }}
+              >
+                <Loader2 size={32} className="home-generation-spinner" />
+                <p className="home-generation-title">Creating your app</p>
+                <p className="home-generation-message">
+                  {APP_GENERATION_MESSAGES[generationMessageIndex]}
+                </p>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <div className="home-main-content">
           {/* Logo */}
           <motion.div
