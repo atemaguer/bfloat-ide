@@ -108,11 +108,16 @@ function getTemplatePath(appType: string): string {
 // ---------------------------------------------------------------------------
 
 async function copyDirectory(src: string, dest: string): Promise<void> {
+  const SKIP_ENTRIES = new Set(["node_modules", ".git", ".DS_Store"]);
   await fsp.mkdir(dest, { recursive: true });
 
   const entries = await fsp.readdir(src, { withFileTypes: true });
 
   for (const entry of entries) {
+    if (SKIP_ENTRIES.has(entry.name)) {
+      continue;
+    }
+
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
 
