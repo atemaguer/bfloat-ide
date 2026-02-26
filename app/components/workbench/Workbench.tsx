@@ -94,6 +94,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   // Dev server state
   const [previewUrl, setPreviewUrl] = useState<string>('')
+  const [previewRefreshKey, setPreviewRefreshKey] = useState(0)
+  const prevActiveTabRef = useRef(activeTab)
   const [serverStatus, setServerStatus] = useState<'starting' | 'running' | 'error'>('starting')
 
   // Shared state
@@ -122,6 +124,18 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const agentTerminalCountRef = useRef(0)
   const terminalReadyRef = useRef<Set<string>>(new Set())
   const terminalExitedRef = useRef<Set<string>>(new Set())
+
+  // Re-mount the preview iframe when switching back to the preview tab.
+  // Browsers may discard invisible cross-origin iframe content, causing a
+  // black screen when the tab becomes visible again.
+  useEffect(() => {
+    const wasAway = prevActiveTabRef.current !== 'preview'
+    prevActiveTabRef.current = activeTab
+
+    if (activeTab === 'preview' && wasAway && previewUrl) {
+      setPreviewRefreshKey(k => k + 1)
+    }
+  }, [activeTab, previewUrl])
 
   // Mark terminal as ready when it's initialized
   const handleTerminalReady = useCallback((terminalId: string) => {
@@ -867,7 +881,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       console.log('[Workbench] Chat streaming ended, refreshing preview...')
       // Small delay to ensure files are written to disk
       setTimeout(() => {
-        setPreviewUrl(`http://localhost:${actualPortRef.current}?t=${Date.now()}`)
+        setPreviewRefreshKey(k => k + 1)
       }, 500)
     }
   }, [chatStreaming, previewUrl])
@@ -948,8 +962,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   const handleRefresh = useCallback(() => {
     if (previewUrl) {
-      // Force reload by updating URL with timestamp
-      setPreviewUrl(`http://localhost:${actualPortRef.current}?t=${Date.now()}`)
+      setPreviewRefreshKey(k => k + 1)
     }
   }, [previewUrl])
 
@@ -1164,6 +1177,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   onLaunchIOSSimulator={handleLaunchIOSSimulator}
                   onLaunchAndroidEmulator={handleLaunchAndroidEmulator}
                   onScreenshot={handleScreenshot}
+                  refreshKey={previewRefreshKey}
                 />
               </div>
             </div>
@@ -1179,6 +1193,23 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                       deploymentUrl={convexDashboardConfig.deploymentUrl}
                       deploymentName={convexDashboardConfig.deploymentName}
                       isVisible={true}
+                      onStatusChange={(status) => {
+                        if (status !== 'error') return
+                        console.warn('[Workbench] Convex dashboard entered error state')
+                      }}
+                      onError={(reason) => {
+                        console.warn('[Workbench] Convex dashboard error:', reason)
+                      }}
+                      onOpenSettings={() => {
+                        workbenchStore.setActiveTab('settings')
+                      }}
+                      onOpenExternal={() => {
+                        window.open(
+                          `https://dashboard.convex.dev/d/${convexDashboardConfig.deploymentName}`,
+                          '_blank',
+                          'noopener,noreferrer'
+                        )
+                      }}
                     />
                   ) : (
                     <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4">
@@ -1261,6 +1292,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   onLaunchIOSSimulator={handleLaunchIOSSimulator}
                   onLaunchAndroidEmulator={handleLaunchAndroidEmulator}
                   onScreenshot={handleScreenshot}
+                  refreshKey={previewRefreshKey}
                 />
               </motion.div>
 
