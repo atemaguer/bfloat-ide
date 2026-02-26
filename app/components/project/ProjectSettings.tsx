@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 
 import { MobileOnly } from '@/app/components/common/FeatureGate'
 import type { Project } from '@/app/types/project'
-import { Input } from '@/app/components/ui/input'
+import { Input, Textarea } from '@/app/components/ui/input'
 import { Button } from '@/app/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/app/components/ui/dialog'
@@ -18,7 +18,7 @@ import {
   IntegrationCredentialsModal,
   type IntegrationSaveResult,
 } from '@/app/components/settings/sections/IntegrationCredentialsModal'
-import { secrets as secretsApi } from '@/app/api/sidecar'
+import { secrets as secretsApi, projectFiles } from '@/app/api/sidecar'
 import { isConvexSecretKey } from '@/app/lib/integrations/secrets'
 import { detectConvexBootstrap, getConvexSecretStatusFromSecrets } from '@/app/lib/integrations/convex'
 import type { ConnectIntegrationId } from '@/app/lib/integrations/credentials'
@@ -41,6 +41,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [iosAppId, setIosAppId] = useState(project.iosAppId || '')
   const [androidPackageName, setAndroidPackageName] = useState(project.androidPackageName || '')
   const [isPublic, setIsPublic] = useState(project.isPublic || false)
+  const [agentInstructions, setAgentInstructions] = useState(project.agentInstructions || '')
 
   // App icon state
   const [iosAppIcon, setIosAppIcon] = useState<File | null>(null)
@@ -78,6 +79,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     setIosAppId(project.iosAppId || '')
     setAndroidPackageName(project.androidPackageName || '')
     setIsPublic(project.isPublic || false)
+    setAgentInstructions(project.agentInstructions || '')
     setIosAppIconPreview(project.iosAppIconUrl || null)
     setAndroidAppIconPreview(project.androidAppIconUrl || null)
   }, [project])
@@ -299,9 +301,14 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         iosAppId,
         androidPackageName,
         isPublic,
+        agentInstructions,
       }
 
       await localProjectsStore.update(project.id, updates)
+      const synced = await projectFiles.syncAgentInstructions(agentInstructions)
+      if (!synced) {
+        toast.error('Saved settings, but failed to sync AGENTS.md/CLAUDE.md')
+      }
 
       const updatedProject: Project = { ...project, ...updates, updatedAt: new Date().toISOString() }
 
@@ -427,6 +434,20 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                   />
                 </div>
               </MobileOnly>
+            </div>
+
+            <div className="settings-section">
+              <h3>Agent Instructions</h3>
+              <div className="settings-field">
+                <label htmlFor="agentInstructions">Shared Instructions for Claude + Codex</label>
+                <Textarea
+                  id="agentInstructions"
+                  value={agentInstructions}
+                  onChange={(e) => setAgentInstructions(e.target.value)}
+                  placeholder="Add project-specific instructions for both agents..."
+                  className="min-h-[140px] font-mono text-xs"
+                />
+              </div>
             </div>
 
             <MobileOnly>

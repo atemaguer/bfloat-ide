@@ -1407,6 +1407,21 @@ export const projectFilesBridge = {
     }
   },
 
+  syncAgentInstructions: async (agentInstructions?: string): Promise<boolean> => {
+    const pid = _activeProjectId
+    if (!pid) return false
+    try {
+      await getSidecarApiSync().http.post<{ success: boolean }>(
+        `/api/project-files/${pid}/sync-agent-instructions`,
+        { agentInstructions },
+      )
+      return true
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.syncAgentInstructions error:", err)
+      return false
+    }
+  },
+
   // SSE file change events will be added in a future iteration.
   onFileChange: (_callback: (event: FileChangeEvent) => void): UnsubscribeFn => {
     return () => {}
