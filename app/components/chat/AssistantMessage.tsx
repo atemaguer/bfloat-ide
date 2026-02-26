@@ -24,6 +24,7 @@ import { StripeSetupBanner } from './StripeSetupBanner'
 import { RevenueCatSetupBanner } from './RevenueCatSetupBanner'
 import { isClaudeAuthError } from './ClaudeAuthBanner'
 import type { MessagePart } from '@/app/types/project'
+import type { ConvexIntegrationStage } from '@/app/lib/integrations/convex'
 import type { ToolAction } from './types'
 import { convertToolPartToAction } from './types'
 
@@ -84,7 +85,8 @@ interface AssistantMessageProps {
   onIntegrationUse?: (id: string) => void
   onClaudeReconnect?: () => void
   onClaudeAuthError?: () => void
-  isConvexConnected?: boolean
+  convexStage?: ConvexIntegrationStage
+  convexMissingKey?: 'url' | 'deploy_key' | null
   isFirebaseConnected?: boolean
   isStripeConnected?: boolean
   isRevenueCatConnected?: boolean
@@ -224,7 +226,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   onIntegrationUse,
   onClaudeReconnect,
   onClaudeAuthError,
-  isConvexConnected,
+  convexStage = 'disconnected',
+  convexMissingKey,
   isFirebaseConnected,
   isStripeConnected,
   isRevenueCatConnected,
@@ -297,7 +300,8 @@ export const AssistantMessage = memo(function AssistantMessage({
           return (
             <ConvexSetupBanner
               key={`convex-setup-${index}`}
-              isConnected={!!isConvexConnected}
+              stage={convexStage}
+              missingKey={convexMissingKey}
               onConnect={() => onIntegrationConnect?.('convex')}
               onUse={() => onIntegrationUse?.('convex')}
             />

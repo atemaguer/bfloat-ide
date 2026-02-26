@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Brain } from 'lucide-react'
 
 import type { ChatMessage } from '@/app/types/project'
+import type { ConvexIntegrationStage } from '@/app/lib/integrations/convex'
 import { workbenchStore } from '@/app/stores/workbench'
 import { AssistantMessage } from './AssistantMessage'
 import { UserMessage } from './UserMessage'
@@ -22,7 +23,8 @@ interface MessagesProps {
   onIntegrationUse?: (id: string) => void
   onClaudeReconnect?: () => void
   onClaudeAuthError?: () => void
-  isConvexConnected?: boolean
+  convexStage?: ConvexIntegrationStage
+  convexMissingKey?: 'url' | 'deploy_key' | null
   isFirebaseConnected?: boolean
   isStripeConnected?: boolean
   isRevenueCatConnected?: boolean
@@ -46,7 +48,8 @@ export const Messages = memo(function Messages({
   onIntegrationUse,
   onClaudeReconnect,
   onClaudeAuthError,
-  isConvexConnected,
+  convexStage,
+  convexMissingKey,
   isFirebaseConnected,
   isStripeConnected,
   isRevenueCatConnected,
@@ -173,10 +176,11 @@ export const Messages = memo(function Messages({
                 onAskUserSubmit={onAskUserSubmit}
                 onIntegrationConnect={onIntegrationConnect}
                 onIntegrationUse={onIntegrationUse}
-                onClaudeReconnect={onClaudeReconnect}
-                onClaudeAuthError={onClaudeAuthError}
-                isConvexConnected={isConvexConnected}
-                isFirebaseConnected={isFirebaseConnected}
+                  onClaudeReconnect={onClaudeReconnect}
+                  onClaudeAuthError={onClaudeAuthError}
+                  convexStage={convexStage}
+                  convexMissingKey={convexMissingKey}
+                  isFirebaseConnected={isFirebaseConnected}
                 isStripeConnected={isStripeConnected}
                 isRevenueCatConnected={isRevenueCatConnected}
                 isClaudeAuthenticated={isClaudeAuthenticated}

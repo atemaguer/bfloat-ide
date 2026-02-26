@@ -10,8 +10,7 @@ export type PendingIntegrationId = 'firebase' | 'convex' | 'stripe' | 'revenueca
 
 export interface PendingIntegrationConnectRequest {
   integrationId: PendingIntegrationId
-  suggestedKey: string
-  source?: 'chat'
+  source?: 'chat' | 'workbench'
 }
 
 // Store a reference to the workbench's runCommand function

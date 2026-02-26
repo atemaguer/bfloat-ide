@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react'
+import { useCallback, useEffect, useRef, useState, useImperativeHandle, forwardRef, useMemo } from 'react'
 import { useStore } from '@/app/hooks/useStore'
 import { motion } from 'framer-motion'
 import { ChevronDown, ChevronUp, Terminal as TerminalIcon, Plus, X } from 'lucide-react'
@@ -16,7 +16,12 @@ import { ConvexIntegration } from '@/app/components/integrations/ConvexIntegrati
 import { ProjectSettings } from '@/app/components/project/ProjectSettings'
 import { PaymentsOverview } from '@/app/components/payments/PaymentsOverview'
 import { AppTypeProvider } from '@/app/contexts/AppTypeContext'
-import { terminal, filesystem, aiAgent, projectSync, projectFiles } from '@/app/api/sidecar'
+import { terminal, filesystem, aiAgent, projectSync, projectFiles, secrets as secretsApi } from '@/app/api/sidecar'
+import {
+  getConvexDashboardConfigFromSecrets,
+  getConvexSecretStatusFromSecrets,
+  type SecretEntry,
+} from '@/app/lib/integrations/convex'
 import './styles.css'
 
 // Export interface for external access to workbench terminal commands
@@ -63,6 +68,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const unsavedFiles = useStore(workbenchStore.unsavedFiles)
   const files = useStore(workbenchStore.files)
   const chatStreaming = useStore(workbenchStore.chatStreaming)
+  const secretsVersion = useStore(workbenchStore.secretsVersion)
 
   // Raw app type from database - normalization happens in AppTypeContext
   const rawAppType = project.appType || 'mobile'
@@ -92,6 +98,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   // Shared state
   const [expoUrl, setExpoUrl] = useState('')
+  const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
   const terminalOutputBuffer = useRef('')
   const devServerTerminalIdRef = useRef<string | null>(null)
 
@@ -1065,6 +1072,46 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     }
   }, [])
 
+  // Keep secrets in sync so Convex dashboard state reflects current credentials.
+  useEffect(() => {
+    if (!project.id) {
+      setProjectSecrets([])
+      return
+    }
+
+    let isCancelled = false
+
+    secretsApi
+      .readSecrets(project.id)
+      .then((result) => {
+        if (isCancelled || result.error || !result.secrets) return
+        setProjectSecrets(result.secrets)
+      })
+      .catch(() => {})
+
+    return () => {
+      isCancelled = true
+    }
+  }, [project.id, secretsVersion, activeTab])
+
+  const convexSecretStatus = useMemo(
+    () => getConvexSecretStatusFromSecrets(projectSecrets, appType),
+    [projectSecrets, appType]
+  )
+
+  const convexDashboardConfig = useMemo(() => {
+    const fromSecrets = getConvexDashboardConfigFromSecrets(projectSecrets, appType)
+    if (fromSecrets) return fromSecrets
+    if (convexDeploymentKey && convexUrl && convexDeployment) {
+      return {
+        deployKey: convexDeploymentKey,
+        deploymentUrl: convexUrl,
+        deploymentName: convexDeployment,
+      }
+    }
+    return null
+  }, [projectSecrets, appType, convexDeploymentKey, convexUrl, convexDeployment])
+
 
   // Calculate slide position based on tab
   const tabOrder = ['editor', 'preview', 'database', 'payments', 'settings']
@@ -1126,22 +1173,27 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               {/* Database Tab */}
               {activeTab === 'database' && (
                 <div className="workbench-tab-panel settings">
-                  {convexDeploymentKey && convexUrl && convexDeployment ? (
+                  {convexDashboardConfig ? (
                     <ConvexDashboard
-                      deployKey={convexDeploymentKey}
-                      deploymentUrl={convexUrl}
-                      deploymentName={convexDeployment}
+                      deployKey={convexDashboardConfig.deployKey}
+                      deploymentUrl={convexDashboardConfig.deploymentUrl}
+                      deploymentName={convexDashboardConfig.deploymentName}
                       isVisible={true}
                     />
                   ) : (
-                    <div className="flex items-center justify-center h-full text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4">
+                      {convexSecretStatus.hasUrl && !convexSecretStatus.hasDeployKey && (
+                        <div className="max-w-md px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 text-sm">
+                          Convex URL found, but `CONVEX_DEPLOY_KEY` is missing. Add it in Settings to load the Convex dashboard.
+                        </div>
+                      )}
                       <ConvexIntegration
                         isConnected={hasConvexIntegration || false}
                         onConnect={() => {
                           workbenchStore.setActiveTab('settings')
                           workbenchStore.setPendingIntegrationConnect({
                             integrationId: 'convex',
-                            suggestedKey: isWebApp ? 'NEXT_PUBLIC_CONVEX_URL' : 'EXPO_PUBLIC_CONVEX_URL',
+                            source: 'workbench',
                           })
                         }}
                         onDisconnect={async () => {

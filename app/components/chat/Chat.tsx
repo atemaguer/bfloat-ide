@@ -34,6 +34,13 @@ import {
   detectIntegrationSecretsPresence,
   type IntegrationSecretsPresence,
 } from '@/app/lib/integrations/secrets'
+import {
+  detectConvexBootstrap,
+  getConvexEnvVarsForSession,
+  getConvexSecretStatusFromSecrets,
+  type ConvexIntegrationStage,
+  type SecretEntry,
+} from '@/app/lib/integrations/convex'
 import toast from 'react-hot-toast'
 import './styles.css'
 
@@ -80,7 +87,6 @@ export function Chat({
   autoStart = false,
   initialSessionId,
   onSessionIdChange,
-  projectHasConvex = false,
   projectHasFirebase = false,
   projectHasStripe = false,
   projectHasRevenuecat = false,
@@ -132,11 +138,32 @@ export function Chat({
     stripe: false,
     revenuecat: false,
   })
+  const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
+  const files = useStore(workbenchStore.files)
+  const convexSecretStatus = useMemo(
+    () => getConvexSecretStatusFromSecrets(projectSecrets, normalizedAppType),
+    [projectSecrets, normalizedAppType]
+  )
+
+  const convexStage: ConvexIntegrationStage = useMemo(() => {
+    const convexBootstrapped = detectConvexBootstrap(files)
+    if (!convexSecretStatus.isConfigured) return 'disconnected'
+    if (convexBootstrapped) return 'ready'
+    if (convexProvisioned) return 'setting_up'
+    return 'connected'
+  }, [convexSecretStatus.isConfigured, files, convexProvisioned])
+
+  // Clear in-progress flag once Convex bootstrap artifacts are present.
+  useEffect(() => {
+    if (convexProvisioned && detectConvexBootstrap(files)) {
+      setConvexProvisioned(false)
+    }
+  }, [convexProvisioned, files])
 
   const integrationStatus = useMemo(
     () => ({
       firebase: projectHasFirebase || firebaseProvisioned || hasIntegrationSecrets.firebase,
-      convex: projectHasConvex || convexProvisioned || hasIntegrationSecrets.convex,
+      convex: convexStage === 'ready',
       stripe: projectHasStripe || hasIntegrationSecrets.stripe,
       revenuecat: projectHasRevenuecat || revenuecatProvisioned || hasIntegrationSecrets.revenuecat,
     }),
@@ -144,9 +171,7 @@ export function Chat({
       projectHasFirebase,
       firebaseProvisioned,
       hasIntegrationSecrets.firebase,
-      projectHasConvex,
-      convexProvisioned,
-      hasIntegrationSecrets.convex,
+      convexStage,
       projectHasStripe,
       hasIntegrationSecrets.stripe,
       projectHasRevenuecat,
@@ -243,6 +268,7 @@ export function Chat({
       .then((result) => {
         if (result.error || !result.secrets) return
 
+        setProjectSecrets(result.secrets)
         const secretKeys = result.secrets.map((s) => s.key)
         setHasIntegrationSecrets(detectIntegrationSecretsPresence(secretKeys, normalizedAppType))
       })
@@ -293,28 +319,12 @@ export function Chat({
       stripe: 'stripe-setup-prompt',
       revenuecat: 'revenuecat-setup-prompt',
     }
-    const suggestedKeyByIntegration: Record<PendingIntegrationId, string> = {
-      firebase:
-        normalizedAppType === 'web'
-          ? 'NEXT_PUBLIC_FIREBASE_API_KEY'
-          : 'EXPO_PUBLIC_FIREBASE_API_KEY',
-      convex:
-        normalizedAppType === 'web'
-          ? 'NEXT_PUBLIC_CONVEX_URL'
-          : 'EXPO_PUBLIC_CONVEX_URL',
-      stripe:
-        normalizedAppType === 'web'
-          ? 'NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY'
-          : 'EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY',
-      revenuecat: 'EXPO_PUBLIC_REVENUECAT_API_KEY',
-    }
 
     const promptType = setupPromptByIntegration[id]
     workbenchStore.setActiveTab('settings')
-    if (id in suggestedKeyByIntegration) {
+    if (id === 'firebase' || id === 'convex' || id === 'stripe' || id === 'revenuecat') {
       workbenchStore.setPendingIntegrationConnect({
         integrationId: id as PendingIntegrationId,
-        suggestedKey: suggestedKeyByIntegration[id as PendingIntegrationId],
         source: 'chat',
       })
     }
@@ -340,7 +350,7 @@ export function Chat({
 
       return [...prev, guidanceMessage]
     })
-  }, [normalizedAppType])
+  }, [])
 
   const handleIntegrationUse = useCallback(
     async (id: string) => {
@@ -354,6 +364,19 @@ export function Chat({
         setFirebaseProvisioned(true)
       }
       if (id === 'convex') {
+        if (!convexSecretStatus.isConfigured) {
+          workbenchStore.setActiveTab('settings')
+          workbenchStore.setPendingIntegrationConnect({
+            integrationId: 'convex',
+            source: 'chat',
+          })
+          return
+        }
+
+        const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
+        if (Object.keys(pendingEnvVars).length > 0) {
+          workbenchStore.setPendingEnvVars(pendingEnvVars)
+        }
         setConvexProvisioned(true)
       }
       if (id === 'revenuecat') {
@@ -368,7 +391,7 @@ export function Chat({
         }, 100)
       }
     },
-    []
+    [convexSecretStatus]
   )
 
   // Convert session message to ChatMessage format
@@ -1109,9 +1132,7 @@ export function Chat({
       // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
       if (
         /\bconvex\b/i.test(text) &&
-        !projectHasConvex &&
-        !convexProvisioned &&
-        !hasIntegrationSecrets.convex &&
+        convexStage === 'disconnected' &&
         !/\/convex-setup\b/i.test(text)
       ) {
         const guidanceMessage: ChatMessage = {
@@ -1183,9 +1204,7 @@ export function Chat({
       localAgent,
       scrollToBottom,
       projectPath,
-      projectHasConvex,
-      convexProvisioned,
-      hasIntegrationSecrets.convex,
+      convexStage,
       projectHasFirebase,
       firebaseProvisioned,
       hasIntegrationSecrets.firebase,
@@ -1351,6 +1370,23 @@ export function Chat({
     })
     if (pendingPrompt && !isStreaming && projectPath) {
       console.log('[Chat] Sending pending prompt:', pendingPrompt)
+      if (/\/convex-setup\b/i.test(pendingPrompt)) {
+        if (!convexSecretStatus.isConfigured) {
+          workbenchStore.setActiveTab('settings')
+          workbenchStore.setPendingIntegrationConnect({
+            integrationId: 'convex',
+            source: 'chat',
+          })
+          workbenchStore.clearPendingPrompt()
+          return
+        }
+
+        const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
+        if (Object.keys(pendingEnvVars).length > 0) {
+          workbenchStore.setPendingEnvVars(pendingEnvVars)
+        }
+        setConvexProvisioned(true)
+      }
       handleSubmit(pendingPrompt)
       workbenchStore.clearPendingPrompt()
     } else {
@@ -1360,7 +1396,7 @@ export function Chat({
         hasProjectPath: !!projectPath,
       })
     }
-  }, [pendingPrompt, isStreaming, projectPath, handleSubmit])
+  }, [pendingPrompt, isStreaming, projectPath, handleSubmit, convexSecretStatus])
 
   // Extract todos from messages (find most recent TodoWrite)
   const todos = useMemo(() => {
@@ -1486,7 +1522,8 @@ export function Chat({
             onIntegrationUse={handleIntegrationUse}
             onClaudeReconnect={handleClaudeReconnect}
             onClaudeAuthError={handleClaudeAuthError}
-            isConvexConnected={integrationStatus.convex}
+            convexStage={convexStage}
+            convexMissingKey={convexSecretStatus.missingKey}
             isFirebaseConnected={integrationStatus.firebase}
             isStripeConnected={integrationStatus.stripe}
             isRevenueCatConnected={integrationStatus.revenuecat}

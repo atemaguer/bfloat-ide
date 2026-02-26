@@ -14,8 +14,14 @@ import { localProjectsStore } from '@/app/stores/local-projects'
 import { useStore } from '@/app/hooks/useStore'
 import { workbenchStore } from '@/app/stores/workbench'
 import { SecretModal } from '@/app/components/settings/sections/SecretModal'
+import {
+  IntegrationCredentialsModal,
+  type IntegrationSaveResult,
+} from '@/app/components/settings/sections/IntegrationCredentialsModal'
 import { secrets as secretsApi } from '@/app/api/sidecar'
 import { isConvexSecretKey } from '@/app/lib/integrations/secrets'
+import { detectConvexBootstrap, getConvexSecretStatusFromSecrets } from '@/app/lib/integrations/convex'
+import type { ConnectIntegrationId } from '@/app/lib/integrations/credentials'
 import './styles.css'
 
 interface ProjectSettingsProps {
@@ -54,8 +60,15 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [isSecretModalOpen, setIsSecretModalOpen] = useState(false)
   const [editingSecret, setEditingSecret] = useState<Secret | null>(null)
   const [secretModalDefaultKey, setSecretModalDefaultKey] = useState<string | null>(null)
+  const [isIntegrationModalOpen, setIsIntegrationModalOpen] = useState(false)
+  const [activeIntegrationId, setActiveIntegrationId] = useState<ConnectIntegrationId | null>(null)
   const [deletingSecretKey, setDeletingSecretKey] = useState<string | null>(null)
   const pendingIntegrationConnect = useStore(workbenchStore.pendingIntegrationConnect)
+  const files = useStore(workbenchStore.files)
+  const normalizedAppType: 'web' | 'mobile' =
+    project.appType === 'nextjs' || project.appType === 'vite' || project.appType === 'node' || project.appType === 'web'
+      ? 'web'
+      : 'mobile'
 
   // Sync form with updated project prop
   useEffect(() => {
@@ -110,24 +123,14 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   }
 
   // Handle "Connect integration" requests from chat/workbench by opening
-  // Development Variables modal with a relevant key prefilled.
+  // the integration credentials modal with all required fields.
   useEffect(() => {
     if (!pendingIntegrationConnect || isLoadingSecrets) return
 
-    const { suggestedKey } = pendingIntegrationConnect
-    const existingSecret = secrets.find((s) => s.key === suggestedKey)
-
-    if (existingSecret) {
-      setEditingSecret(existingSecret)
-      setSecretModalDefaultKey(null)
-    } else {
-      setEditingSecret(null)
-      setSecretModalDefaultKey(suggestedKey)
-    }
-
-    setIsSecretModalOpen(true)
+    setActiveIntegrationId(pendingIntegrationConnect.integrationId)
+    setIsIntegrationModalOpen(true)
     workbenchStore.clearPendingIntegrationConnect()
-  }, [pendingIntegrationConnect, isLoadingSecrets, secrets])
+  }, [pendingIntegrationConnect, isLoadingSecrets])
 
   const handleSaveSecret = async (key: string, value: string) => {
     if (!project.id) return
@@ -145,11 +148,82 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     await loadSecrets()
     workbenchStore.bumpSecretsVersion()
 
-    // Auto-run Convex setup when URL secret is newly added or changed.
-    if (isConvexSecretKey(key) && nextValue && isChanged) {
-      workbenchStore.triggerChatPrompt('Use the /convex-setup skill to set up Convex backend integration for this project')
-      toast.success('Convex URL saved. Starting Convex setup in chat...')
+    // Auto-run Convex setup only when URL + deploy key are both present.
+    if (isConvexSecretKey(key) && isChanged) {
+      const nextSecrets = secrets.filter((secret) => secret.key !== key)
+      if (nextValue) {
+        nextSecrets.push({ key, value: nextValue })
+      }
+
+      const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
+      if (!convexSecrets.hasUrl) {
+        toast('Add your Convex URL first before running setup.', { icon: 'ℹ️' })
+      } else if (!convexSecrets.hasDeployKey) {
+        toast('Convex URL saved. Add CONVEX_DEPLOY_KEY to run setup.', { icon: 'ℹ️' })
+      } else if (!detectConvexBootstrap(files)) {
+        workbenchStore.triggerChatPrompt('Use the /convex-setup skill to set up Convex backend integration for this project')
+        toast.success('Convex credentials saved. Starting Convex setup in chat...')
+      } else {
+        toast.success('Convex credentials updated.')
+      }
     }
+  }
+
+  const handleSaveIntegrationSecrets = async (
+    entries: Array<{ key: string; value: string }>
+  ): Promise<IntegrationSaveResult> => {
+    if (!project.id || !activeIntegrationId) {
+      return {
+        successes: [],
+        failures: entries.map((entry) => ({
+          key: entry.key,
+          error: 'Project is not ready',
+        })),
+      }
+    }
+
+    const successes: string[] = []
+    const failures: Array<{ key: string; error: string }> = []
+
+    for (const entry of entries) {
+      const result = await secretsApi.setSecret(project.id, entry.key, entry.value)
+      if (result.success) {
+        successes.push(entry.key)
+      } else {
+        failures.push({
+          key: entry.key,
+          error: result.error || 'Failed to save',
+        })
+      }
+    }
+
+    if (successes.length > 0) {
+      await loadSecrets()
+      workbenchStore.bumpSecretsVersion()
+    }
+
+    if (activeIntegrationId === 'convex' && successes.length > 0) {
+      const result = await secretsApi.readSecrets(project.id)
+      const nextSecrets = result.secrets || []
+      const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
+
+      if (!convexSecrets.hasUrl) {
+        toast('Add your Convex URL first before running setup.', { icon: 'ℹ️' })
+      } else if (!convexSecrets.hasDeployKey) {
+        toast('Convex URL saved. Add CONVEX_DEPLOY_KEY to run setup.', { icon: 'ℹ️' })
+      } else if (!detectConvexBootstrap(files)) {
+        workbenchStore.triggerChatPrompt('Use the /convex-setup skill to set up Convex backend integration for this project')
+        toast.success('Convex credentials saved. Starting Convex setup in chat...')
+      } else {
+        toast.success('Convex credentials updated.')
+      }
+    }
+
+    if (successes.length > 0 && activeIntegrationId !== 'convex') {
+      toast.success('Integration credentials saved.')
+    }
+
+    return { successes, failures }
   }
 
   const handleDeleteSecret = async (key: string) => {
@@ -607,6 +681,14 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         existingSecrets={secrets}
         editingSecret={editingSecret}
         defaultKey={secretModalDefaultKey}
+      />
+      <IntegrationCredentialsModal
+        open={isIntegrationModalOpen}
+        onOpenChange={setIsIntegrationModalOpen}
+        integrationId={activeIntegrationId}
+        appType={normalizedAppType}
+        existingSecrets={secrets}
+        onSaveMany={handleSaveIntegrationSecrets}
       />
     </div>
   )

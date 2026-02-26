@@ -1,3 +1,6 @@
+import { getConvexSecretStatusFromKeys } from '@/app/lib/integrations/convex'
+import { hasRequiredSecrets, type NormalizedAppType } from '@/app/lib/integrations/credentials'
+
 export type IntegrationSecretsPresence = {
   firebase: boolean
   convex: boolean
@@ -5,9 +8,7 @@ export type IntegrationSecretsPresence = {
   revenuecat: boolean
 }
 
-export type NormalizedAppType = 'web' | 'mobile'
-
-const CONVEX_SECRET_KEYS = ['CONVEX_URL', 'NEXT_PUBLIC_CONVEX_URL', 'EXPO_PUBLIC_CONVEX_URL'] as const
+const CONVEX_SECRET_KEYS = ['CONVEX_URL', 'NEXT_PUBLIC_CONVEX_URL', 'EXPO_PUBLIC_CONVEX_URL', 'CONVEX_DEPLOY_KEY'] as const
 
 export function isConvexSecretKey(key: string): boolean {
   return CONVEX_SECRET_KEYS.includes(key as (typeof CONVEX_SECRET_KEYS)[number])
@@ -17,24 +18,12 @@ export function detectIntegrationSecretsPresence(
   secretKeys: string[],
   appType: NormalizedAppType
 ): IntegrationSecretsPresence {
-  const firebasePrefix = appType === 'web' ? 'NEXT_PUBLIC_FIREBASE_' : 'EXPO_PUBLIC_FIREBASE_'
-  const hasFirebaseSecrets =
-    secretKeys.includes(`${firebasePrefix}API_KEY`) &&
-    secretKeys.includes(`${firebasePrefix}PROJECT_ID`)
-
-  const convexUrlKey = appType === 'web' ? 'NEXT_PUBLIC_CONVEX_URL' : 'EXPO_PUBLIC_CONVEX_URL'
-  const hasConvexSecrets = secretKeys.includes('CONVEX_URL') || secretKeys.includes(convexUrlKey)
-
-  const stripeKey =
-    appType === 'web' ? 'NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY' : 'EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY'
-  const hasStripeSecrets = secretKeys.includes(stripeKey)
-
-  const hasRevenuecatSecrets = secretKeys.includes('EXPO_PUBLIC_REVENUECAT_API_KEY')
+  const hasConvexSecrets = getConvexSecretStatusFromKeys(secretKeys, appType).isConfigured
 
   return {
-    firebase: hasFirebaseSecrets,
+    firebase: hasRequiredSecrets(secretKeys, 'firebase', appType),
     convex: hasConvexSecrets,
-    stripe: hasStripeSecrets,
-    revenuecat: hasRevenuecatSecrets,
+    stripe: hasRequiredSecrets(secretKeys, 'stripe', appType),
+    revenuecat: hasRequiredSecrets(secretKeys, 'revenuecat', appType),
   }
 }
