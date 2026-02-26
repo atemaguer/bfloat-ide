@@ -19,6 +19,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
+import bfloatIcon from '@/app/assets/plain-icon-dark.png'
 import { IPhoneFrame } from './IPhoneFrame'
 import { Button } from '../ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
@@ -764,19 +765,27 @@ export function Preview(props: PreviewProps) {
                   )}
 
                   {/* QR Code */}
-                  <div className={`${isTightMobilePreview ? 'p-2' : 'p-4'} bg-white rounded-xl`}>
+                  <div className={`${isTightMobilePreview ? 'p-2' : 'p-4'} bg-white rounded-xl relative`}>
                     <QRCodeSVG
                       value={props.expoUrl}
                       size={qrSize}
-                      level="M"
+                      level="H"
                       includeMargin={false}
-                      imageSettings={{
-                        src: 'https://expo.dev/static/brand/expo-go-app-icon.png',
-                        height: Math.round(qrSize * 0.2),
-                        width: Math.round(qrSize * 0.2),
-                        excavate: true,
-                      }}
                     />
+                    <div
+                      className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                    >
+                      <div
+                        className="bg-black rounded-md flex items-center justify-center"
+                        style={{
+                          width: Math.round(qrSize * 0.17),
+                          height: Math.round(qrSize * 0.17),
+                          padding: Math.round(qrSize * 0.025),
+                        }}
+                      >
+                        <img src={bfloatIcon} alt="bfloat" className="w-full h-full" />
+                      </div>
+                    </div>
                   </div>
 
                   {/* URL with copy button */}
