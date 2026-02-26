@@ -66,6 +66,11 @@ interface ClaudeAuthSection {
   type: 'claude_auth'
 }
 
+interface ReasoningSection {
+  type: 'reasoning'
+  content: string
+}
+
 // All section types
 type Section =
   | TextSection
@@ -76,6 +81,7 @@ type Section =
   | StripeSetupSection
   | RevenueCatSetupSection
   | ClaudeAuthSection
+  | ReasoningSection
 
 interface AssistantMessageProps {
   parts: MessagePart[]
@@ -192,6 +198,9 @@ function parseIntoSections(parts: MessagePart[]): Section[] {
       if (action) {
         currentToolGroup.push(action)
       }
+    } else if (part.type === 'reasoning' && 'text' in part && part.text) {
+      flushToolGroup()
+      rawSections.push({ type: 'reasoning', content: part.text })
     } else if (part.type === 'text' && 'text' in part && part.text) {
       // Strip <suggestions> tags (complete or partial during streaming)
       const text = part.text.replace(/<suggestions[\s\S]*$/, '').trim()
@@ -281,6 +290,14 @@ export const AssistantMessage = memo(function AssistantMessage({
           return (
             <div key={index} className="assistant-text">
               <Markdown isAnimating={isLastSection && !!isStreaming}>{section.content}</Markdown>
+            </div>
+          )
+        }
+
+        if (section.type === 'reasoning') {
+          return (
+            <div key={index} className="assistant-reasoning">
+              {section.content}
             </div>
           )
         }

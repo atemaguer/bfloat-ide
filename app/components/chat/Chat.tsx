@@ -44,6 +44,15 @@ import {
 import toast from 'react-hot-toast'
 import './styles.css'
 
+const FRONTEND_DESIGN_SKILL_PREFIX =
+  'Use the /frontend-design skill for this request. If the project has an established design system, preserve it and adapt within it.'
+
+function withFrontendDesignSkillPrompt(prompt: string): string {
+  if (/\b\/frontend-design\b/i.test(prompt)) {
+    return prompt
+  }
+  return `${FRONTEND_DESIGN_SKILL_PREFIX}\n\n${prompt}`
+}
 
 // Image data passed from HomePage via navigation state
 interface InitialImageData {
@@ -116,6 +125,8 @@ export function Chat({
   // For local-first mode, session data is stored locally by CLI tools
   // No backend fetch needed - just use the provided session ID
   const resolvedInitialSessionId = initialSessionId ?? null
+  const isNewProjectAtMount = useRef(autoStart && resolvedInitialSessionId === null)
+  const forcedFrontendDesignSessionIdRef = useRef<string | null>(null)
 
   // State
   const [input, setInput] = useState('')
@@ -614,6 +625,17 @@ export function Chat({
     workbenchStore.pendingScreenshot.setState(null, true)
   }, [])
 
+  const shouldForceFrontendDesignForCurrentSession = useCallback(() => {
+    if (!isNewProjectAtMount.current) return false
+
+    const forcedSessionId = forcedFrontendDesignSessionIdRef.current
+    if (forcedSessionId === null) {
+      // Before the first session ID is assigned, we are still in the first session.
+      return agentSessionId === null
+    }
+    return agentSessionId === forcedSessionId
+  }, [agentSessionId])
+
   // Handle session ID changes - update local state and persist to projects.json
   // For local-first mode, sessions are stored in ~/.bfloat-ide/projects.json
   const handleSessionIdChange = useCallback(
@@ -622,6 +644,11 @@ export function Chat({
       console.log('[Chat] NEW AGENT SESSION ID RECEIVED:', sessionId)
       console.log('[Chat] Provider:', provider)
       console.log('[Chat] ========================================')
+
+      if (isNewProjectAtMount.current && forcedFrontendDesignSessionIdRef.current === null) {
+        forcedFrontendDesignSessionIdRef.current = sessionId
+      }
+
       setAgentSessionId(sessionId)
 
       // Mark session as loaded so the load-session effect won't re-run
@@ -812,7 +839,7 @@ export function Chat({
               ...prev.slice(0, -1),
               {
                 ...lastMsg,
-                parts: [...existingParts, { type: 'text' as const, text: reasoningContent || '' }],
+                parts: [...existingParts, { type: 'reasoning' as const, text: reasoningContent || '' }],
               },
             ]
           } else {
@@ -823,7 +850,7 @@ export function Chat({
                 id: generateId(),
                 role: 'assistant',
                 content: reasoningContent || '',
-                parts: [{ type: 'text', text: reasoningContent || '' }],
+                parts: [{ type: 'reasoning', text: reasoningContent || '' }],
                 createdAt: new Date().toISOString(),
               },
             ]
@@ -993,7 +1020,10 @@ export function Chat({
         }
 
         try {
-          await localAgent.sendPrompt(fullPrompt)
+          const promptToSend = shouldForceFrontendDesignForCurrentSession()
+            ? withFrontendDesignSkillPrompt(fullPrompt)
+            : fullPrompt
+          await localAgent.sendPrompt(promptToSend)
         } catch (err) {
           console.error('[Chat] Failed to start initial stream:', err)
           const errorMsg = err instanceof Error ? err.message : 'Failed to start stream'
@@ -1004,7 +1034,14 @@ export function Chat({
       }
       startInitialStream()
     }
-  }, [autoStart, messages.length, usableProjectPath, initialImages, localAgent.sendPrompt]) // Include sendPrompt to avoid stale closure
+  }, [
+    autoStart,
+    messages.length,
+    usableProjectPath,
+    initialImages,
+    localAgent.sendPrompt,
+    shouldForceFrontendDesignForCurrentSession,
+  ]) // Include sendPrompt to avoid stale closure
 
   // Sync isStreaming with localAgent.isRunning (for background session reconnection)
   useEffect(() => {
@@ -1199,7 +1236,10 @@ export function Chat({
 
       try {
         console.log('[Chat] About to call localAgent.sendPrompt')
-        await localAgent.sendPrompt(fullPrompt)
+        const promptToSend = shouldForceFrontendDesignForCurrentSession()
+          ? withFrontendDesignSkillPrompt(fullPrompt)
+          : fullPrompt
+        await localAgent.sendPrompt(promptToSend)
         console.log('[Chat] localAgent.sendPrompt completed')
       } catch (err) {
         console.error('[Chat] Local agent error:', err)
@@ -1226,6 +1266,7 @@ export function Chat({
       projectHasRevenuecat,
       revenuecatProvisioned,
       hasIntegrationSecrets.revenuecat,
+      shouldForceFrontendDesignForCurrentSession,
     ]
   )
 
@@ -1584,7 +1625,7 @@ export function Chat({
               const pid = p as ProviderId
               setProvider(pid)
               // Reset model to the provider's default to avoid passing e.g. a Claude model to Codex
-              const defaults: Record<ProviderId, string> = { claude: 'claude-sonnet-4-20250514', codex: 'o4-mini' }
+              const defaults: Record<ProviderId, string> = { claude: 'claude-sonnet-4-20250514', codex: 'gpt-5.3-codex' }
               setSelectedModel(defaults[pid] || '')
             },
             onModelChange: (modelId) => setSelectedModel(modelId),
