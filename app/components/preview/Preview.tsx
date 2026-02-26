@@ -66,6 +66,11 @@ interface PreviewProps {
 // Compact mode should only activate on genuinely small preview panes.
 const COMPACT_PANE_PX = 520
 const TIGHT_PANE_PX = 420
+const MOBILE_PREVIEW_STYLE_ID = 'bfloat-mobile-preview-guard'
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
 
 export function Preview(props: PreviewProps) {
   const webviewRef = useRef<WebviewElement | null>(null)
@@ -294,9 +299,51 @@ export function Preview(props: PreviewProps) {
   }, [currentUrl])
 
   // Iframe handlers for mobile preview
-  const handleIframeLoad = useCallback(() => {
-    setIsLoading(false)
+  const applyMobileViewportGuards = useCallback((iframe: HTMLIFrameElement | null) => {
+    if (!iframe) return
+
+    try {
+      const doc = iframe.contentDocument || iframe.contentWindow?.document
+      if (!doc) return
+
+      const viewportContent = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover'
+      let viewportMeta = doc.querySelector('meta[name="viewport"]') as HTMLMetaElement | null
+      if (!viewportMeta) {
+        viewportMeta = doc.createElement('meta')
+        viewportMeta.setAttribute('name', 'viewport')
+        ;(doc.head || doc.documentElement).appendChild(viewportMeta)
+      }
+      viewportMeta.setAttribute('content', viewportContent)
+
+      let styleEl = doc.getElementById(MOBILE_PREVIEW_STYLE_ID) as HTMLStyleElement | null
+      if (!styleEl) {
+        styleEl = doc.createElement('style')
+        styleEl.id = MOBILE_PREVIEW_STYLE_ID
+        ;(doc.head || doc.documentElement).appendChild(styleEl)
+      }
+      styleEl.textContent = `
+        html, body, #root, #__next, [data-expo-root] {
+          width: 100% !important;
+          max-width: 100% !important;
+          height: 100% !important;
+          min-height: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          overflow: hidden !important;
+        }
+        *, *::before, *::after { box-sizing: border-box !important; }
+        img, video, canvas, svg { max-width: 100% !important; }
+      `
+    } catch {
+      // Cross-origin or sandbox restrictions can block iframe document access.
+      // In that case we silently keep the preview running.
+    }
   }, [])
+
+  const handleIframeLoad = useCallback(() => {
+    applyMobileViewportGuards(iframeRef.current)
+    setIsLoading(false)
+  }, [applyMobileViewportGuards])
 
   const handleIframeError = useCallback(() => {
     setIsLoading(false)
@@ -400,6 +447,62 @@ export function Preview(props: PreviewProps) {
       setIsCapturing(false)
     }
   }, [currentUrl, props, isCapturing, webContentsId, cropToElement])
+
+  // Mobile app preview sizing (calculated on all renders so hooks remain unconditional).
+  const isCompactMobilePreview = mobileLayoutWidth > 0 && mobileLayoutWidth < COMPACT_PANE_PX
+  const isTightMobilePreview = mobileLayoutWidth > 0 && mobileLayoutWidth < TIGHT_PANE_PX
+  const qrSize = isTightMobilePreview ? 128 : isCompactMobilePreview ? 152 : 180
+  const hasSimulatorControls = !!(props.onLaunchIOSSimulator || props.onLaunchAndroidEmulator)
+  const hasQrPanel = !!props.expoUrl
+  const paneWidth = mobileLayoutWidth || 1200
+  const paneHeight = mobileLayoutHeight || 900
+  const compactHeightBucket = !isCompactMobilePreview ? 'roomy' : paneHeight < 640 ? 'tight' : paneHeight < 780 ? 'medium' : 'roomy'
+  const aspect = 163.4 / 78
+  const targetPhoneWidth = isCompactMobilePreview
+    ? Math.round(paneWidth * 0.66)
+    : Math.round(paneWidth * 0.42)
+  const compactAvailablePhoneWidth = Math.max(220, Math.min(520, paneWidth - 32))
+  const nonCompactRightPanelWidth = Math.min(320, Math.round(paneWidth * 0.36))
+  const nonCompactAvailablePhoneWidth = Math.max(220, paneWidth - 32 - nonCompactRightPanelWidth - 32)
+  const availablePhoneWidth = isCompactMobilePreview ? compactAvailablePhoneWidth : nonCompactAvailablePhoneWidth
+  const widthConstrained = Math.min(clamp(targetPhoneWidth, 220, 340), availablePhoneWidth)
+  const widthDerivedHeight = Math.round(widthConstrained * aspect)
+  const compactMinPhoneHeight = props.isTerminalOpen ? 360 : 380
+  const compactMaxPhoneHeight = 520
+  const compactVerticalPadding = 52
+  const collapsedCardsCount = (hasSimulatorControls ? 1 : 0) + (hasQrPanel ? 1 : 0)
+  const reservedCollapsedCards = collapsedCardsCount === 2 ? 164 : collapsedCardsCount === 1 ? 92 : 24
+  const compactHeightBudget = paneHeight - compactVerticalPadding - reservedCollapsedCards
+  const compactBudgetClamped = Math.min(
+    compactMaxPhoneHeight,
+    Math.max(compactMinPhoneHeight, compactHeightBudget)
+  )
+  const rawPhoneHeight = isCompactMobilePreview
+    ? Math.min(
+        compactMaxPhoneHeight,
+        Math.max(compactMinPhoneHeight, Math.min(widthDerivedHeight, compactBudgetClamped))
+      )
+    : Math.min(Math.max(widthDerivedHeight, 420), 620)
+  const phoneWidth = Math.min(Math.round(rawPhoneHeight / aspect), availablePhoneWidth)
+  const phoneHeight = Math.round(phoneWidth * aspect)
+  const isSimulatorExpanded = !isCompactMobilePreview || expandedSection === 'simulator'
+  const isQrExpanded = !isCompactMobilePreview || expandedSection === 'qr'
+
+  useEffect(() => {
+    if (!isCompactMobilePreview) {
+      setExpandedSection(null)
+      return
+    }
+
+    // Compact mode defaults to collapsed controls while terminal is open or on very tight heights.
+    if (props.isTerminalOpen || compactHeightBucket === 'tight') {
+      setExpandedSection(null)
+    }
+  }, [isCompactMobilePreview, compactHeightBucket, props.isTerminalOpen, props.terminalHeight])
+
+  const toggleSection = (section: 'simulator' | 'qr') => {
+    setExpandedSection((current) => (current === section ? null : section))
+  }
 
   console.log(
     '[Preview] Current URL:',
@@ -530,64 +633,13 @@ export function Preview(props: PreviewProps) {
     )
   }
 
-  // Mobile app preview (Expo) - iPhone frame with QR code
-  const isCompactMobilePreview = mobileLayoutWidth > 0 && mobileLayoutWidth < COMPACT_PANE_PX
-  const isTightMobilePreview = mobileLayoutWidth > 0 && mobileLayoutWidth < TIGHT_PANE_PX
-  const qrSize = isTightMobilePreview ? 128 : isCompactMobilePreview ? 152 : 180
-  const hasSimulatorControls = !!(props.onLaunchIOSSimulator || props.onLaunchAndroidEmulator)
-  const hasQrPanel = !!props.expoUrl
-  const paneWidth = mobileLayoutWidth || 1200
-  const paneHeight = mobileLayoutHeight || 900
-  const compactHeightBucket = !isCompactMobilePreview ? 'roomy' : paneHeight < 640 ? 'tight' : paneHeight < 780 ? 'medium' : 'roomy'
-  const aspect = 163.4 / 78
-  const targetPhoneWidth = isCompactMobilePreview
-    ? Math.round(paneWidth * 0.66)
-    : Math.round(paneWidth * 0.42)
-  const widthConstrained = Math.min(Math.max(targetPhoneWidth, 220), 340)
-  const widthDerivedHeight = Math.round(widthConstrained * aspect)
-  const compactMinPhoneHeight = props.isTerminalOpen ? 360 : 380
-  const compactMaxPhoneHeight = 520
-  const compactVerticalPadding = 52
-  const collapsedCardsCount = (hasSimulatorControls ? 1 : 0) + (hasQrPanel ? 1 : 0)
-  const reservedCollapsedCards = collapsedCardsCount === 2 ? 164 : collapsedCardsCount === 1 ? 92 : 24
-  const compactHeightBudget = paneHeight - compactVerticalPadding - reservedCollapsedCards
-  const compactBudgetClamped = Math.min(
-    compactMaxPhoneHeight,
-    Math.max(compactMinPhoneHeight, compactHeightBudget)
-  )
-  const phoneHeight = isCompactMobilePreview
-    ? Math.min(
-        compactMaxPhoneHeight,
-        Math.max(compactMinPhoneHeight, Math.min(widthDerivedHeight, compactBudgetClamped))
-      )
-    : Math.min(Math.max(widthDerivedHeight, 420), 620)
-  const phoneWidth = Math.round(phoneHeight / aspect)
-  const isSimulatorExpanded = !isCompactMobilePreview || expandedSection === 'simulator'
-  const isQrExpanded = !isCompactMobilePreview || expandedSection === 'qr'
-
-  useEffect(() => {
-    if (!isCompactMobilePreview) {
-      setExpandedSection(null)
-      return
-    }
-
-    // Compact mode defaults to collapsed controls while terminal is open or on very tight heights.
-    if (props.isTerminalOpen || compactHeightBucket === 'tight') {
-      setExpandedSection(null)
-    }
-  }, [isCompactMobilePreview, compactHeightBucket, props.isTerminalOpen, props.terminalHeight])
-
-  const toggleSection = (section: 'simulator' | 'qr') => {
-    setExpandedSection((current) => (current === section ? null : section))
-  }
-
   return (
-    <div className="w-full h-full flex flex-col">
+    <div className="w-full h-full flex flex-col overflow-x-hidden">
       <div
         ref={mobileLayoutRef}
         className={`flex-1 min-h-0 p-4 ${
           isCompactMobilePreview
-            ? 'flex flex-col items-center gap-4 overflow-y-auto'
+            ? 'flex flex-col items-center gap-4 overflow-x-hidden overflow-y-auto'
             : 'flex items-center justify-center gap-8 overflow-hidden'
         }`}
       >
@@ -666,6 +718,7 @@ export function Preview(props: PreviewProps) {
                     allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
                     sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-presentation allow-top-navigation"
                     loading="eager"
+                    scrolling="no"
                     style={{ display: 'block', overflow: 'hidden' }}
                     name="app-preview"
                     id="app-preview"
