@@ -100,6 +100,18 @@ export function Chat({
     const rawType = appType || 'mobile'
     return rawType === 'nextjs' || rawType === 'vite' || rawType === 'node' || rawType === 'web' ? 'web' : 'mobile'
   }, [appType])
+  const usableProjectPath = useMemo(() => {
+    if (!projectPath) return null
+
+    const normalizedPath = projectPath.replace(/\\/g, '/')
+    const matchesProject =
+      normalizedPath.includes(`/projects/${projectId}`) ||
+      normalizedPath.endsWith(`/${projectId}`) ||
+      normalizedPath.endsWith(projectId)
+
+    if (!matchesProject) return null
+    return projectPath
+  }, [projectId, projectPath])
 
   // For local-first mode, session data is stored locally by CLI tools
   // No backend fetch needed - just use the provided session ID
@@ -479,12 +491,12 @@ export function Chat({
     console.log('[Chat] Loading session from local storage:', {
       sessionId: sessionIdToLoad,
       provider,
-      projectPath,
+      projectPath: usableProjectPath,
       initialMessagesCount: initialMessages?.length || 0,
     })
 
     aiAgentApi
-      .readSession(sessionIdToLoad, provider, projectPath || undefined)
+      .readSession(sessionIdToLoad, provider, usableProjectPath || undefined)
       .then((result) => {
         if (result.success && result.session?.messages) {
           // Debug: Log detailed session info
@@ -562,11 +574,12 @@ export function Chat({
       })
     // Note: Also depends on resolvedInitialSessionId to handle async session fetch
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiAgentApi, resolvedInitialSessionId])
+  }, [aiAgentApi, resolvedInitialSessionId, usableProjectPath])
 
   // Log when projectPath is received
   useEffect(() => {
     console.log('[Chat] Project path received:', projectPath)
+    console.log('[Chat] Usable project path:', usableProjectPath)
     console.log('[Chat] Initial provider:', initialProvider, '-> using:', provider)
     console.log('[Chat] Initial session ID:', initialSessionId)
     console.log('[Chat] Initial messages count:', initialMessages?.length || 0)
@@ -580,7 +593,7 @@ export function Chat({
     if (initialMessages?.length) {
       console.log('[Chat] First message:', initialMessages[0]?.role, initialMessages[0]?.content?.substring(0, 100))
     }
-  }, [projectPath, initialSessionId, initialMessages, initialImages])
+  }, [projectPath, usableProjectPath, initialSessionId, initialMessages, initialImages])
 
   // Subscribe to prompt errors from preview/runtime
   const promptError = useStore(workbenchStore.promptError)
@@ -631,9 +644,9 @@ export function Chat({
     return getSystemPrompt(!!agentSessionId)
   }, [agentSessionId])
 
-  // Local agent hook - use projectPath or empty string (will be updated when projectPath becomes available)
+  // Local agent hook - only use path when it belongs to this project
   const localAgent = useLocalAgent({
-    cwd: projectPath || '',
+    cwd: usableProjectPath || '',
     provider,
     model: selectedModel,
     projectId, // Project ID for background session tracking
@@ -894,7 +907,7 @@ export function Chat({
       return
     }
 
-    if (messages.length === 1 && messages[0].role === 'user' && projectPath) {
+    if (messages.length === 1 && messages[0].role === 'user' && usableProjectPath) {
       // Get message content - prefer content field, fallback to parts[0].text
       const initialMessage = messages[0]
       const messageContent =
@@ -908,7 +921,7 @@ export function Chat({
         hasContent: !!initialMessage.content,
         parts: initialMessage.parts,
         extractedContent: messageContent,
-        projectPath,
+        projectPath: usableProjectPath,
       })
 
       if (!messageContent) {
@@ -923,7 +936,7 @@ export function Chat({
       const startInitialStream = async () => {
         console.log('[Chat] Starting initial stream for new project:', {
           message: messageContent.substring(0, 100),
-          projectPath,
+          projectPath: usableProjectPath,
           hasInitialImages: !!initialImages?.length,
         })
         setIsStreaming(true)
@@ -971,9 +984,9 @@ export function Chat({
             })
           }
 
-          if (attachmentPaths.length > 0 && projectPath) {
+          if (attachmentPaths.length > 0 && usableProjectPath) {
             const attachmentText =
-              '\n\n[Attachments: ' + attachmentPaths.map((p) => p.replace(projectPath, '.')).join(', ') + ']'
+              '\n\n[Attachments: ' + attachmentPaths.map((p) => p.replace(usableProjectPath, '.')).join(', ') + ']'
             fullPrompt = messageContent + attachmentText
             console.log('[Chat] Full prompt with attachments:', fullPrompt.substring(0, 200))
           }
@@ -991,7 +1004,7 @@ export function Chat({
       }
       startInitialStream()
     }
-  }, [autoStart, messages.length, projectPath, initialImages, localAgent.sendPrompt]) // Include sendPrompt to avoid stale closure
+  }, [autoStart, messages.length, usableProjectPath, initialImages, localAgent.sendPrompt]) // Include sendPrompt to avoid stale closure
 
   // Sync isStreaming with localAgent.isRunning (for background session reconnection)
   useEffect(() => {
@@ -1020,7 +1033,7 @@ export function Chat({
       }
 
       // Ensure we have a valid project path before sending prompts
-      if (!projectPath) {
+      if (!usableProjectPath) {
         console.error('[Chat] Cannot send prompt: project path not set')
         setError('Project not ready. Please wait for the project to sync.')
         return
@@ -1067,7 +1080,7 @@ export function Chat({
 
         if (attachmentPaths.length > 0) {
           attachmentText =
-            '\n\n[Attachments: ' + attachmentPaths.map((p) => p.replace(projectPath, '.')).join(', ') + ']'
+            '\n\n[Attachments: ' + attachmentPaths.map((p) => p.replace(usableProjectPath, '.')).join(', ') + ']'
           console.log('[DEBUG-IMG] Attachment text to append:', attachmentText)
         }
       }
@@ -1080,7 +1093,7 @@ export function Chat({
         fullPrompt.substring(0, 200) + (fullPrompt.length > 200 ? '...' : '')
       )
 
-      console.log('[Chat] LOCAL MODE - Using provider:', provider, 'CWD:', projectPath)
+      console.log('[Chat] LOCAL MODE - Using provider:', provider, 'CWD:', usableProjectPath)
       console.log('[Chat] Calling localAgent.sendPrompt...')
 
       // Build message parts: text + any image attachments
@@ -1203,7 +1216,7 @@ export function Chat({
       provider,
       localAgent,
       scrollToBottom,
-      projectPath,
+      usableProjectPath,
       convexStage,
       projectHasFirebase,
       firebaseProvisioned,
@@ -1228,7 +1241,7 @@ export function Chat({
   // Handle session switching - load a different session from CLI storage
   const handleSelectSession = useCallback(
     async (session: { sessionId: string; lastModified: number; name?: string; provider?: 'claude' | 'codex' }) => {
-      if (!projectPath || session.sessionId === agentSessionId) return
+      if (!usableProjectPath || session.sessionId === agentSessionId) return
 
       console.log('[Chat] Switching to session:', session.sessionId)
 
@@ -1257,7 +1270,7 @@ export function Chat({
       setIsLoadingSession(true)
       try {
         const sessionProvider = session.provider || provider
-        const result = await aiAgent.readSession(session.sessionId, sessionProvider, projectPath)
+        const result = await aiAgent.readSession(session.sessionId, sessionProvider, usableProjectPath)
         if (result.success && result.session?.messages) {
           console.log('[Chat] Loaded session messages:', result.session.messages.length)
           const loadedMessages = result.session.messages.map(convertSessionMessage)
@@ -1280,7 +1293,7 @@ export function Chat({
         setIsStreaming(true)
       }
     },
-    [projectPath, agentSessionId, provider, localAgent, convertSessionMessage, updateSessionMutation]
+    [usableProjectPath, agentSessionId, provider, localAgent, convertSessionMessage, updateSessionMutation]
   )
 
   // Handle session deletion - remove from projects.json
@@ -1365,10 +1378,10 @@ export function Chat({
     console.log('[Chat] pendingPrompt effect fired', {
       hasPendingPrompt: !!pendingPrompt,
       isStreaming,
-      hasProjectPath: !!projectPath,
+      hasProjectPath: !!usableProjectPath,
       pendingPrompt: pendingPrompt?.substring(0, 100),
     })
-    if (pendingPrompt && !isStreaming && projectPath) {
+    if (pendingPrompt && !isStreaming && usableProjectPath) {
       console.log('[Chat] Sending pending prompt:', pendingPrompt)
       if (/\/convex-setup\b/i.test(pendingPrompt)) {
         if (!convexSecretStatus.isConfigured) {
@@ -1393,10 +1406,10 @@ export function Chat({
       console.log('[Chat] Not sending pending prompt, conditions:', {
         hasPrompt: !!pendingPrompt,
         isStreaming,
-        hasProjectPath: !!projectPath,
+        hasProjectPath: !!usableProjectPath,
       })
     }
-  }, [pendingPrompt, isStreaming, projectPath, handleSubmit, convexSecretStatus])
+  }, [pendingPrompt, isStreaming, usableProjectPath, handleSubmit, convexSecretStatus])
 
   // Extract todos from messages (find most recent TodoWrite)
   const todos = useMemo(() => {

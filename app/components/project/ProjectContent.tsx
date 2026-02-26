@@ -35,6 +35,7 @@ interface ProjectContentProps {
   convexUrl?: string | null
   convexDeployment?: string | null
   projectPath?: string | null  // Git-cloned project path from agent
+  storeProjectId?: string | null
   syncStatus?: SyncStatus  // For progressive loading - components show their own loading states
   initialProvider?: ProviderId  // AI provider selected during project creation
   initialModel?: string  // AI model selected during project creation (for multi-model providers)
@@ -49,6 +50,7 @@ export function ProjectContent({
   convexUrl,
   convexDeployment,
   projectPath,
+  storeProjectId,
   syncStatus = 'ready',
   initialProvider,
   initialModel,
@@ -63,6 +65,7 @@ export function ProjectContent({
   const [sessions, setSessions] = useState<LocalSessionInfo[]>([])
   const [discoveredSessionId, setDiscoveredSessionId] = useState<string | null>(null)
   const hasLoadedSessions = useRef(false)
+  const hasAlignedProjectPath = !!projectPath && storeProjectId === project.id
 
   // Load sessions from projects.json, with CLI storage fallback for migration
   const loadSessions = useCallback(async () => {
@@ -93,7 +96,7 @@ export function ProjectContent({
       } else {
         console.log('[ProjectContent] No sessions in projects.json, trying CLI storage...')
         // Fallback: Try to discover sessions from CLI storage for migration
-        if (projectPath) {
+        if (hasAlignedProjectPath && projectPath) {
           const provider = initialProvider || 'claude'
           const result = await aiAgent.listSessions(provider, projectPath)
           if (result.success && result.sessions && result.sessions.length > 0) {
@@ -110,7 +113,7 @@ export function ProjectContent({
     } catch (err) {
       console.error('[ProjectContent] Failed to load sessions:', err)
     }
-  }, [project.id, projectPath, initialProvider, discoveredSessionId])
+  }, [project.id, projectPath, hasAlignedProjectPath, initialProvider, discoveredSessionId])
 
   // Initial session load
   useEffect(() => {
@@ -163,7 +166,7 @@ export function ProjectContent({
   }, [initialProvider, project.description, project.latestAgentSession])
 
   // Calculate autoStart flag
-  const shouldAutoStart = !!initialProvider && !!projectPath && initialMessages.length > 0
+  const shouldAutoStart = !!initialProvider && hasAlignedProjectPath && syncStatus === 'ready' && initialMessages.length > 0
 
   // Resolve session ID: prefer project metadata, fall back to discovered from CLI storage
   const resolvedSessionId = project.latestAgentSession?.sessionId ?? discoveredSessionId
@@ -171,7 +174,7 @@ export function ProjectContent({
   // Debug: Log the auto-start decision factors
   console.log('[ProjectContent] Auto-start decision:', {
     initialProvider,
-    hasProjectPath: !!projectPath,
+    hasProjectPath: hasAlignedProjectPath,
     initialMessagesLength: initialMessages.length,
     latestAgentSession: project.latestAgentSession?.sessionId,
     discoveredSessionId,
