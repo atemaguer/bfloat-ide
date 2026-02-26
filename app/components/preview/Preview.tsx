@@ -25,6 +25,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import type { AppType } from '@/app/types/project'
 import { WebPreview, WebPreviewNavigation, WebPreviewNavigationButton } from '../ai-elements/web-preview'
 import { screenshot } from '@/app/api/sidecar'
+import { workbenchStore } from '@/app/stores/workbench'
 
 // Electron webview element type
 interface WebviewElement extends HTMLElement {
@@ -61,6 +62,7 @@ interface PreviewProps {
   onLaunchIOSSimulator?: () => void
   onLaunchAndroidEmulator?: () => void
   onScreenshot?: (dataUrl: string) => void
+  refreshKey?: number
 }
 
 // Compact mode should only activate on genuinely small preview panes.
@@ -97,15 +99,19 @@ export function Preview(props: PreviewProps) {
   // Only depends on props.previewUrl to avoid missing updates
   useEffect(() => {
     if (props.previewUrl) {
-      // Strip query params to compare base URLs (ignore refresh timestamps)
-      const basePropsUrl = props.previewUrl.split('?')[0]
-      const baseCurrentUrl = currentUrl.split('?')[0]
-
-      // Always update if base URL changes, or if currentUrl is empty
-      if (!currentUrl || basePropsUrl !== baseCurrentUrl) {
+      // Only update if the base URL actually changed (different port/host)
+      if (!currentUrl || props.previewUrl !== currentUrl) {
         console.log('[Preview] Setting preview URL:', props.previewUrl)
         setCurrentUrl(props.previewUrl)
-        setUrlInput(basePropsUrl) // Show clean URL without timestamp in input
+        setUrlInput(props.previewUrl)
+
+        // Register the preview URL with the sidecar for screenshot capture
+        const cwd = workbenchStore.projectPath.getState() || ''
+        if (cwd) {
+          screenshot.registerPreviewUrl?.(cwd, props.previewUrl)?.catch(() => {
+            // Non-critical — screenshot registration failure shouldn't block preview
+          })
+        }
       }
     } else if (currentUrl) {
       // Reset when previewUrl becomes empty (e.g., project switch)
@@ -116,8 +122,6 @@ export function Preview(props: PreviewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.previewUrl]) // Only react to prop changes, not currentUrl changes
 
-  // Track the webview's webContentsId for screenshot capture
-  const [webContentsId, setWebContentsId] = useState<number | null>(null)
 
   // Setup webview event listeners (Electron only — Tauri uses iframe events)
   useEffect(() => {
@@ -161,7 +165,6 @@ export function Preview(props: PreviewProps) {
     const handleDomReady = () => {
       try {
         const id = webview.getWebContentsId()
-        setWebContentsId(id)
         ;(window as any).__bfloatPreviewWebContentsId = id
       } catch {
         // webview may not support getWebContentsId in all contexts
@@ -238,12 +241,12 @@ export function Preview(props: PreviewProps) {
 
   const handleRefresh = useCallback(() => {
     if (isTauri) {
-      const iframe = webIframeRef.current
-      if (iframe) {
-        // Force reload by re-assigning the src
-        const src = iframe.src
-        iframe.src = ''
-        iframe.src = src
+      // Best-effort same-origin reload; cross-origin fallback handled by
+      // refreshKey remount triggered via onRefresh -> parent state update
+      try {
+        webIframeRef.current?.contentWindow?.location.reload()
+      } catch {
+        // Cross-origin — the refreshKey remount will handle it
       }
     } else if (webviewRef.current) {
       webviewRef.current.reload()
@@ -361,92 +364,24 @@ export function Preview(props: PreviewProps) {
     }
   }, [props.expoUrl])
 
-  /**
-   * Crop a full-window screenshot to match a DOM element's bounding rect.
-   * Returns a PNG data URL of the cropped region.
-   */
-  const cropToElement = useCallback(
-    (fullDataUrl: string, element: HTMLElement): Promise<string> => {
-      return new Promise((resolve, reject) => {
-        const rect = element.getBoundingClientRect()
-        const dpr = window.devicePixelRatio || 1
-        const img = new Image()
-        img.onload = () => {
-          const canvas = document.createElement('canvas')
-          canvas.width = Math.round(rect.width * dpr)
-          canvas.height = Math.round(rect.height * dpr)
-          const ctx = canvas.getContext('2d')
-          if (!ctx) {
-            reject(new Error('Failed to get canvas 2d context'))
-            return
-          }
-          ctx.drawImage(
-            img,
-            Math.round(rect.x * dpr),
-            Math.round(rect.y * dpr),
-            Math.round(rect.width * dpr),
-            Math.round(rect.height * dpr),
-            0,
-            0,
-            canvas.width,
-            canvas.height
-          )
-          resolve(canvas.toDataURL('image/png'))
-        }
-        img.onerror = () => reject(new Error('Failed to load screenshot image for cropping'))
-        img.src = fullDataUrl
-      })
-    },
-    []
-  )
-
   const handleScreenshot = useCallback(async () => {
     const url = currentUrl || props.previewUrl
     if (!url || isCapturing || !props.onScreenshot) return
 
     setIsCapturing(true)
     try {
-      // Path 1: Electron <webview> — capture directly from its webContents
-      if (webContentsId && webContentsId > 0) {
-        const result = await screenshot.capture(webContentsId)
-        if (result.success && result.dataUrl) {
-          props.onScreenshot(result.dataUrl)
-          return
-        }
-        console.warn('[Preview] webContents capture failed, trying window capture')
-      }
-
-      // Path 2: Full window capture → crop to the preview element
-      const result = await screenshot.capture()
-      if (!result.success || !result.dataUrl) {
-        console.error('[Preview] Screenshot failed:', result.error)
-        return
-      }
-
-      // Find the preview element to crop to
-      const previewEl =
-        (webviewRef.current as HTMLElement | null) ||
-        webIframeRef.current ||
-        iframeRef.current
-
-      if (previewEl) {
-        try {
-          const cropped = await cropToElement(result.dataUrl, previewEl)
-          props.onScreenshot(cropped)
-        } catch {
-          // Crop failed — send the full window capture anyway
-          props.onScreenshot(result.dataUrl)
-        }
-      } else {
-        // No preview element ref — send the full window capture
+      const result = await screenshot.capture({ url })
+      if (result.success && result.dataUrl) {
         props.onScreenshot(result.dataUrl)
+      } else {
+        console.error('[Preview] Screenshot failed:', result.error)
       }
     } catch (err) {
       console.error('[Preview] Screenshot error:', err)
     } finally {
       setIsCapturing(false)
     }
-  }, [currentUrl, props, isCapturing, webContentsId, cropToElement])
+  }, [currentUrl, props, isCapturing])
 
   // Mobile app preview sizing (calculated on all renders so hooks remain unconditional).
   const isCompactMobilePreview = mobileLayoutWidth > 0 && mobileLayoutWidth < COMPACT_PANE_PX
@@ -597,6 +532,7 @@ export function Preview(props: PreviewProps) {
             <div className="flex-1 relative bg-white">
               {isTauri ? (
                 <iframe
+                  key={props.refreshKey}
                   ref={webIframeRef}
                   src={currentUrl}
                   className="w-full h-full border-0 bg-white"
@@ -712,6 +648,7 @@ export function Preview(props: PreviewProps) {
                   </div>
                 ) : props.previewUrl ? (
                   <iframe
+                    key={props.refreshKey}
                     className="w-full h-full border-0 bg-white"
                     ref={iframeRef}
                     src={props.previewUrl}
