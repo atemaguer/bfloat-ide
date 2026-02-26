@@ -91,6 +91,7 @@ All code should be production-grade and functional. Focus on these areas to achi
 - Avoid defaulting to generic system typography without intent
 - Do not replace an established brand/system font unless explicitly requested
 - Consider: variable fonts, custom @font-face, Google Fonts with character
+- **Anti-convergence**: Never reuse the same "safe creative" fonts across designs (e.g. Space Grotesk, Outfit, Sora). Each project should feel typographically unique.
 
 ### Color & Theme
 
@@ -102,9 +103,10 @@ All code should be production-grade and functional. Focus on these areas to achi
 ### Motion & Animation
 
 - Prioritize high-impact moments over scattered micro-interactions
-- Use staggered reveals on page load
+- Use staggered reveals on page load (`animation-delay`)
 - Implement scroll-triggered animations
 - Add subtle state transitions (hover, focus, active)
+- Prefer CSS-only solutions for plain HTML; use **Motion** (formerly Framer Motion) for React when available
 - Avoid: generic fade-ins everywhere, unnecessary bounces
 
 ### Spatial Composition
@@ -117,11 +119,11 @@ All code should be production-grade and functional. Focus on these areas to achi
 
 ### Visual Details
 
-- Add atmospheric depth through textures and gradients
-- Use patterns and backgrounds with purpose
+- Create atmosphere and depth rather than defaulting to solid colors
+- Use specific techniques: gradient meshes, noise textures, geometric patterns, layered transparencies, dramatic shadows, decorative borders, custom cursors, grain overlays
 - Implement shadows and highlights for dimensionality
-- Add context-specific visual effects
-- Avoid: flat designs without hierarchy, generic card patterns
+- Add context-specific visual effects that match the overall aesthetic
+- Avoid: flat designs without hierarchy, generic card patterns, solid-color backgrounds without texture
 
 ## What to Avoid
 
@@ -143,6 +145,8 @@ Match complexity to vision:
 - **Refined simplicity** is often harder than complexity
 
 The right amount of code is whatever achieves the intended design impact—no more, no less.
+
+**Creative ambition**: Don't hold back. Each design should feel genuinely crafted for its context—no two projects should look alike. Commit fully to the chosen vision and execute it with conviction.
 
 ## Code Quality
 
