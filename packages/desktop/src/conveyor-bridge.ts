@@ -554,8 +554,8 @@ const _agentTerminalClosedListeners = new Set<(id: string) => void>()
 const _restartDevServerListeners = new Set<() => void>()
 
 export const terminalBridge = {
-  create: async (terminalId: string, cwd?: string) => {
-    const result = await getSidecarApiSync().terminal.create(terminalId, cwd)
+  create: async (terminalId: string, cwd?: string, cols?: number, rows?: number) => {
+    const result = await getSidecarApiSync().terminal.create(terminalId, cwd, cols, rows)
     // After creation, ensure the WebSocket stream is (re-)established.
     // _ensureTerminalStream may have been called before create() returned,
     // in which case the initial WS was closed by the sidecar (session did not
@@ -1407,6 +1407,21 @@ export const projectFilesBridge = {
     }
   },
 
+  syncAgentInstructions: async (agentInstructions?: string): Promise<boolean> => {
+    const pid = _activeProjectId
+    if (!pid) return false
+    try {
+      await getSidecarApiSync().http.post<{ success: boolean }>(
+        `/api/project-files/${pid}/sync-agent-instructions`,
+        { agentInstructions },
+      )
+      return true
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.syncAgentInstructions error:", err)
+      return false
+    }
+  },
+
   // SSE file change events will be added in a future iteration.
   onFileChange: (_callback: (event: FileChangeEvent) => void): UnsubscribeFn => {
     return () => {}
@@ -2055,6 +2070,66 @@ export const localProjectsBridge = {
       )
     } catch (err) {
       console.warn("[conveyor-bridge] localProjects.deleteSession error:", err)
+    }
+  },
+
+  // Deployment CRUD
+  listDeployments: async (projectId: string): Promise<any[]> => {
+    try {
+      return await getSidecarApiSync().http.get<any[]>(
+        `/api/local-projects/${projectId}/deployments`,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.listDeployments error:", err)
+      return []
+    }
+  },
+
+  addDeployment: async (projectId: string, deployment: any): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.post<void>(
+        `/api/local-projects/${projectId}/deployments`,
+        deployment,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.addDeployment error:", err)
+    }
+  },
+
+  updateDeployment: async (
+    projectId: string,
+    deploymentId: string,
+    data: any,
+  ): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.put<void>(
+        `/api/local-projects/${projectId}/deployments/${deploymentId}`,
+        data,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.updateDeployment error:", err)
+    }
+  },
+
+  deleteDeployment: async (projectId: string, deploymentId: string): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.delete<void>(
+        `/api/local-projects/${projectId}/deployments/${deploymentId}`,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.deleteDeployment error:", err)
+    }
+  },
+
+  // Launch config cache
+  updateLaunchConfig: async (projectId: string, config: any): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.put<void>(
+        `/api/local-projects/${projectId}/launch-config`,
+        config,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.updateLaunchConfig error:", err)
     }
   },
 }

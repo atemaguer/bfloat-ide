@@ -143,8 +143,15 @@ const CODEX_MODELS: AgentModel[] = [
     contextWindow: 192000,
   },
   {
-    id: 'o4-mini',
-    name: 'O4 Mini',
+    id: 'gpt-5.1-codex',
+    name: 'GPT-5.1 Codex',
+    provider: 'codex',
+    description: 'Stable coding model',
+    contextWindow: 192000,
+  },
+  {
+    id: 'gpt-5.1-codex-mini',
+    name: 'GPT-5.1 Codex Mini',
     provider: 'codex',
     description: 'Fast and efficient model',
     contextWindow: 128000,

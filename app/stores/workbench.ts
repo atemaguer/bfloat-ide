@@ -424,7 +424,13 @@ export class WorkbenchStore {
       try {
         await projectStore.commitAndPush('Auto-save before close')
       } catch (error) {
-        console.error('[WorkbenchStore] Failed to commit changes:', error)
+        // No git repo is expected for some projects — not an error
+        const msg = error instanceof Error ? error.message : String(error)
+        if (msg.includes('No git repository')) {
+          console.log('[WorkbenchStore] Skipping commit — no git repository')
+        } else {
+          console.error('[WorkbenchStore] Failed to commit changes:', error)
+        }
       }
     }
   }

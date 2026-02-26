@@ -30,6 +30,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { initializeFromTemplate } from "./template.ts";
 import { ensureSkillsInjected } from "../skills-injector.ts";
+import { getProjectById } from "./local-projects.ts";
+import { syncAgentInstructionFiles } from "../services/agent-instructions.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -176,6 +178,10 @@ const OpenSchema = z.object({
   appType: z.string().optional().default("web"),
 });
 
+const SyncAgentInstructionsSchema = z.object({
+  agentInstructions: z.string().optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -268,6 +274,14 @@ projectFilesRouter.post("/open", async (c) => {
     // Inject skills (Claude Code settings, skill SKILL.md files)
     await ensureSkillsInjected(root);
 
+    // Ensure managed instruction files are present for all projects.
+    try {
+      const projectMeta = await getProjectById(projectId);
+      await syncAgentInstructionFiles(root, projectMeta?.agentInstructions as string | undefined);
+    } catch (err) {
+      console.warn("[project-files] Failed to sync AGENTS.md / CLAUDE.md:", err);
+    }
+
     // Scan file tree
     console.log(`[project-files] Scanning file tree...`);
     const fileTree = await walkTree(root, "", 10);
@@ -293,6 +307,31 @@ projectFilesRouter.post("/open", async (c) => {
       error: msg,
       fileTree: [],
     });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /:projectId/sync-agent-instructions
+// ---------------------------------------------------------------------------
+projectFilesRouter.post("/:projectId/sync-agent-instructions", async (c) => {
+  const projectId = c.req.param("projectId");
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = SyncAgentInstructionsSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const root = projectRoot(projectId);
+  if (!fs.existsSync(root)) {
+    return c.json({ success: false, error: "Project not found", projectId }, 404);
+  }
+
+  try {
+    const filesWritten = await syncAgentInstructionFiles(root, parsed.data.agentInstructions);
+    return c.json({ success: true, filesWritten });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ success: false, error: msg }, 500);
   }
 });
 
@@ -539,6 +578,11 @@ projectFilesRouter.get("/git-status/:projectId", async (c) => {
 projectFilesRouter.post("/git-add/:projectId", async (c) => {
   const projectId = c.req.param("projectId");
   const root = projectRoot(projectId);
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ success: false, error: "No git repository in project" }, 400);
+  }
+
   const body = await c.req.json().catch(() => ({}));
   const filePaths: string[] = Array.isArray(body?.paths) ? body.paths : ["-A"];
 
@@ -560,6 +604,11 @@ projectFilesRouter.post("/git-add/:projectId", async (c) => {
 projectFilesRouter.post("/git-commit/:projectId", async (c) => {
   const projectId = c.req.param("projectId");
   const root = projectRoot(projectId);
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ success: false, error: "No git repository in project" }, 400);
+  }
+
   const body = await c.req.json().catch(() => ({}));
   const parsed = CommitSchema.safeParse(body);
   if (!parsed.success) {
@@ -603,6 +652,10 @@ projectFilesRouter.post("/git-commit/:projectId", async (c) => {
 projectFilesRouter.post("/git-push/:projectId", async (c) => {
   const projectId = c.req.param("projectId");
   const root = projectRoot(projectId);
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ success: false, error: "No git repository in project" }, 400);
+  }
 
   try {
     const result = await runGit(["push"], root);

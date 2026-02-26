@@ -195,7 +195,7 @@ export const WebPreviewBody = ({
     <div className="flex-1 relative bg-background">
       <iframe
         className={cn("size-full bg-white", className)}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
         src={(src ?? url) || undefined}
         title="Preview"
         {...props}

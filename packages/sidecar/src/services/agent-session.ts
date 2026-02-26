@@ -23,6 +23,10 @@ import { query, type SDKMessage, type Options } from "@anthropic-ai/claude-agent
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { createScreenshotMcpServer } from "./screenshot-mcp.ts";
+import { buildWorkspaceProfile, shouldBlockScaffoldCommand } from "./workspace-profile.ts";
+import { updateSessionInProject } from "../routes/local-projects.ts";
+import { CodexProvider } from "./codex-provider.ts";
 
 // ---------------------------------------------------------------------------
 // Frame types (wire format over WebSocket and HTTP responses)
@@ -507,7 +511,10 @@ class ClaudeProvider implements AgentProvider {
       env,
       pathToClaudeCodeExecutable: claudeBinaryPath,
       maxTurns: options.maxTurns || 50,
-      mcpServers: options.mcpServers as Record<string, any>,
+      mcpServers: {
+        ...(options.mcpServers as Record<string, any>),
+        screenshot: createScreenshotMcpServer({ cwd: options.cwd }),
+      },
       stderr: (data: string) => {
         console.log(`${CLAUDE_LOG} [stderr] ${data}`);
       },
@@ -599,8 +606,9 @@ class ClaudeProvider implements AgentProvider {
   }
 }
 
-// Register the real Claude provider on module load
+// Register providers on module load
 registerProvider(new ClaudeProvider());
+registerProvider(new CodexProvider());
 
 // ---------------------------------------------------------------------------
 // Session registry
@@ -1024,6 +1032,7 @@ async function runStream(sessionId: string, message: string): Promise<void> {
   }
 
   session.abortController = new AbortController();
+  const workspaceProfile = buildWorkspaceProfile(session.state.cwd);
 
   // Accumulate assistant text for conversation history
   let assistantText = "";
@@ -1050,6 +1059,7 @@ async function runStream(sessionId: string, message: string): Promise<void> {
         case "init": {
           // Store the real provider session ID for future resume
           liveSession.state.realSessionId = event.realSessionId;
+          liveSession.options.resumeSessionId = event.realSessionId;
           liveSession.state.model = event.model;
 
           frame = buildFrame(liveSession, "init", {
@@ -1076,6 +1086,35 @@ async function runStream(sessionId: string, message: string): Promise<void> {
         }
 
         case "tool_call": {
+          const normalizedToolName = event.name.toLowerCase();
+          const isShellTool =
+            normalizedToolName.includes("bash") ||
+            normalizedToolName.includes("shell") ||
+            normalizedToolName.includes("command");
+          const command =
+            typeof event.input.command === "string"
+              ? event.input.command
+              : typeof event.input.cmd === "string"
+                ? event.input.cmd
+                : "";
+          const decision =
+            isShellTool && command
+              ? shouldBlockScaffoldCommand(command, workspaceProfile)
+              : { shouldBlock: false };
+          if (decision.shouldBlock) {
+            liveSession.state.status = "error";
+            liveSession.state.endTime = Date.now();
+            frame = buildFrame(liveSession, "error", {
+              code: "scaffold_blocked_existing_workspace",
+              message:
+                "Blocked scaffold command in existing workspace. This project already has app files; modify the existing project instead of creating a new app.",
+              recoverable: true,
+            } satisfies ErrorPayload);
+            broadcastToSession(liveSession, frame);
+            broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
+            return;
+          }
+
           frame = buildFrame(liveSession, "tool_call", {
             callId: event.callId,
             name: event.name,
@@ -1116,6 +1155,18 @@ async function runStream(sessionId: string, message: string): Promise<void> {
           }
           if (event.totalCostUsd) {
             liveSession.state.totalCostUsd += event.totalCostUsd;
+          }
+
+          // Persist token/cost to projects.json (fire-and-forget)
+          const projectId = sessionToProject.get(sessionId);
+          const realSid = liveSession.state.realSessionId;
+          if (projectId && realSid) {
+            updateSessionInProject(projectId, realSid, {
+              totalTokens: liveSession.state.totalTokens,
+              totalCostUsd: liveSession.state.totalCostUsd,
+            }).catch((err) =>
+              console.warn("[AgentSession] Failed to persist token/cost:", err)
+            );
           }
 
           // Save assistant turn to conversation history
