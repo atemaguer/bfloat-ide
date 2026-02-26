@@ -539,6 +539,11 @@ projectFilesRouter.get("/git-status/:projectId", async (c) => {
 projectFilesRouter.post("/git-add/:projectId", async (c) => {
   const projectId = c.req.param("projectId");
   const root = projectRoot(projectId);
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ success: false, error: "No git repository in project" }, 400);
+  }
+
   const body = await c.req.json().catch(() => ({}));
   const filePaths: string[] = Array.isArray(body?.paths) ? body.paths : ["-A"];
 
@@ -560,6 +565,11 @@ projectFilesRouter.post("/git-add/:projectId", async (c) => {
 projectFilesRouter.post("/git-commit/:projectId", async (c) => {
   const projectId = c.req.param("projectId");
   const root = projectRoot(projectId);
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ success: false, error: "No git repository in project" }, 400);
+  }
+
   const body = await c.req.json().catch(() => ({}));
   const parsed = CommitSchema.safeParse(body);
   if (!parsed.success) {
@@ -603,6 +613,10 @@ projectFilesRouter.post("/git-commit/:projectId", async (c) => {
 projectFilesRouter.post("/git-push/:projectId", async (c) => {
   const projectId = c.req.param("projectId");
   const root = projectRoot(projectId);
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ success: false, error: "No git repository in project" }, 400);
+  }
 
   try {
     const result = await runGit(["push"], root);
