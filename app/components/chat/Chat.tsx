@@ -622,6 +622,31 @@ export function Chat({
 
       if (msg.type === 'text') {
         const textContent = msg.content as string
+
+        // Detect poisoned conversation history — the SDK may emit the API error
+        // as assistant text rather than throwing.
+        if (
+          textContent?.includes('image cannot be empty') ||
+          textContent?.includes('image.source.base64')
+        ) {
+          console.warn('[Chat] Detected poisoned conversation history (empty screenshot base64) in message stream')
+          toast.error('Screenshot issue detected. Starting a fresh session.', { id: 'agent-error' })
+          localAgent.terminate()
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: generateId(),
+              role: 'assistant',
+              content: 'A corrupted screenshot was in the conversation history. I\'ve started a fresh session — please resend your message.',
+              parts: [{ type: 'text', text: 'A corrupted screenshot was in the conversation history. I\'ve started a fresh session — please resend your message.' }],
+              createdAt: new Date().toISOString(),
+            },
+          ])
+          setAgentSessionId(null)
+          setIsStreaming(false)
+          return
+        }
+
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1]
           if (lastMsg && lastMsg.role === 'assistant') {
@@ -780,6 +805,32 @@ export function Chat({
     },
     onError: (err) => {
       console.error('[Chat] Local agent error:', err)
+
+      // Detect poisoned conversation history (empty screenshot base64).
+      // Once this enters the history, every subsequent API call fails because
+      // the full history is resent. Recover by terminating the session.
+      if (
+        err.includes('image cannot be empty') ||
+        err.includes('image.source.base64')
+      ) {
+        console.warn('[Chat] Detected poisoned conversation history — terminating session')
+        toast.error('Screenshot data corrupted the conversation. Starting a fresh session.', { id: 'agent-error' })
+        localAgent.terminate()
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: generateId(),
+            role: 'assistant',
+            content: 'The previous session had a corrupted screenshot in its history. I\'ve started a fresh session — please resend your message.',
+            parts: [{ type: 'text', text: 'The previous session had a corrupted screenshot in its history. I\'ve started a fresh session — please resend your message.' }],
+            createdAt: new Date().toISOString(),
+          },
+        ])
+        setAgentSessionId(null)
+        setIsStreaming(false)
+        return
+      }
+
       setError(err)
       setIsStreaming(false)
       toast.error(err, { id: 'agent-error' })
