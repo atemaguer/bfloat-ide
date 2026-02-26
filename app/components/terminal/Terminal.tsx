@@ -24,6 +24,7 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
   const terminalRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const isInitializedRef = useRef(false)
+  const ptyCreatedRef = useRef(false)
   const onOutputRef = useRef(onOutput)
   const onReadyRef = useRef(onReady)
   const onExitRef = useRef(onExit)
@@ -47,6 +48,7 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
 
     console.log(`[Terminal UI] Initializing terminal: ${terminalId}`)
     isInitializedRef.current = true
+    ptyCreatedRef.current = false
 
     // Create xterm instance with refined theme
     const xterminal = new XTerm({
@@ -81,12 +83,6 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
       }
     })
 
-    // Initial fit
-    requestAnimationFrame(() => {
-      fitAddon.fit()
-      console.log(`[Terminal UI] Terminal fitted: ${xterminal.cols}x${xterminal.rows}`)
-    })
-
     // Set up listeners BEFORE creating PTY to capture all output
     console.log(`[Terminal UI] Setting up data listener for: ${terminalId}`)
     terminal.onData(terminalId, (id, data) => {
@@ -117,53 +113,8 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
       terminal.resize(terminalId, cols, rows)
     })
 
-    // Create PTY only if not already created and not being killed
-    const shouldCreatePty = !createdTerminals.has(terminalId)
-
-    // Wait if terminal is currently being killed to avoid race conditions
-    const waitForKillComplete = async () => {
-      if (pendingKillTerminals.has(terminalId)) {
-        console.log(`[Terminal UI] Waiting for pending kill of ${terminalId} to complete...`)
-        await new Promise(resolve => setTimeout(resolve, 500))
-      }
-    }
-
-    if (shouldCreatePty) {
-      console.log(`[Terminal UI] Creating PTY for: ${terminalId}`)
-      createdTerminals.add(terminalId)
-
-      waitForKillComplete().then(() => terminal.create(terminalId)).then((result) => {
-        console.log(`[Terminal UI] PTY create result:`, result)
-        if (result.success) {
-          // Send initial size after a small delay to ensure PTY is ready
-          requestAnimationFrame(() => {
-            if (fitAddonRef.current && terminalRef.current) {
-              fitAddonRef.current.fit()
-              const cols = terminalRef.current.cols
-              const rows = terminalRef.current.rows
-              console.log(`[Terminal UI] Sending initial resize: ${cols}x${rows}`)
-              terminal.resize(terminalId, cols, rows)
-            }
-          })
-          onReadyRef.current?.()
-        } else {
-          if (terminalRef.current) {
-            terminalRef.current.writeln(`\x1b[31mFailed to create terminal: ${result.error}\x1b[0m`)
-          }
-          createdTerminals.delete(terminalId)
-        }
-      })
-    } else {
-      console.log(`[Terminal UI] PTY already exists for: ${terminalId}, reconnecting`)
-      // PTY exists, just resize and call onReady
-      requestAnimationFrame(() => {
-        if (fitAddonRef.current && terminalRef.current) {
-          fitAddonRef.current.fit()
-          terminal.resize(terminalId, terminalRef.current.cols, terminalRef.current.rows)
-        }
-        onReadyRef.current?.()
-      })
-    }
+    // PTY creation is deferred to the ResizeObserver callback (see below)
+    // so the container has real dimensions before we spawn the PTY.
 
     // Cleanup - only dispose xterm UI, don't kill PTY
     return () => {
@@ -172,14 +123,80 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
       terminal.removeListeners(terminalId)
       xterminal.dispose()
       isInitializedRef.current = false
+      ptyCreatedRef.current = false
       // Don't kill PTY here - it will be killed when the tab is closed
     }
   }, [terminalId])
   // Note: onOutput and onReady are intentionally not in deps to avoid re-initializing terminal
 
-  // Handle container resize
+  // Handle container resize — also triggers initial PTY creation
   useEffect(() => {
+    const createPtyIfNeeded = async () => {
+      if (ptyCreatedRef.current || !fitAddonRef.current || !terminalRef.current) return
+
+      const xterminal = terminalRef.current
+      const fitAddon = fitAddonRef.current
+
+      // Check container has real dimensions
+      const container = containerRef.current
+      if (!container || container.clientWidth === 0 || container.clientHeight === 0) return
+
+      fitAddon.fit()
+      const cols = xterminal.cols
+      const rows = xterminal.rows
+
+      // Sanity check: don't create PTY with default/zero dimensions
+      if (cols <= 1 || rows <= 1) return
+
+      // Already tracked globally — skip
+      if (createdTerminals.has(terminalId)) {
+        // PTY exists, just resize and call onReady
+        ptyCreatedRef.current = true
+        console.log(`[Terminal UI] PTY already exists for: ${terminalId}, reconnecting`)
+        terminal.resize(terminalId, cols, rows)
+        onReadyRef.current?.()
+        return
+      }
+
+      ptyCreatedRef.current = true
+      createdTerminals.add(terminalId)
+      console.log(`[Terminal UI] Creating PTY with initial size: ${cols}x${rows}`)
+
+      // Wait if terminal is currently being killed to avoid race conditions
+      if (pendingKillTerminals.has(terminalId)) {
+        console.log(`[Terminal UI] Waiting for pending kill of ${terminalId} to complete...`)
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+
+      const result = await terminal.create(terminalId, undefined, cols, rows)
+      console.log(`[Terminal UI] PTY create result:`, result)
+
+      if (result.success) {
+        // Re-fit and sync in case container resized during PTY creation
+        requestAnimationFrame(() => {
+          if (fitAddonRef.current && terminalRef.current) {
+            fitAddonRef.current.fit()
+            const newCols = terminalRef.current.cols
+            const newRows = terminalRef.current.rows
+            console.log(`[Terminal UI] Post-create resize sync: ${newCols}x${newRows}`)
+            terminal.resize(terminalId, newCols, newRows)
+          }
+        })
+        onReadyRef.current?.()
+      } else {
+        if (terminalRef.current) {
+          terminalRef.current.writeln(`\x1b[31mFailed to create terminal: ${result.error}\x1b[0m`)
+        }
+        createdTerminals.delete(terminalId)
+        ptyCreatedRef.current = false
+      }
+    }
+
     const handleResize = () => {
+      if (!ptyCreatedRef.current) {
+        createPtyIfNeeded()
+        return
+      }
       if (fitAddonRef.current && terminalRef.current) {
         fitAddonRef.current.fit()
       }
@@ -196,7 +213,7 @@ export function Terminal({ terminalId, onReady, onOutput, onExit }: TerminalProp
       resizeObserver.disconnect()
       window.removeEventListener('resize', handleResize)
     }
-  }, [])
+  }, [terminalId])
 
   // Focus terminal on click
   const handleClick = useCallback(() => {

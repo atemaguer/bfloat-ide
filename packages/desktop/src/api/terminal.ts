@@ -109,6 +109,8 @@ export class TerminalApi {
   async create(
     terminalId: string,
     cwd?: string,
+    cols?: number,
+    rows?: number,
   ): Promise<TerminalCreateResult> {
     try {
       await this.http.post<{
@@ -121,6 +123,8 @@ export class TerminalApi {
       }>("/api/terminal/create", {
         id: terminalId,
         cwd,
+        cols,
+        rows,
       })
       return { success: true }
     } catch (err: unknown) {
