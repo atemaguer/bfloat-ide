@@ -20,6 +20,8 @@ import { secretsRouter } from "./routes/secrets.ts";
 import { providerRouter } from "./routes/provider.ts";
 import { localProjectsRouter } from "./routes/local-projects.ts";
 import { templateRouter } from "./routes/template.ts";
+import { screenshotRouter } from "./routes/screenshot.ts";
+import { shutdownBrowser } from "./services/screenshot.ts";
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -141,6 +143,9 @@ app.route("/api/local-projects", localProjectsRouter);
 
 // Template listing and project initialisation from bundled templates
 app.route("/api/template", templateRouter);
+
+// Screenshot capture via headless Chrome + preview URL registration
+app.route("/api/screenshot", screenshotRouter);
 
 // 404 fallback
 app.notFound((c) => {
@@ -324,9 +329,10 @@ const server = Bun.serve<WSData>({
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 
-function shutdown(signal: string): void {
+async function shutdown(signal: string): Promise<void> {
   console.log(`[${timestamp()}] Received ${signal}. Shutting down gracefully...`);
   cleanupAllSessions();
+  await shutdownBrowser();
   server.stop(true);
   console.log(`[${timestamp()}] Server stopped. Goodbye.`);
   process.exit(0);
@@ -334,6 +340,22 @@ function shutdown(signal: string): void {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+process.on("exit", () => {
+  cleanupAllSessions();
+});
+
+process.on("uncaughtException", (err) => {
+  console.error(`[${timestamp()}] Uncaught exception:`, err);
+  cleanupAllSessions();
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error(`[${timestamp()}] Unhandled rejection:`, reason);
+  cleanupAllSessions();
+  process.exit(1);
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

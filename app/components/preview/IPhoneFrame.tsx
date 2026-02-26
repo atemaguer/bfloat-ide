@@ -246,20 +246,22 @@ export function IPhoneFrame({
         )}
 
         {/* Dynamic Island — same dimensions as iPhone 16 Pro Max */}
-        <div
-          style={{
-            position: 'absolute',
-            top: '1.3%',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: '30%',
-            height: '3.8%',
-            borderRadius: 999,
-            background: 'linear-gradient(180deg, #1a1a1a, #080808)',
-            zIndex: 20,
-            boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.04)',
-          }}
-        />
+        {showStatusBar && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '1.3%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: '30%',
+              height: '3.8%',
+              borderRadius: 999,
+              background: 'linear-gradient(180deg, #1a1a1a, #080808)',
+              zIndex: 20,
+              boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.04)',
+            }}
+          />
+        )}
 
         {/* App content — padded to clear Dynamic Island + home indicator
              like iOS safe-area-inset-top / -bottom */}
@@ -267,8 +269,8 @@ export function IPhoneFrame({
           width: '100%',
           height: '100%',
           position: 'relative',
-          paddingTop: '6%',   // clears Dynamic Island (~1.3% top + 3.8% height + gap)
-          paddingBottom: '2.5%', // clears home indicator area
+          paddingTop: showStatusBar ? '6%' : 0, // clears Dynamic Island when shown
+          paddingBottom: showHomeIndicator ? '2.5%' : 0, // clears home indicator area when shown
           boxSizing: 'border-box',
         }}>
           {children}

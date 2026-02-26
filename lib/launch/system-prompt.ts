@@ -1,16 +1,15 @@
 /**
  * System prompt that instructs Claude to explore the project at session start.
- * This gives Claude richer context than static data injection.
+ * Keep this lightweight to avoid slowing first-token latency.
  */
 export const PROJECT_EXPLORATION_PROMPT = `
-Before answering the user's first question in this session, briefly explore the project to understand its context:
+On a new session, keep project discovery minimal:
 
-1. Read package.json to identify the framework (Next.js, Expo, Vite, etc.) and key dependencies
-2. Quickly scan the folder structure (use Glob for src/, app/, components/ patterns)
+- If the user asks to generate/build/fix immediately, do not run broad discovery first.
+- Only inspect context when needed, and cap it to 1-2 quick reads (for example: \`package.json\` and one top-level folder scan).
+- Avoid recursive/broad file scans before starting implementation.
 
-This exploration helps you give contextually appropriate answers without asking the user what kind of project this is.
-
-After exploration, proceed to answer the user's question with this context in mind. Do not explicitly mention that you explored - just use the knowledge naturally.
+Start implementation quickly, then gather additional context incrementally only if blocked.
 `.trim()
 
 /**
@@ -40,6 +39,46 @@ Example — starting a Stripe webhook listener:
 `.trim()
 
 /**
+ * Instruction to route frontend design work through the dedicated skill.
+ */
+const FRONTEND_DESIGN_SKILL_PROMPT = `
+## Frontend Design Skill Routing
+
+When the user asks for frontend UI work (pages, components, styling, layout, animations, visual polish, redesigns), use the \`/frontend-design\` skill before implementing changes.
+
+- For new projects, use the skill's full design workflow.
+- For established products, preserve the existing design system and adapt within it unless the user explicitly asks for a redesign.
+`.trim()
+
+/**
+ * Guardrail for Expo Router web style interoperability.
+ */
+const EXPO_WEB_STYLE_SAFETY_PROMPT = `
+## Expo Web Style Safety
+
+For Expo apps that run on web:
+- Do not use \`Link asChild\` with \`Pressable\` or animated pressables.
+- Use \`router.push(...)\` on \`Pressable\` for custom styled/animated navigation elements.
+- Avoid RN-only object-valued DOM style payloads on web-rendered nodes (e.g. \`shadowOffset\`).
+- Do not use generic \`tint\` token as filled button background. Use semantic pairs like \`accent\` + \`onAccent\` for filled controls.
+- Ensure text/icon foreground remains visible against background in both light and dark themes.
+- Remove unused Expo starter tab scaffolding. If the app does not need bottom tabs, delete \`app/(tabs)\` routing from \`app/_layout.tsx\` and use a Stack + \`app/index.tsx\`.
+`.trim()
+
+/**
+ * Instruction to keep tool-heavy sessions conversational.
+ */
+const TOOL_TRANSPARENCY_PROMPT = `
+## Tool Transparency
+
+Do not run long stretches of tool calls silently.
+
+- Before the first tool call, send one short status line describing what you are about to do.
+- During tool-heavy work, send concise progress updates regularly (about every 3-5 tool calls or ~20 seconds).
+- Keep updates short and concrete; avoid filler.
+`.trim()
+
+/**
  * Instruction for the model to emit structured suggestion chips at the end of every response.
  */
 const SUGGESTIONS_PROMPT = `
@@ -55,13 +94,26 @@ Format: <suggestions>["Run the tests", "Add error handling to the API", "Deploy 
 `.trim()
 
 /**
+ * Instruction to keep generated mobile UIs inside the preview viewport.
+ */
+const MOBILE_PREVIEW_PROMPT = `
+## Mobile Viewport Fit Requirements
+
+When generating or editing mobile apps (Expo/React Native), default to layouts that fit within a phone viewport without horizontal or vertical overflow in preview.
+
+- Prefer flex-based full-height layouts over fixed pixel heights
+- Avoid \`100vw\`, \`w-screen\`, large fixed widths, or nested containers that can exceed viewport width
+- Keep top-level containers width-constrained (\`width: '100%'\` / \`flex: 1\`) and avoid accidental sideways overflow
+`.trim()
+
+/**
  * Get the system prompt. Always returns a prompt string.
  * - New sessions: exploration instructions + suggestions instructions
  * - Resumed sessions: suggestions instructions only
  */
 export function getSystemPrompt(isResumedSession: boolean): string {
   if (isResumedSession) {
-    return TERMINAL_USAGE_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+    return TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
   }
-  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
 }

@@ -17,6 +17,18 @@ import type { AgentMessage, SessionOptions, ProviderId, AgentTool } from '@/lib/
 // Tools to disable - AskUserQuestion requires special UI handling that isn't fully reliable yet
 const DISALLOWED_TOOLS = ['AskUserQuestion']
 
+/**
+ * Detect whether a prompt error indicates the session no longer exists on the
+ * sidecar (e.g., the backing CLI process died mid-stream and the in-memory
+ * session was cleaned up).  When this returns true the caller should clear the
+ * stale session ref and retry with a fresh session.
+ */
+function isSessionLostError(error: string | undefined): boolean {
+  if (!error) return false
+  const lower = error.toLowerCase()
+  return lower.includes('not found') && lower.includes('session')
+}
+
 interface LocalAgentState {
   isConnected: boolean
   isRunning: boolean
@@ -492,10 +504,24 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
         console.log('[useLocalAgent] Sending prompt to session:', sessionId)
         console.log('[useLocalAgent] Prompt message:', message)
-        const result = await aiAgent.prompt(sessionId, message)
+        let result = await aiAgent.prompt(sessionId, message)
 
         if (!result.success || !result.streamChannel) {
-          throw new Error(result.error || 'Failed to send prompt')
+          // Session is gone (404 or similar) — clear stale ref and retry once with a fresh session
+          if (isSessionLostError(result.error)) {
+            console.warn('[useLocalAgent] Session lost, recovering with new session:', {
+              oldSessionId: sessionId,
+              error: result.error,
+            })
+            sessionIdRef.current = null
+            sessionId = await createSession()
+            result = await aiAgent.prompt(sessionId, message)
+            if (!result.success || !result.streamChannel) {
+              throw new Error(result.error || 'Failed to send prompt after session recovery')
+            }
+          } else {
+            throw new Error(result.error || 'Failed to send prompt')
+          }
         }
 
         console.log('[useLocalAgent] Subscribed to stream channel:', result.streamChannel)

@@ -215,6 +215,7 @@ export function ProjectContent({
                 initialSessionId={resolvedSessionId}
                 projectHasConvex={!!convexUrl}
                 projectHasFirebase={!!project.firebaseProjectId}
+                projectHasRevenuecat={!!project.revenuecatProjectId}
                 appType={project.appType}
               />
             </div>
@@ -249,4 +250,3 @@ export function ProjectContent({
     </div>
   )
 }
-

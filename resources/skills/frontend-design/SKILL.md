@@ -19,6 +19,21 @@ Use this skill when building:
 - Landing pages and marketing sites
 - Any web UI requiring visual polish
 
+### Primary Scope
+
+- This skill is primarily for **new projects** and greenfield interfaces.
+- For existing products with an established design system, use this skill in **adaptation mode**: preserve current visual language and only extend it where needed.
+
+### Existing System Rule
+
+Before making visual changes in an existing project:
+
+1. Identify the established tokens/patterns (typography, spacing scale, colors, components, motion style).
+2. Reuse those patterns first; avoid introducing a conflicting style direction.
+3. Limit changes to the requested surface area unless the user explicitly asks for a redesign.
+
+Do not overwrite a mature design system with a new aesthetic direction unless explicitly requested.
+
 ## Core Design Philosophy
 
 **Avoid generic AI-generated aesthetics.** The key is intentionality, not intensity. Commit to bold, intentional design directions rather than safe, middle-ground choices.
@@ -39,6 +54,32 @@ Use this skill when building:
 
 3. **Identify Differentiation**: What makes this design memorable? What's the "signature" element?
 
+## Execution Workflow
+
+Follow this sequence for every frontend design task:
+
+1. **Classify Project Type**
+   - New/greenfield project: choose and commit to a bold design direction.
+   - Existing product: preserve design system and operate in adaptation mode.
+
+2. **Audit Existing UI Inputs**
+   - Check tokens and conventions: typography, color variables, spacing scale, radii, shadows, motion rules.
+   - Check component patterns: buttons, inputs, cards, nav, page shells, empty/loading/error states.
+   - Check implementation constraints: framework, design system library, performance limits, browser support.
+
+3. **Define a Design Intent Brief**
+   - One-sentence visual direction.
+   - One signature element (layout, type treatment, motion moment, or background treatment).
+   - One non-goal (what to avoid).
+
+4. **Implement in Layers**
+   - Foundations first: tokens, type scale, spacing rhythm.
+   - Layout and hierarchy second.
+   - Motion and polish last.
+
+5. **Run Acceptance Checks**
+   - Validate the quality checklist in this document before finishing.
+
 ## Implementation Standards
 
 All code should be production-grade and functional. Focus on these areas to achieve visual distinction:
@@ -47,7 +88,8 @@ All code should be production-grade and functional. Focus on these areas to achi
 
 - Use distinctive, characterful fonts that elevate the design
 - Create intentional font pairings (display + body)
-- Avoid: Arial, Inter, generic system fonts
+- Avoid defaulting to generic system typography without intent
+- Do not replace an established brand/system font unless explicitly requested
 - Consider: variable fonts, custom @font-face, Google Fonts with character
 
 ### Color & Theme
@@ -110,3 +152,26 @@ The right amount of code is whatever achieves the intended design impact—no mo
 - Ensure keyboard navigation works
 - Test across browsers and devices
 - Optimize for performance (lazy loading, code splitting)
+
+## Acceptance Checklist
+
+A task is not complete until all applicable checks pass:
+
+- **Design consistency**:
+  - Greenfield: clear visual direction and a visible signature element are present.
+  - Existing system: all new UI aligns with existing tokens/components unless redesign was explicitly requested.
+- **Accessibility**:
+  - Text and interactive UI meet WCAG AA contrast (normal text 4.5:1, large text 3:1).
+  - Icon-only interactive controls maintain at least 3:1 contrast against their background.
+  - Every interactive control has a visible focus state.
+  - Keyboard-only navigation can reach and trigger all core interactions.
+  - Motion-heavy experiences provide reduced-motion behavior (`prefers-reduced-motion`).
+- **Responsiveness**:
+  - Layout works at minimum 360px mobile width and a common desktop width (>= 1280px).
+  - No horizontal overflow on primary pages/components at those sizes.
+- **Performance basics**:
+  - No obviously avoidable large render-blocking assets for above-the-fold UI.
+  - Animations prioritize transform/opacity where possible.
+- **Implementation quality**:
+  - Uses existing component/system primitives when present.
+  - CSS variables/tokens are used for theme-critical values (colors, spacing, type scale).

@@ -1926,13 +1926,29 @@ export const secretsBridge = {
 }
 
 // ---------------------------------------------------------------------------
-// Screenshot API bridge  →  stub
-// Requires @tauri-apps/plugin-screenshot or webview capture which is not yet
-// available.  This remains a stub until the native plugin is integrated.
+// Screenshot API bridge  →  /api/screenshot/*
 // ---------------------------------------------------------------------------
 
 export const screenshotBridge = {
-  capture: stub("screenshot.capture", null),
+  capture: async (options?: { url?: string; cwd?: string }): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean; dataUrl?: string; error?: string }>(
+        "/api/screenshot/capture",
+        { url: options?.url, cwd: options?.cwd },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] screenshot.capture error:", err)
+      return { success: false, error: String(err) }
+    }
+  },
+
+  registerPreviewUrl: async (cwd: string, url: string): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.post("/api/screenshot/register-url", { cwd, url })
+    } catch (err) {
+      console.warn("[conveyor-bridge] screenshot.registerPreviewUrl error:", err)
+    }
+  },
 }
 
 // ---------------------------------------------------------------------------

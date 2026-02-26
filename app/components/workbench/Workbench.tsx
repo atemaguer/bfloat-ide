@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react'
+import { useCallback, useEffect, useRef, useState, useImperativeHandle, forwardRef, useMemo } from 'react'
 import { useStore } from '@/app/hooks/useStore'
 import { motion } from 'framer-motion'
 import { ChevronDown, ChevronUp, Terminal as TerminalIcon, Plus, X } from 'lucide-react'
@@ -16,7 +16,12 @@ import { ConvexIntegration } from '@/app/components/integrations/ConvexIntegrati
 import { ProjectSettings } from '@/app/components/project/ProjectSettings'
 import { PaymentsOverview } from '@/app/components/payments/PaymentsOverview'
 import { AppTypeProvider } from '@/app/contexts/AppTypeContext'
-import { terminal, filesystem, aiAgent, projectSync, projectFiles } from '@/app/api/sidecar'
+import { terminal, filesystem, aiAgent, projectSync, projectFiles, secrets as secretsApi } from '@/app/api/sidecar'
+import {
+  getConvexDashboardConfigFromSecrets,
+  getConvexSecretStatusFromSecrets,
+  type SecretEntry,
+} from '@/app/lib/integrations/convex'
 import './styles.css'
 
 // Export interface for external access to workbench terminal commands
@@ -63,6 +68,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const unsavedFiles = useStore(workbenchStore.unsavedFiles)
   const files = useStore(workbenchStore.files)
   const chatStreaming = useStore(workbenchStore.chatStreaming)
+  const secretsVersion = useStore(workbenchStore.secretsVersion)
 
   // Raw app type from database - normalization happens in AppTypeContext
   const rawAppType = project.appType || 'mobile'
@@ -88,12 +94,16 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   // Dev server state
   const [previewUrl, setPreviewUrl] = useState<string>('')
+  const [previewRefreshKey, setPreviewRefreshKey] = useState(0)
+  const prevActiveTabRef = useRef(activeTab)
   const [serverStatus, setServerStatus] = useState<'starting' | 'running' | 'error'>('starting')
 
   // Shared state
   const [expoUrl, setExpoUrl] = useState('')
+  const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
   const terminalOutputBuffer = useRef('')
   const devServerTerminalIdRef = useRef<string | null>(null)
+  const portConflictRef = useRef(false)
 
   // Terminal panel state
   const [isTerminalOpen, setIsTerminalOpen] = useState(false)
@@ -115,6 +125,18 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const agentTerminalCountRef = useRef(0)
   const terminalReadyRef = useRef<Set<string>>(new Set())
   const terminalExitedRef = useRef<Set<string>>(new Set())
+
+  // Re-mount the preview iframe when switching back to the preview tab.
+  // Browsers may discard invisible cross-origin iframe content, causing a
+  // black screen when the tab becomes visible again.
+  useEffect(() => {
+    const wasAway = prevActiveTabRef.current !== 'preview'
+    prevActiveTabRef.current = activeTab
+
+    if (activeTab === 'preview' && wasAway && previewUrl) {
+      setPreviewRefreshKey(k => k + 1)
+    }
+  }, [activeTab, previewUrl])
 
   // Mark terminal as ready when it's initialized
   const handleTerminalReady = useCallback((terminalId: string) => {
@@ -201,6 +223,22 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     const cleanData = stripAnsi(data)
     terminalOutputBuffer.current += cleanData
 
+    // Detect Expo port fallback — "Something is already running on port 19000"
+    // When this happens, clear the stale port so the fallback doesn't use it
+    const portConflict = cleanData.match(/already running on port (\d+)/i)
+      || terminalOutputBuffer.current.match(/already running on port (\d+)/i)
+    if (portConflict) {
+      portConflictRef.current = true
+    }
+
+    // Parse "Starting Metro on port XXXXX" to update actualPortRef after a port switch
+    const metroPortMatch = cleanData.match(/Starting Metro on port (\d+)/i)
+      || terminalOutputBuffer.current.match(/Starting Metro on port (\d+)/i)
+    if (metroPortMatch) {
+      actualPortRef.current = parseInt(metroPortMatch[1], 10)
+      portConflictRef.current = false
+    }
+
     // Look for Expo URL in the output for QR codes (native devices)
     // Matches:
     // - exp://192.168.1.12:19000 (Expo Go format)
@@ -236,6 +274,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       if (webUrl !== previewUrl) {
         console.log('[Workbench] Expo Web URL detected:', webUrl, '(overriding previous:', previewUrl || 'none', ')')
         actualPortRef.current = webPort
+        portConflictRef.current = false
         setPreviewUrl(webUrl)
         setServerStatus('running')
       }
@@ -289,7 +328,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           terminalOutputBuffer.current.includes('open debugger') ||
           terminalOutputBuffer.current.includes('Logs for your project')
 
-        if (isExpoReady && actualPortRef.current > 0) {
+        if (isExpoReady && actualPortRef.current > 0 && !portConflictRef.current) {
           const fallbackUrl = `http://localhost:${actualPortRef.current}`
           console.log('[Workbench] Dev server ready (using assigned port):', fallbackUrl)
           setPreviewUrl(fallbackUrl)
@@ -613,6 +652,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       setExpoUrl('')
       terminalOutputBuffer.current = ''
       actualPortRef.current = portRange.start
+      portConflictRef.current = false
 
       // Cleanup old project's temp directory if it exists
       if (tempDirPathRef.current) {
@@ -860,7 +900,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       console.log('[Workbench] Chat streaming ended, refreshing preview...')
       // Small delay to ensure files are written to disk
       setTimeout(() => {
-        setPreviewUrl(`http://localhost:${actualPortRef.current}?t=${Date.now()}`)
+        setPreviewRefreshKey(k => k + 1)
       }, 500)
     }
   }, [chatStreaming, previewUrl])
@@ -882,6 +922,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const mountTimeRef = useRef(Date.now())
   useEffect(() => {
     mountTimeRef.current = Date.now()
+  }, [])
+
+  // Clean up any stale terminal sessions from a previous crash
+  useEffect(() => {
+    terminal.killAll().catch((err: unknown) =>
+      console.warn('[Workbench] Failed to clean up stale sessions:', err)
+    )
   }, [])
 
   // Cleanup temp directory and kill all terminal sessions when workbench unmounts (user exits to landing page)
@@ -941,8 +988,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   const handleRefresh = useCallback(() => {
     if (previewUrl) {
-      // Force reload by updating URL with timestamp
-      setPreviewUrl(`http://localhost:${actualPortRef.current}?t=${Date.now()}`)
+      setPreviewRefreshKey(k => k + 1)
     }
   }, [previewUrl])
 
@@ -1065,6 +1111,46 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     }
   }, [])
 
+  // Keep secrets in sync so Convex dashboard state reflects current credentials.
+  useEffect(() => {
+    if (!project.id) {
+      setProjectSecrets([])
+      return
+    }
+
+    let isCancelled = false
+
+    secretsApi
+      .readSecrets(project.id)
+      .then((result) => {
+        if (isCancelled || result.error || !result.secrets) return
+        setProjectSecrets(result.secrets)
+      })
+      .catch(() => {})
+
+    return () => {
+      isCancelled = true
+    }
+  }, [project.id, secretsVersion, activeTab])
+
+  const convexSecretStatus = useMemo(
+    () => getConvexSecretStatusFromSecrets(projectSecrets, appType),
+    [projectSecrets, appType]
+  )
+
+  const convexDashboardConfig = useMemo(() => {
+    const fromSecrets = getConvexDashboardConfigFromSecrets(projectSecrets, appType)
+    if (fromSecrets) return fromSecrets
+    if (convexDeploymentKey && convexUrl && convexDeployment) {
+      return {
+        deployKey: convexDeploymentKey,
+        deploymentUrl: convexUrl,
+        deploymentName: convexDeployment,
+      }
+    }
+    return null
+  }, [projectSecrets, appType, convexDeploymentKey, convexUrl, convexDeployment])
+
 
   // Calculate slide position based on tab
   const tabOrder = ['editor', 'preview', 'database', 'payments', 'settings']
@@ -1106,6 +1192,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 <Preview
                   previewUrl={previewUrl}
                   serverStatus={serverStatus}
+                  isTerminalOpen={isTerminalOpen}
+                  terminalHeight={terminalHeight}
                   onRefresh={handleRefresh}
                   onRestartServer={handleRestartServer}
                   expoUrl={expoUrl}
@@ -1115,6 +1203,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   onLaunchIOSSimulator={handleLaunchIOSSimulator}
                   onLaunchAndroidEmulator={handleLaunchAndroidEmulator}
                   onScreenshot={handleScreenshot}
+                  refreshKey={previewRefreshKey}
                 />
               </div>
             </div>
@@ -1124,20 +1213,45 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               {/* Database Tab */}
               {activeTab === 'database' && (
                 <div className="workbench-tab-panel settings">
-                  {convexDeploymentKey && convexUrl && convexDeployment ? (
+                  {convexDashboardConfig ? (
                     <ConvexDashboard
-                      deployKey={convexDeploymentKey}
-                      deploymentUrl={convexUrl}
-                      deploymentName={convexDeployment}
+                      deployKey={convexDashboardConfig.deployKey}
+                      deploymentUrl={convexDashboardConfig.deploymentUrl}
+                      deploymentName={convexDashboardConfig.deploymentName}
                       isVisible={true}
+                      onStatusChange={(status) => {
+                        if (status !== 'error') return
+                        console.warn('[Workbench] Convex dashboard entered error state')
+                      }}
+                      onError={(reason) => {
+                        console.warn('[Workbench] Convex dashboard error:', reason)
+                      }}
+                      onOpenSettings={() => {
+                        workbenchStore.setActiveTab('settings')
+                      }}
+                      onOpenExternal={() => {
+                        window.open(
+                          `https://dashboard.convex.dev/d/${convexDashboardConfig.deploymentName}`,
+                          '_blank',
+                          'noopener,noreferrer'
+                        )
+                      }}
                     />
                   ) : (
-                    <div className="flex items-center justify-center h-full text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4">
+                      {convexSecretStatus.hasUrl && !convexSecretStatus.hasDeployKey && (
+                        <div className="max-w-md px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 text-sm">
+                          Convex URL found, but `CONVEX_DEPLOY_KEY` is missing. Add it in Settings to load the Convex dashboard.
+                        </div>
+                      )}
                       <ConvexIntegration
                         isConnected={hasConvexIntegration || false}
                         onConnect={() => {
-                          const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined
-                          window.open(`${backendUrl}/desktop/convex/connect`, '_blank')
+                          workbenchStore.setActiveTab('settings')
+                          workbenchStore.setPendingIntegrationConnect({
+                            integrationId: 'convex',
+                            source: 'workbench',
+                          })
                         }}
                         onDisconnect={async () => {
                           console.log('[Workbench] Convex disconnect requested (local-first mode)')
@@ -1193,6 +1307,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 <Preview
                   previewUrl={previewUrl}
                   serverStatus={serverStatus}
+                  isTerminalOpen={isTerminalOpen}
+                  terminalHeight={terminalHeight}
                   onRefresh={handleRefresh}
                   onRestartServer={handleRestartServer}
                   expoUrl={expoUrl}
@@ -1202,6 +1318,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   onLaunchIOSSimulator={handleLaunchIOSSimulator}
                   onLaunchAndroidEmulator={handleLaunchAndroidEmulator}
                   onScreenshot={handleScreenshot}
+                  refreshKey={previewRefreshKey}
                 />
               </motion.div>
 

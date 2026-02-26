@@ -6,6 +6,12 @@ import { projectStore } from './project-store'
 
 export type WorkbenchViewType = 'editor' | 'preview'
 export type WorkbenchTabType = 'editor' | 'preview' | 'database' | 'payments' | 'settings'
+export type PendingIntegrationId = 'firebase' | 'convex' | 'stripe' | 'revenuecat'
+
+export interface PendingIntegrationConnectRequest {
+  integrationId: PendingIntegrationId
+  source?: 'chat' | 'workbench'
+}
 
 // Store a reference to the workbench's runCommand function
 let workbenchRunCommand: ((command: string, terminalId?: string) => Promise<void>) | null = null
@@ -66,6 +72,12 @@ export class WorkbenchStore {
 
   // Pending screenshot from Preview — consumed by Chat to add as attachment
   pendingScreenshot = createStore<string | null>(() => null)
+
+  // Pending integration connect request - consumed by ProjectSettings
+  pendingIntegrationConnect = createStore<PendingIntegrationConnectRequest | null>(() => null)
+
+  // Invalidation counter for secret mutations (settings -> chat status refresh)
+  secretsVersion = createStore<number>(() => 0)
 
   /**
    * Register the filesystem API for file operations
@@ -210,6 +222,28 @@ export class WorkbenchStore {
     console.log('[workbenchStore] pendingPrompt before:', this.pendingPrompt.getState())
     this.pendingPrompt.setState(null, true)
     console.log('[workbenchStore] pendingPrompt after: null')
+  }
+
+  /**
+   * Set a pending integration connect request
+   * ProjectSettings consumes this to open and prefill secret modal
+   */
+  setPendingIntegrationConnect(request: PendingIntegrationConnectRequest): void {
+    this.pendingIntegrationConnect.setState(request, true)
+  }
+
+  /**
+   * Clear pending integration connect request
+   */
+  clearPendingIntegrationConnect(): void {
+    this.pendingIntegrationConnect.setState(null, true)
+  }
+
+  /**
+   * Increment secrets version to notify listeners that secrets changed
+   */
+  bumpSecretsVersion(): void {
+    this.secretsVersion.setState(this.secretsVersion.getState() + 1, true)
   }
 
   /**
@@ -608,6 +642,8 @@ export class WorkbenchStore {
 
     // Clear pending screenshot
     this.pendingScreenshot.setState(null, true)
+    this.pendingIntegrationConnect.setState(null, true)
+    this.secretsVersion.setState(0, true)
 
     // Reset view state to defaults
     this.activeView.setState('preview', true)

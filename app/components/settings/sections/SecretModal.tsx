@@ -19,9 +19,12 @@ interface Secret {
 
 // Common integration key suggestions
 const KEY_SUGGESTIONS = [
-  { provider: 'Stripe', keys: ['STRIPE_SECRET_KEY', 'STRIPE_PUBLISHABLE_KEY', 'STRIPE_WEBHOOK_SECRET'] },
-  { provider: 'Convex', keys: ['CONVEX_DEPLOYMENT', 'CONVEX_URL'] },
-  { provider: 'RevenueCat', keys: ['REVENUECAT_API_KEY', 'REVENUECAT_APPLE_API_KEY', 'REVENUECAT_GOOGLE_API_KEY'] },
+  { provider: 'Stripe (Web)', keys: ['NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'] },
+  { provider: 'Stripe (Mobile)', keys: ['EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY', 'STRIPE_SECRET_KEY'] },
+  { provider: 'Convex', keys: ['EXPO_PUBLIC_CONVEX_URL', 'NEXT_PUBLIC_CONVEX_URL', 'CONVEX_URL', 'CONVEX_DEPLOY_KEY'] },
+  { provider: 'RevenueCat', keys: ['EXPO_PUBLIC_REVENUECAT_API_KEY', 'REVENUECAT_APPLE_API_KEY', 'REVENUECAT_GOOGLE_API_KEY'] },
+  { provider: 'Firebase (Web)', keys: ['NEXT_PUBLIC_FIREBASE_API_KEY', 'NEXT_PUBLIC_FIREBASE_PROJECT_ID'] },
+  { provider: 'Firebase (Mobile)', keys: ['EXPO_PUBLIC_FIREBASE_API_KEY', 'EXPO_PUBLIC_FIREBASE_PROJECT_ID'] },
 ]
 
 interface SecretModalProps {
@@ -30,6 +33,7 @@ interface SecretModalProps {
   onSave: (key: string, value: string) => Promise<void>
   existingSecrets: Secret[]
   editingSecret?: Secret | null
+  defaultKey?: string | null
 }
 
 export function SecretModal({
@@ -38,6 +42,7 @@ export function SecretModal({
   onSave,
   existingSecrets,
   editingSecret,
+  defaultKey,
 }: SecretModalProps) {
   const [key, setKey] = useState('')
   const [value, setValue] = useState('')
@@ -53,13 +58,13 @@ export function SecretModal({
         setKey(editingSecret.key)
         setValue(editingSecret.value)
       } else {
-        setKey('')
+        setKey(defaultKey || '')
         setValue('')
       }
       setShowValue(false)
       setError(null)
     }
-  }, [open, editingSecret])
+  }, [open, editingSecret, defaultKey])
 
   const validateKey = (keyValue: string): string | null => {
     if (!keyValue.trim()) {

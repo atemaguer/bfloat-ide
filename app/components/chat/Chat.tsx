@@ -9,19 +9,18 @@ import { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import { useStore } from '@/app/hooks/useStore'
 import { generateId } from 'ai'
 
-import { workbenchStore } from '@/app/stores/workbench'
+import { workbenchStore, type PendingIntegrationId } from '@/app/stores/workbench'
 import type { ChatMessage, MessagePart } from '@/app/types/project'
 import { useLocalAgent } from '@/app/hooks/useLocalAgent'
 import { useSessions, useSaveSession, useDeleteSession, useUpdateSession } from '@/app/hooks/useSessions'
 import { getSystemPrompt } from '@/lib/launch/system-prompt'
-import { aiAgent, projectFiles, secrets, app } from '@/app/api/sidecar'
+import { aiAgent, projectFiles, secrets } from '@/app/api/sidecar'
 import type { ProviderId, SessionMessageData } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { Messages } from './Messages'
 import { ChatInput, type ImageAttachment } from './ChatInput'
 import { ErrorMessage } from './ErrorMessage'
-import { ClaudeAuthBanner, isClaudeAuthError } from './ClaudeAuthBanner'
+import { isClaudeAuthError } from './ClaudeAuthBanner'
 import { ProviderAuthModal } from '@/app/components/integrations/ProviderAuthModal'
-import { FirebaseSetupBanner } from './FirebaseSetupBanner'
 import { TaskProgress, type TodoItem } from './TaskProgress'
 import { SuggestionChips } from './SuggestionChips'
 import { generateSuggestions } from './generateSuggestions'
@@ -31,6 +30,17 @@ import ConvexLogo from '@/app/components/ui/icons/convex-logo'
 import RevenueCatLogo from '@/app/components/ui/icons/revenuecat-logo'
 import StripeLogo from '@/app/components/ui/icons/stripe-logo'
 import { isIntegrationAvailableForAppType, type IntegrationId } from '@/app/types/integrations'
+import {
+  detectIntegrationSecretsPresence,
+  type IntegrationSecretsPresence,
+} from '@/app/lib/integrations/secrets'
+import {
+  detectConvexBootstrap,
+  getConvexEnvVarsForSession,
+  getConvexSecretStatusFromSecrets,
+  type ConvexIntegrationStage,
+  type SecretEntry,
+} from '@/app/lib/integrations/convex'
 import toast from 'react-hot-toast'
 import './styles.css'
 
@@ -62,6 +72,7 @@ interface ChatProps {
   projectHasConvex?: boolean // Whether Convex is already provisioned on this project
   projectHasFirebase?: boolean // Whether Firebase is already provisioned on this project
   projectHasStripe?: boolean // Whether Stripe is already provisioned on this project
+  projectHasRevenuecat?: boolean // Whether RevenueCat is already provisioned on this project
   appType?: string | null // Project app type (web, mobile, expo, nextjs, vite, etc.)
 }
 
@@ -76,9 +87,9 @@ export function Chat({
   autoStart = false,
   initialSessionId,
   onSessionIdChange,
-  projectHasConvex = false,
   projectHasFirebase = false,
   projectHasStripe = false,
+  projectHasRevenuecat = false,
   appType,
 }: ChatProps) {
   // Codex (OpenAI) provider is enabled by default
@@ -115,26 +126,59 @@ export function Chat({
   // Any session IDs received during streaming (current session) should NOT trigger a load
   const initialSessionIdAtMount = useRef(resolvedInitialSessionId)
   const usageRef = useRef<{ inputTokens: number; outputTokens: number }>({ inputTokens: 0, outputTokens: 0 })
-  const submitRef = useRef<(text: string, attachments?: ImageAttachment[]) => void>()
+  const submitRef = useRef<((text: string, attachments?: ImageAttachment[]) => void) | null>(null)
   const messagesRef = useRef<ChatMessage[]>(messages)
   const [providerAuthStatus, setProviderAuthStatus] = useState<Record<string, boolean>>({})
-  const [integrationStatus, setIntegrationStatus] = useState<Record<string, boolean>>({
-    firebase: false,
-    convex: false,
-    stripe: false,
-    revenuecat: false,
-  })
-  // Track if Firebase connection expired and needs reconnection
-  const [showFirebaseReconnect, setShowFirebaseReconnect] = useState(false)
   // Track if Claude auth modal should be shown
   const [showClaudeAuthModal, setShowClaudeAuthModal] = useState(false)
   // Track which integrations have their required secrets already configured
-  const [hasIntegrationSecrets, setHasIntegrationSecrets] = useState<Record<string, boolean>>({
+  const [hasIntegrationSecrets, setHasIntegrationSecrets] = useState<IntegrationSecretsPresence>({
     firebase: false,
     convex: false,
     stripe: false,
     revenuecat: false,
   })
+  const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
+  const files = useStore(workbenchStore.files)
+  const convexSecretStatus = useMemo(
+    () => getConvexSecretStatusFromSecrets(projectSecrets, normalizedAppType),
+    [projectSecrets, normalizedAppType]
+  )
+
+  const convexStage: ConvexIntegrationStage = useMemo(() => {
+    const convexBootstrapped = detectConvexBootstrap(files)
+    if (!convexSecretStatus.isConfigured) return 'disconnected'
+    if (convexBootstrapped) return 'ready'
+    if (convexProvisioned) return 'setting_up'
+    return 'connected'
+  }, [convexSecretStatus.isConfigured, files, convexProvisioned])
+
+  // Clear in-progress flag once Convex bootstrap artifacts are present.
+  useEffect(() => {
+    if (convexProvisioned && detectConvexBootstrap(files)) {
+      setConvexProvisioned(false)
+    }
+  }, [convexProvisioned, files])
+
+  const integrationStatus = useMemo(
+    () => ({
+      firebase: projectHasFirebase || firebaseProvisioned || hasIntegrationSecrets.firebase,
+      convex: convexStage === 'ready',
+      stripe: projectHasStripe || hasIntegrationSecrets.stripe,
+      revenuecat: projectHasRevenuecat || revenuecatProvisioned || hasIntegrationSecrets.revenuecat,
+    }),
+    [
+      projectHasFirebase,
+      firebaseProvisioned,
+      hasIntegrationSecrets.firebase,
+      convexStage,
+      projectHasStripe,
+      hasIntegrationSecrets.stripe,
+      projectHasRevenuecat,
+      revenuecatProvisioned,
+      hasIntegrationSecrets.revenuecat,
+    ]
+  )
 
   // Keep messagesRef in sync
   useEffect(() => {
@@ -149,6 +193,8 @@ export function Chat({
   // Mirrors workbench pattern but reads from projects.json instead of backend API
   console.log('[Chat] Calling useSessions with projectId:', projectId)
   const { sessions: allSessions, refresh: refreshSessions } = useSessions(projectId)
+  const activeTab = useStore(workbenchStore.activeTab)
+  const secretsVersion = useStore(workbenchStore.secretsVersion)
 
   // Debug: Log sessions when they change
   useEffect(() => {
@@ -222,83 +268,12 @@ export function Chat({
       .then((result) => {
         if (result.error || !result.secrets) return
 
+        setProjectSecrets(result.secrets)
         const secretKeys = result.secrets.map((s) => s.key)
-
-        // Firebase requires at least API key and project ID
-        const firebasePrefix = normalizedAppType === 'web' ? 'NEXT_PUBLIC_FIREBASE_' : 'EXPO_PUBLIC_FIREBASE_'
-        const hasFirebaseSecrets =
-          secretKeys.includes(`${firebasePrefix}API_KEY`) &&
-          secretKeys.includes(`${firebasePrefix}PROJECT_ID`)
-
-        // Convex requires the URL
-        const convexUrlKey = normalizedAppType === 'web' ? 'NEXT_PUBLIC_CONVEX_URL' : 'EXPO_PUBLIC_CONVEX_URL'
-        const hasConvexSecrets =
-          secretKeys.includes('CONVEX_URL') || secretKeys.includes(convexUrlKey)
-
-        // Stripe requires the publishable key (web-only, always NEXT_PUBLIC_ prefix)
-        const hasStripeSecrets = secretKeys.includes('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY')
-
-        // RevenueCat requires the API key (mobile-only, always EXPO_PUBLIC_ prefix)
-        const hasRevenuecatSecrets = secretKeys.includes('EXPO_PUBLIC_REVENUECAT_API_KEY')
-
-        setHasIntegrationSecrets({
-          firebase: hasFirebaseSecrets,
-          convex: hasConvexSecrets,
-          stripe: hasStripeSecrets,
-          revenuecat: hasRevenuecatSecrets,
-        })
+        setHasIntegrationSecrets(detectIntegrationSecretsPresence(secretKeys, normalizedAppType))
       })
       .catch(() => {})
-  }, [projectId])
-
-  // Re-fetch Stripe integration status after OAuth callback
-  useEffect(() => {
-    if (!app?.onStripeCallback) return
-
-    const unsubscribe = app.onStripeCallback(async (data) => {
-      if (data.success) {
-        setIntegrationStatus((prev) => ({ ...prev, stripe: true }))
-        setInput('Setting up Stripe...')
-        setIsProvisioning(true)
-
-        setIsProvisioning(false)
-        const prompt = 'Use the /add-stripe skill to set up Stripe payments integration for this project'
-        setInput(prompt)
-        setTimeout(() => {
-          submitRef.current?.(prompt)
-        }, 100)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
-
-  // Re-fetch RevenueCat integration status after OAuth callback
-  useEffect(() => {
-    if (!app?.onRevenueCatCallback) return
-
-    const unsubscribe = app.onRevenueCatCallback(async (data) => {
-      if (data.success) {
-        setIntegrationStatus((prev) => ({ ...prev, revenuecat: true }))
-        setInput('Setting up RevenueCat...')
-        setIsProvisioning(true)
-
-        setIsProvisioning(false)
-        setRevenuecatProvisioned(true)
-        const prompt = 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project'
-        setInput(prompt)
-        setTimeout(() => {
-          submitRef.current?.(prompt)
-        }, 100)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
+  }, [projectId, normalizedAppType, activeTab, secretsVersion])
 
   // Handle Claude re-authentication - opens the auth modal
   const handleClaudeReconnect = useCallback(() => {
@@ -338,14 +313,43 @@ export function Chat({
 
   // Integration menu handlers
   const handleIntegrationConnect = useCallback(async (id: string) => {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined
-    if (id === 'firebase') {
-      toast.error('Configure Firebase credentials in Project Settings > Integrations')
-      return
+    const setupPromptByIntegration: Record<string, MessagePart['type']> = {
+      firebase: 'firebase-setup-prompt',
+      convex: 'convex-setup-prompt',
+      stripe: 'stripe-setup-prompt',
+      revenuecat: 'revenuecat-setup-prompt',
     }
-    if (id === 'convex') window.open(`${backendUrl}/desktop/convex/connect`, '_blank')
-    if (id === 'stripe') window.open(`${backendUrl}/desktop/stripe/connect`, '_blank')
-    if (id === 'revenuecat') window.open(`${backendUrl}/desktop/revenuecat/connect`, '_blank')
+
+    const promptType = setupPromptByIntegration[id]
+    workbenchStore.setActiveTab('settings')
+    if (id === 'firebase' || id === 'convex' || id === 'stripe' || id === 'revenuecat') {
+      workbenchStore.setPendingIntegrationConnect({
+        integrationId: id as PendingIntegrationId,
+        source: 'chat',
+      })
+    }
+
+    if (!promptType) return
+
+    setMessages((prev) => {
+      const lastMessage = prev[prev.length - 1]
+      const isDuplicatePrompt =
+        lastMessage?.role === 'assistant' && !!lastMessage.parts?.some((part) => part?.type === promptType)
+
+      if (isDuplicatePrompt) {
+        return prev
+      }
+
+      const guidanceMessage: ChatMessage = {
+        id: generateId(),
+        role: 'assistant',
+        content: '',
+        parts: [{ type: promptType } as MessagePart],
+        createdAt: new Date().toISOString(),
+      }
+
+      return [...prev, guidanceMessage]
+    })
   }, [])
 
   const handleIntegrationUse = useCallback(
@@ -360,7 +364,23 @@ export function Chat({
         setFirebaseProvisioned(true)
       }
       if (id === 'convex') {
+        if (!convexSecretStatus.isConfigured) {
+          workbenchStore.setActiveTab('settings')
+          workbenchStore.setPendingIntegrationConnect({
+            integrationId: 'convex',
+            source: 'chat',
+          })
+          return
+        }
+
+        const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
+        if (Object.keys(pendingEnvVars).length > 0) {
+          workbenchStore.setPendingEnvVars(pendingEnvVars)
+        }
         setConvexProvisioned(true)
+      }
+      if (id === 'revenuecat') {
+        setRevenuecatProvisioned(true)
       }
 
       const prompt = prompts[id]
@@ -371,7 +391,7 @@ export function Chat({
         }, 100)
       }
     },
-    []
+    [convexSecretStatus]
   )
 
   // Convert session message to ChatMessage format
@@ -625,6 +645,31 @@ export function Chat({
 
       if (msg.type === 'text') {
         const textContent = msg.content as string
+
+        // Detect poisoned conversation history — the SDK may emit the API error
+        // as assistant text rather than throwing.
+        if (
+          textContent?.includes('image cannot be empty') ||
+          textContent?.includes('image.source.base64')
+        ) {
+          console.warn('[Chat] Detected poisoned conversation history (empty screenshot base64) in message stream')
+          toast.error('Screenshot issue detected. Starting a fresh session.', { id: 'agent-error' })
+          localAgent.terminate()
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: generateId(),
+              role: 'assistant',
+              content: 'A corrupted screenshot was in the conversation history. I\'ve started a fresh session — please resend your message.',
+              parts: [{ type: 'text', text: 'A corrupted screenshot was in the conversation history. I\'ve started a fresh session — please resend your message.' }],
+              createdAt: new Date().toISOString(),
+            },
+          ])
+          setAgentSessionId(null)
+          setIsStreaming(false)
+          return
+        }
+
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1]
           if (lastMsg && lastMsg.role === 'assistant') {
@@ -783,6 +828,32 @@ export function Chat({
     },
     onError: (err) => {
       console.error('[Chat] Local agent error:', err)
+
+      // Detect poisoned conversation history (empty screenshot base64).
+      // Once this enters the history, every subsequent API call fails because
+      // the full history is resent. Recover by terminating the session.
+      if (
+        err.includes('image cannot be empty') ||
+        err.includes('image.source.base64')
+      ) {
+        console.warn('[Chat] Detected poisoned conversation history — terminating session')
+        toast.error('Screenshot data corrupted the conversation. Starting a fresh session.', { id: 'agent-error' })
+        localAgent.terminate()
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: generateId(),
+            role: 'assistant',
+            content: 'The previous session had a corrupted screenshot in its history. I\'ve started a fresh session — please resend your message.',
+            parts: [{ type: 'text', text: 'The previous session had a corrupted screenshot in its history. I\'ve started a fresh session — please resend your message.' }],
+            createdAt: new Date().toISOString(),
+          },
+        ])
+        setAgentSessionId(null)
+        setIsStreaming(false)
+        return
+      }
+
       setError(err)
       setIsStreaming(false)
       toast.error(err, { id: 'agent-error' })
@@ -1039,12 +1110,70 @@ export function Chat({
       }
 
       // Intercept Firebase-related prompts when Firebase is not provisioned and secrets are not configured
-      if (/\bfirebase\b/i.test(text) && !projectHasFirebase && !firebaseProvisioned && !hasIntegrationSecrets.firebase) {
+      if (
+        /\bfirebase\b/i.test(text) &&
+        !projectHasFirebase &&
+        !firebaseProvisioned &&
+        !hasIntegrationSecrets.firebase &&
+        !/\/firebase-setup\b/i.test(text)
+      ) {
         const guidanceMessage: ChatMessage = {
           id: generateId(),
           role: 'assistant',
           content: '',
           parts: [{ type: 'firebase-setup-prompt' } as MessagePart],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
+      // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
+      if (
+        /\bconvex\b/i.test(text) &&
+        convexStage === 'disconnected' &&
+        !/\/convex-setup\b/i.test(text)
+      ) {
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          parts: [{ type: 'convex-setup-prompt' } as MessagePart],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
+      // Intercept Stripe-related prompts when Stripe is not provisioned and secrets are not configured
+      if (/\bstripe\b/i.test(text) && !projectHasStripe && !hasIntegrationSecrets.stripe && !/\/add-stripe\b/i.test(text)) {
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          parts: [{ type: 'stripe-setup-prompt' } as MessagePart],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
+      // Intercept RevenueCat-related prompts when RevenueCat is not provisioned and secrets are not configured
+      if (
+        /\brevenue\s*cat\b/i.test(text) &&
+        !projectHasRevenuecat &&
+        !revenuecatProvisioned &&
+        !hasIntegrationSecrets.revenuecat &&
+        !/\/add-revenuecat\b/i.test(text)
+      ) {
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          parts: [{ type: 'revenuecat-setup-prompt' } as MessagePart],
           createdAt: new Date().toISOString(),
         }
         setMessages((prev) => [...prev, userMessage, guidanceMessage])
@@ -1069,7 +1198,22 @@ export function Chat({
 
       setInput('')
     },
-    [isStreaming, provider, localAgent, scrollToBottom, projectPath, projectHasConvex, convexProvisioned, projectHasFirebase, firebaseProvisioned, projectHasStripe, hasIntegrationSecrets]
+    [
+      isStreaming,
+      provider,
+      localAgent,
+      scrollToBottom,
+      projectPath,
+      convexStage,
+      projectHasFirebase,
+      firebaseProvisioned,
+      hasIntegrationSecrets.firebase,
+      projectHasStripe,
+      hasIntegrationSecrets.stripe,
+      projectHasRevenuecat,
+      revenuecatProvisioned,
+      hasIntegrationSecrets.revenuecat,
+    ]
   )
 
   // Keep submitRef in sync so handleIntegrationUse can auto-submit
@@ -1226,6 +1370,23 @@ export function Chat({
     })
     if (pendingPrompt && !isStreaming && projectPath) {
       console.log('[Chat] Sending pending prompt:', pendingPrompt)
+      if (/\/convex-setup\b/i.test(pendingPrompt)) {
+        if (!convexSecretStatus.isConfigured) {
+          workbenchStore.setActiveTab('settings')
+          workbenchStore.setPendingIntegrationConnect({
+            integrationId: 'convex',
+            source: 'chat',
+          })
+          workbenchStore.clearPendingPrompt()
+          return
+        }
+
+        const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
+        if (Object.keys(pendingEnvVars).length > 0) {
+          workbenchStore.setPendingEnvVars(pendingEnvVars)
+        }
+        setConvexProvisioned(true)
+      }
       handleSubmit(pendingPrompt)
       workbenchStore.clearPendingPrompt()
     } else {
@@ -1235,7 +1396,7 @@ export function Chat({
         hasProjectPath: !!projectPath,
       })
     }
-  }, [pendingPrompt, isStreaming, projectPath, handleSubmit])
+  }, [pendingPrompt, isStreaming, projectPath, handleSubmit, convexSecretStatus])
 
   // Extract todos from messages (find most recent TodoWrite)
   const todos = useMemo(() => {
@@ -1361,26 +1522,13 @@ export function Chat({
             onIntegrationUse={handleIntegrationUse}
             onClaudeReconnect={handleClaudeReconnect}
             onClaudeAuthError={handleClaudeAuthError}
-            isConvexConnected={integrationStatus.convex}
+            convexStage={convexStage}
+            convexMissingKey={convexSecretStatus.missingKey}
             isFirebaseConnected={integrationStatus.firebase}
             isStripeConnected={integrationStatus.stripe}
+            isRevenueCatConnected={integrationStatus.revenuecat}
             isClaudeAuthenticated={providerAuthStatus.claude}
           />
-        )}
-        {showFirebaseReconnect && (
-          <div style={{ padding: '0 16px', marginBottom: '8px' }}>
-            <div style={{ marginBottom: '8px', fontSize: '13px', color: 'var(--bfloat-text-secondary, #a0a0b8)' }}>
-              Your Google connection has expired. Please reconnect to continue with Firebase setup.
-            </div>
-            <FirebaseSetupBanner
-              isConnected={false}
-              onConnect={() => {
-                setShowFirebaseReconnect(false)
-                handleIntegrationConnect('firebase')
-              }}
-              onUse={() => {}}
-            />
-          </div>
         )}
         {/* Preview/Runtime Error with Fix button */}
         {promptError && !isStreaming && (

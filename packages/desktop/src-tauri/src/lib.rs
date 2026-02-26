@@ -125,7 +125,7 @@ pub fn run() {
     #[cfg(debug_assertions)] // <- Only export on non-release builds
     export_types(&builder);
 
-    #[cfg(all(target_os = "macos", not(debug_assertions)))]
+    #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("killall")
         .arg("bfloat-sidecar")
         .output();

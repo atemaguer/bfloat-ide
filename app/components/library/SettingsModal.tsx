@@ -37,34 +37,6 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
   // Convex OAuth status check is not available in local-first mode
 
-  // Listen for OAuth callbacks from deep links
-  useEffect(() => {
-    if (!open) return
-
-    // Listen for OAuth callbacks via custom events (works in both Electron and Tauri)
-    const handleOAuthSuccess = ((e: CustomEvent) => {
-      const data = e.detail as { message: string }
-      setGoogleConnected(true)
-      setConvexConnected(true)
-      setGoogleStatusMessage({ type: 'success', message: data?.message || 'Connected successfully' })
-      setTimeout(() => setGoogleStatusMessage(null), 5000)
-    }) as EventListener
-
-    const handleOAuthError = ((e: CustomEvent) => {
-      const data = e.detail as { message: string }
-      setGoogleStatusMessage({ type: 'error', message: data?.message || 'Connection failed' })
-      setTimeout(() => setGoogleStatusMessage(null), 5000)
-    }) as EventListener
-
-    window.addEventListener('oauth-success', handleOAuthSuccess)
-    window.addEventListener('oauth-error', handleOAuthError)
-
-    return () => {
-      window.removeEventListener('oauth-success', handleOAuthSuccess)
-      window.removeEventListener('oauth-error', handleOAuthError)
-    }
-  }, [open])
-
   // Handle escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -100,8 +72,10 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   }
 
   const handleConvexConnect = () => {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined
-    window.open(`${backendUrl}/desktop/convex/connect`, '_blank')
+    toast('Configure Convex credentials in Project Settings > Development Variables', {
+      icon: 'ℹ️',
+      duration: 5000,
+    })
   }
 
   const handleConvexDisconnect = async () => {

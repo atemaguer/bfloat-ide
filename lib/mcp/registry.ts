@@ -10,7 +10,6 @@ import type { McpServerDefinition, McpServerContext } from './types'
 
 // Server definitions
 import { terminalServer } from './servers/terminal'
-import { screenshotServer } from './servers/screenshot'
 import { stripeServer } from './servers/stripe'
 import { revenuecatServer } from './servers/revenuecat'
 
@@ -85,7 +84,6 @@ export function getMcpRegistry(): McpServerRegistry {
   if (!_registry) {
     _registry = new McpServerRegistry()
     _registry.register(terminalServer)
-    _registry.register(screenshotServer)
     _registry.register(stripeServer)
     _registry.register(revenuecatServer)
   }
