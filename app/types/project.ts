@@ -1,5 +1,8 @@
 // Project types for the IDE
 
+import type { Deployment } from '@/app/stores/deploy'
+import type { LaunchConfig } from '@/app/types/launch'
+
 export interface ProjectFile {
   type: 'file'
   content: string
@@ -60,6 +63,10 @@ export interface Project {
   }
   // Agent sessions for this project (local-first storage)
   sessions?: AgentSession[]
+  // Deployment history (persisted to projects.json via sidecar)
+  deployments?: Deployment[]
+  // Cached launch config (file is source of truth, this is a cache)
+  launchConfig?: LaunchConfig | null
   // Latest agent session (loaded from backend) - DEPRECATED, use sessions array
   latestAgentSession?: AgentSession | null
   // Import tracking (for GitHub imports)
@@ -92,6 +99,8 @@ export interface AgentSession {
   name?: string | null
   createdAt: string
   lastUsedAt: string
+  totalTokens?: number
+  totalCostUsd?: number
 }
 
 export interface ChatMessage {

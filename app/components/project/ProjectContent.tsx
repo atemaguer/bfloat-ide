@@ -8,6 +8,7 @@ import type { ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { Chat } from '@/app/components/chat/Chat'
 import { Workbench, WorkbenchHandle } from '@/app/components/workbench/Workbench'
 import { workbenchStore } from '@/app/stores/workbench'
+import { deployStore } from '@/app/stores/deploy'
 import { aiAgent, localProjects } from '@/app/api/sidecar'
 
 // Local session info - unified format for SessionTabs
@@ -115,14 +116,15 @@ export function ProjectContent({
     }
   }, [project.id, projectPath, hasAlignedProjectPath, initialProvider, discoveredSessionId])
 
-  // Initial session load
+  // Initial session + deployment load
   useEffect(() => {
     if (hasLoadedSessions.current) return
     if (syncStatus !== 'ready') return
 
     hasLoadedSessions.current = true
     loadSessions()
-  }, [syncStatus, loadSessions])
+    deployStore.loadDeployments(project.id)
+  }, [syncStatus, loadSessions, project.id])
 
   // Callback for Chat to notify when a session is created/updated
   const handleSessionsChange = useCallback(() => {
