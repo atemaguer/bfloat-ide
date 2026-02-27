@@ -53,7 +53,7 @@ If for any reason the key is not configured and you have MCP access:
    ```
    If this fails, report the error and stop. Do NOT retry.
 
-3. **Update app.json** — **IMPORTANT: Only do this AFTER step 2 completes successfully.** The `react-native-purchases` package must be fully installed before adding it to the plugins array, otherwise Expo throws a `PluginError: Unable to resolve a valid config plugin` error. Add the RevenueCat plugin from [templates/app-json-plugin.json](templates/app-json-plugin.json) to the `expo.plugins` array. Make sure `expo-build-properties` is also in the plugins array with iOS deployment target of at least 15.1.
+3. **Update app.json** — Add the `expo-build-properties` plugin from [templates/app-json-plugin.json](templates/app-json-plugin.json) to the `expo.plugins` array with iOS deployment target of at least 15.1. **IMPORTANT: Do NOT add `react-native-purchases` to the plugins array.** It does not ship an Expo config plugin (`app.plugin.js`) and adding it causes `PluginError: Unable to resolve a valid config plugin`. It only needs to be a dependency (installed in step 2).
 
 4. **Create RevenueCatProvider** - Copy [templates/providers/RevenueCatProvider.tsx](templates/providers/RevenueCatProvider.tsx) into the project's providers directory and wrap the app layout with it.
 
