@@ -75,6 +75,12 @@ macOS (dev identifier):
 tail -F "$HOME/Library/Application Support/com.bfloat.ide.dev/logs/frontend-console.log"
 ```
 
+Pretty-print with `pino-pretty` (logs are NDJSON, no repo dependency needed):
+
+```bash
+tail -F "$HOME/Library/Application Support/com.bfloat.ide.dev/logs/frontend-console.log" | pnpm dlx pino-pretty --colorize
+```
+
 ### Determine the actual log location
 
 The base path is Tauri `BaseDirectory::AppLocalData`, which depends on OS + app identifier.

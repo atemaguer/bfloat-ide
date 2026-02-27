@@ -4,6 +4,13 @@ type LogLevel = "log" | "info" | "warn" | "error" | "debug"
 
 const FLUSH_INTERVAL_MS = 250
 const MAX_QUEUE_SIZE = 1000
+const PINO_LEVEL: Record<LogLevel, number> = {
+  debug: 20,
+  log: 30,
+  info: 30,
+  warn: 40,
+  error: 50,
+}
 
 let installed = false
 let sending = false
@@ -49,7 +56,12 @@ function serializeArgs(args: unknown[]): string {
 function enqueue(line: string): void {
   if (queue.length >= MAX_QUEUE_SIZE) {
     queue.shift()
-    queue.push(`${new Date().toISOString()} [warn] [frontend-log-bridge] queue overflow, dropping oldest log`)
+    queue.push(
+      JSON.stringify({
+        level: 40,
+        msg: "[frontend-log-bridge] queue overflow, dropping oldest log",
+      }),
+    )
   }
 
   queue.push(line)
@@ -89,7 +101,10 @@ export function installFrontendLogBridge(): void {
     (...args: unknown[]): void => {
       original[level](...args)
       const message = serializeArgs(args)
-      const line = `${new Date().toISOString()} [${level}] ${message}`
+      const line = JSON.stringify({
+        level: PINO_LEVEL[level],
+        msg: message,
+      })
       enqueue(line)
     }
 
