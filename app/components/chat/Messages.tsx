@@ -42,6 +42,17 @@ interface ToolCallPart {
   output: unknown
 }
 
+function validateJsonWrite(filePath: string, content: string): string | null {
+  if (!filePath.toLowerCase().endsWith('.json')) return null
+
+  try {
+    JSON.parse(content)
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Unknown JSON parse error'
+  }
+}
+
 export const Messages = memo(function Messages({
   messages,
   isStreaming,
@@ -101,16 +112,25 @@ export const Messages = memo(function Messages({
       for (const part of toolParts) {
         // Only process tool calls that have output (completed)
         if (part.output) {
+          const { filePath, content } = part.input
+          if (filePath && content !== undefined) {
+            const jsonError = validateJsonWrite(filePath, content)
+            if (jsonError) {
+              const errorMessage = `Blocked invalid JSON write to ${filePath}: ${jsonError}`
+              console.error(`[Messages] ${errorMessage}`)
+              workbenchStore.setPromptError(errorMessage)
+              break
+            }
+          }
+
           switch (part.type) {
             case 'tool-createFile': {
-              const { filePath, content } = part.input
               if (filePath && content !== undefined) {
                 workbenchStore.addFile(filePath, content)
               }
               break
             }
             case 'tool-updateFile': {
-              const { filePath, content } = part.input
               if (filePath && content !== undefined) {
                 workbenchStore.updateFile(filePath, content)
               }
