@@ -21,13 +21,15 @@ import {
 import { secrets as secretsApi, projectFiles } from '@/app/api/sidecar'
 import { isConvexSecretKey } from '@/app/lib/integrations/secrets'
 import { detectConvexBootstrap, getConvexSecretStatusFromSecrets } from '@/app/lib/integrations/convex'
-import type { ConnectIntegrationId } from '@/app/lib/integrations/credentials'
+import { hasRequiredSecrets, type ConnectIntegrationId } from '@/app/lib/integrations/credentials'
 import './styles.css'
 
 interface ProjectSettingsProps {
   project: Project
   onProjectUpdate?: (project: Project) => void
 }
+
+const REVENUECAT_PUBLIC_KEY = 'EXPO_PUBLIC_REVENUECAT_API_KEY'
 
 export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsProps) {
   const [isSaving, setIsSaving] = useState(false)
@@ -169,6 +171,11 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         toast.success('Convex credentials updated.')
       }
     }
+
+    if (key === REVENUECAT_PUBLIC_KEY && isChanged && nextValue) {
+      workbenchStore.triggerChatPrompt('Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project')
+      toast.success('RevenueCat key saved. Starting RevenueCat setup in chat...')
+    }
   }
 
   const handleSaveIntegrationSecrets = async (
@@ -221,7 +228,18 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       }
     }
 
-    if (successes.length > 0 && activeIntegrationId !== 'convex') {
+    if (activeIntegrationId === 'revenuecat' && successes.length > 0) {
+      const result = await secretsApi.readSecrets(project.id)
+      const secretKeys = (result.secrets || []).map((secret) => secret.key)
+      const hasRevenuecatKey = hasRequiredSecrets(secretKeys, 'revenuecat', normalizedAppType)
+
+      if (hasRevenuecatKey) {
+        workbenchStore.triggerChatPrompt('Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project')
+        toast.success('RevenueCat credentials saved. Starting RevenueCat setup in chat...')
+      }
+    }
+
+    if (successes.length > 0 && activeIntegrationId !== 'convex' && activeIntegrationId !== 'revenuecat') {
       toast.success('Integration credentials saved.')
     }
 

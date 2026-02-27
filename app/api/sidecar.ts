@@ -25,6 +25,8 @@ export {
   templateBridge as template,
   appBridge as app,
   screenshotBridge as screenshot,
+  workbenchBridge as workbench,
+  getPreviewProxyUrl,
 } from '@/packages/desktop/src/conveyor-bridge'
 
 // Re-export core API client for advanced use cases

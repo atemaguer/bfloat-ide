@@ -91,7 +91,7 @@ export function getIntegrationCredentialSpec(
           {
             key: 'EXPO_PUBLIC_REVENUECAT_API_KEY',
             label: 'RevenueCat Public SDK Key',
-            placeholder: 'appl_... or goog_...',
+            placeholder: 'test_***',
             required: true,
             sensitive: true,
           },

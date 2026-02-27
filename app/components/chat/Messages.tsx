@@ -27,7 +27,9 @@ interface MessagesProps {
   convexMissingKey?: 'url' | 'deploy_key' | null
   isFirebaseConnected?: boolean
   isStripeConnected?: boolean
+  isStripeSettingUp?: boolean
   isRevenueCatConnected?: boolean
+  isRevenueCatSettingUp?: boolean
   isClaudeAuthenticated?: boolean
 }
 
@@ -38,6 +40,17 @@ interface ToolCallPart {
     content?: string
   }
   output: unknown
+}
+
+function validateJsonWrite(filePath: string, content: string): string | null {
+  if (!filePath.toLowerCase().endsWith('.json')) return null
+
+  try {
+    JSON.parse(content)
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Unknown JSON parse error'
+  }
 }
 
 export const Messages = memo(function Messages({
@@ -52,7 +65,9 @@ export const Messages = memo(function Messages({
   convexMissingKey,
   isFirebaseConnected,
   isStripeConnected,
+  isStripeSettingUp,
   isRevenueCatConnected,
+  isRevenueCatSettingUp,
   isClaudeAuthenticated,
 }: MessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -97,16 +112,25 @@ export const Messages = memo(function Messages({
       for (const part of toolParts) {
         // Only process tool calls that have output (completed)
         if (part.output) {
+          const { filePath, content } = part.input
+          if (filePath && content !== undefined) {
+            const jsonError = validateJsonWrite(filePath, content)
+            if (jsonError) {
+              const errorMessage = `Blocked invalid JSON write to ${filePath}: ${jsonError}`
+              console.error(`[Messages] ${errorMessage}`)
+              workbenchStore.setPromptError(errorMessage)
+              break
+            }
+          }
+
           switch (part.type) {
             case 'tool-createFile': {
-              const { filePath, content } = part.input
               if (filePath && content !== undefined) {
                 workbenchStore.addFile(filePath, content)
               }
               break
             }
             case 'tool-updateFile': {
-              const { filePath, content } = part.input
               if (filePath && content !== undefined) {
                 workbenchStore.updateFile(filePath, content)
               }
@@ -181,10 +205,12 @@ export const Messages = memo(function Messages({
                   convexStage={convexStage}
                   convexMissingKey={convexMissingKey}
                   isFirebaseConnected={isFirebaseConnected}
-                isStripeConnected={isStripeConnected}
-                isRevenueCatConnected={isRevenueCatConnected}
-                isClaudeAuthenticated={isClaudeAuthenticated}
-              />
+                  isStripeConnected={isStripeConnected}
+                  isStripeSettingUp={isStripeSettingUp}
+                  isRevenueCatConnected={isRevenueCatConnected}
+                  isRevenueCatSettingUp={isRevenueCatSettingUp}
+                  isClaudeAuthenticated={isClaudeAuthenticated}
+                />
               )}
             </motion.div>
           )

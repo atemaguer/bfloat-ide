@@ -20,6 +20,12 @@ Start implementation quickly, then gather additional context incrementally only 
 const TERMINAL_USAGE_PROMPT = `
 ## Terminal Usage for Long-Running Processes
 
+Managed dev server policy (highest priority):
+- The IDE already starts and manages the app dev server for realtime preview.
+- Do NOT run dev-server start commands manually (for example \`npm start\`, \`npm run dev\`, \`npx expo start\`, \`next dev\`, \`vite\`).
+- Before any server lifecycle action, call \`mcp__workbench__get_dev_server_status\`.
+- Only call \`restart_app\` when status is unhealthy/error. Do not restart when status is running/healthy.
+
 You have access to a Terminal MCP server for running long-running or persistent processes. **ALWAYS** use the terminal tools instead of Bash for any command that:
 - Runs a server or listener (e.g. \`stripe listen\`, \`npm run dev\`, \`npx expo start\`)
 - Watches for file changes (e.g. \`tsc --watch\`, \`nodemon\`)

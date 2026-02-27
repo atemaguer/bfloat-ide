@@ -24,7 +24,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { createScreenshotMcpServer } from "./screenshot-mcp.ts";
+import { createWorkbenchMcpServer } from "./workbench-mcp.ts";
 import { buildWorkspaceProfile, shouldBlockScaffoldCommand } from "./workspace-profile.ts";
+import { assessDevServer } from "./workbench-runtime.ts";
 import { updateSessionInProject } from "../routes/local-projects.ts";
 import { CodexProvider } from "./codex-provider.ts";
 
@@ -320,6 +322,32 @@ function buildEnhancedPath(): string {
     .join(path.delimiter);
 }
 
+const DEV_SERVER_START_PATTERNS: RegExp[] = [
+  /\bnpm\s+start\b/i,
+  /\bnpm\s+run\s+dev\b/i,
+  /\bnpm\s+run\s+start\b/i,
+  /\bpnpm\s+dev\b/i,
+  /\bpnpm\s+run\s+dev\b/i,
+  /\byarn\s+dev\b/i,
+  /\byarn\s+start\b/i,
+  /\bbun\s+run\s+dev\b/i,
+  /\bbun\s+dev\b/i,
+  /\bnpx\s+expo\s+start\b/i,
+  /\bexpo\s+start\b/i,
+  /\bnext\s+dev\b/i,
+  /\bvite\b(?:\s|$)/i,
+  /\breact-native\s+start\b/i,
+];
+
+function normalizeCommand(command: string): string {
+  return command.trim().replace(/\s+/g, " ");
+}
+
+function isDevServerStartCommand(command: string): boolean {
+  const normalized = normalizeCommand(command);
+  return DEV_SERVER_START_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 /**
  * Convert a raw SDKMessage from the Claude Agent SDK into a ProviderStreamEvent.
  *
@@ -359,6 +387,47 @@ function convertSDKMessageToEvent(
             name: block.name,
             input: block.input as Record<string, unknown>,
             status: "running",
+          });
+        }
+      }
+
+      return events.length === 1 ? events[0] : events.length > 0 ? events : null;
+    }
+
+    case "user": {
+      const blocks = sdkMessage.message.content;
+      const events: ProviderStreamEvent[] = [];
+
+      for (const block of blocks) {
+        if ("type" in block && block.type === "tool_result") {
+          const output =
+            typeof block.content === "string"
+              ? block.content
+              : Array.isArray(block.content)
+                ? block.content
+                    .map((entry) => {
+                      if (typeof entry === "string") return entry;
+                      if (entry && typeof entry === "object" && "text" in entry) {
+                        const text = (entry as { text?: unknown }).text;
+                        return typeof text === "string" ? text : "";
+                      }
+                      return "";
+                    })
+                    .join("\n")
+                : "";
+
+          events.push({
+            kind: "tool_result",
+            callId:
+              ("tool_use_id" in block && typeof block.tool_use_id === "string"
+                ? block.tool_use_id
+                : ("id" in block && typeof block.id === "string" ? block.id : "")),
+            name:
+              ("name" in block && typeof block.name === "string"
+                ? block.name
+                : ""),
+            output,
+            isError: Boolean("is_error" in block ? block.is_error : false),
           });
         }
       }
@@ -514,6 +583,7 @@ class ClaudeProvider implements AgentProvider {
       mcpServers: {
         ...(options.mcpServers as Record<string, any>),
         screenshot: createScreenshotMcpServer({ cwd: options.cwd }),
+        workbench: createWorkbenchMcpServer({ cwd: options.cwd }),
       },
       stderr: (data: string) => {
         console.log(`${CLAUDE_LOG} [stderr] ${data}`);
@@ -1036,10 +1106,31 @@ async function runStream(sessionId: string, message: string): Promise<void> {
 
   // Accumulate assistant text for conversation history
   let assistantText = "";
+  const toolNameByCallId = new Map<string, string>();
 
   try {
+    const designModeDirective = workspaceProfile.isTemplateBootstrap
+      ? [
+          "## Frontend Design Mode",
+          "Workspace classification: template-bootstrap.",
+          "Treat this as a greenfield app scaffolded from a starter template.",
+          "Do NOT treat starter template styling as an established design system.",
+          "For frontend UI requests, prioritize creative/new design direction via /frontend-design skill.",
+        ].join("\n")
+      : [
+          "## Frontend Design Mode",
+          "Workspace classification: existing app.",
+          "Treat this as an established product unless the user explicitly requests a redesign.",
+          "Preserve existing design system tokens/components and adapt in place.",
+        ].join("\n");
+
+    const mergedSystemPrompt = session.options.systemPrompt
+      ? `${session.options.systemPrompt}\n\n${designModeDirective}`
+      : designModeDirective;
+
     const streamOptions = {
       ...session.options,
+      systemPrompt: mergedSystemPrompt,
       abortController: session.abortController,
     };
 
@@ -1115,19 +1206,44 @@ async function runStream(sessionId: string, message: string): Promise<void> {
             return;
           }
 
+          if (isShellTool && command && isDevServerStartCommand(command)) {
+            const assessment = await assessDevServer(liveSession.state.cwd, true);
+            const isManagedAndHealthy =
+              assessment.status === "running" || assessment.status === "starting";
+
+            if (isManagedAndHealthy) {
+              liveSession.state.status = "error";
+              liveSession.state.endTime = Date.now();
+              frame = buildFrame(liveSession, "error", {
+                code: "dev_server_already_managed",
+                message:
+                  "Blocked dev-server start command because the workbench-managed server is already healthy. Use workbench.get_dev_server_status for metadata and continue editing without starting a new server.",
+                recoverable: true,
+              } satisfies ErrorPayload);
+              broadcastToSession(liveSession, frame);
+              broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
+              return;
+            }
+          }
+
           frame = buildFrame(liveSession, "tool_call", {
             callId: event.callId,
             name: event.name,
             input: event.input,
             status: event.status,
           } satisfies ToolCallPayload);
+          if (event.callId && event.name) {
+            toolNameByCallId.set(event.callId, event.name);
+          }
           break;
         }
 
         case "tool_result": {
+          const resolvedName =
+            event.name || toolNameByCallId.get(event.callId) || "unknown_tool";
           frame = buildFrame(liveSession, "tool_result", {
             callId: event.callId,
-            name: event.name,
+            name: resolvedName,
             output: event.output,
             isError: event.isError,
           } satisfies ToolResultPayload);

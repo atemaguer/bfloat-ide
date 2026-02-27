@@ -42,6 +42,10 @@ const TEMPLATE_MAP: Record<string, string> = {
   node: "nextjs-default",
 };
 
+const PROJECT_ORIGIN_DIR = ".bfloat-ide";
+const PROJECT_ORIGIN_FILE = "project-origin.json";
+const TEMPLATE_BOOTSTRAP_ORIGIN = "template-bootstrap";
+
 // ---------------------------------------------------------------------------
 // Templates base path resolution
 //
@@ -101,6 +105,10 @@ function getTemplatesBasePath(): string {
 function getTemplatePath(appType: string): string {
   const folder = TEMPLATE_MAP[appType] ?? TEMPLATE_MAP.web;
   return path.join(getTemplatesBasePath(), folder);
+}
+
+function getTemplateFolder(appType: string): string {
+  return TEMPLATE_MAP[appType] ?? TEMPLATE_MAP.web;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +191,7 @@ export async function initializeFromTemplate(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const templatePath = getTemplatePath(appType);
+    const templateFolder = getTemplateFolder(appType);
 
     // Verify the template exists
     try {
@@ -209,6 +218,7 @@ export async function initializeFromTemplate(
 
     await fsp.mkdir(projectPath, { recursive: true });
     await copyDirectory(templatePath, projectPath);
+    await writeProjectOriginMarker(projectPath, appType, templateFolder);
 
     console.log(`[Template] Initialized project at ${projectPath} from template '${appType}'`);
     return { success: true };
@@ -216,6 +226,24 @@ export async function initializeFromTemplate(
     console.error("[Template] Failed to initialize template:", err);
     return { success: false, error: String(err) };
   }
+}
+
+async function writeProjectOriginMarker(
+  projectPath: string,
+  appType: string,
+  templateId: string
+): Promise<void> {
+  const originDir = path.join(projectPath, PROJECT_ORIGIN_DIR);
+  const markerPath = path.join(originDir, PROJECT_ORIGIN_FILE);
+  const payload = {
+    origin: TEMPLATE_BOOTSTRAP_ORIGIN,
+    appType,
+    templateId,
+    initializedAt: new Date().toISOString(),
+  };
+
+  await fsp.mkdir(originDir, { recursive: true });
+  await fsp.writeFile(markerPath, JSON.stringify(payload, null, 2), "utf8");
 }
 
 // ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ import { Button } from '../ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import type { AppType } from '@/app/types/project'
 import { WebPreview, WebPreviewNavigation, WebPreviewNavigationButton } from '../ai-elements/web-preview'
-import { screenshot } from '@/app/api/sidecar'
+import { screenshot, getPreviewProxyUrl } from '@/app/api/sidecar'
 import { workbenchStore } from '@/app/stores/workbench'
 
 // Electron webview element type
@@ -48,6 +48,21 @@ interface WebviewElement extends HTMLElement {
 
 /** True when running inside a Tauri webview (no Electron webview tag support). */
 const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+
+/**
+ * On Tauri, wrap the preview URL through the sidecar reverse proxy so that
+ * an error-catching script is injected into the HTML.  On Electron this is a
+ * no-op — error capture uses the webview's native `console-message` event.
+ */
+function proxyUrl(url: string): string {
+  if (!isTauri || !url) return url
+  try {
+    return getPreviewProxyUrl(url)
+  } catch {
+    // SidecarApi not initialised yet — fall back to raw URL
+    return url
+  }
+}
 
 interface PreviewProps {
   previewUrl: string
@@ -200,6 +215,21 @@ export function Preview(props: PreviewProps) {
       ;(window as any).__bfloatPreviewWebContentsId = 0
     }
   }, [currentUrl, props])
+
+  // Listen for postMessage errors from the injected error-capture script (Tauri only).
+  // On Electron, errors are captured via the webview's `console-message` event above.
+  useEffect(() => {
+    if (!isTauri) return
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === 'bfloat-preview-error' && props.onError) {
+        const { message, stack, level } = event.data
+        const errorText = stack ? `${message}\n${stack}` : message
+        props.onError(errorText)
+      }
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [props.onError])
 
   // Navigate to a URL (normalize it first)
   const navigateToUrl = useCallback((url: string) => {
@@ -549,7 +579,7 @@ export function Preview(props: PreviewProps) {
                 <iframe
                   key={props.refreshKey}
                   ref={webIframeRef}
-                  src={currentUrl}
+                  src={proxyUrl(currentUrl)}
                   className="w-full h-full border-0 bg-white"
                   allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
                   sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-top-navigation"
@@ -666,7 +696,7 @@ export function Preview(props: PreviewProps) {
                     key={props.refreshKey}
                     className="w-full h-full border-0 bg-white"
                     ref={iframeRef}
-                    src={props.previewUrl}
+                    src={proxyUrl(props.previewUrl)}
                     allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
                     sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-top-navigation"
                     loading="eager"
