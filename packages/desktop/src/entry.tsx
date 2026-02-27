@@ -20,6 +20,7 @@ import "./styles.css"
 import { getPlatform } from "./platform"
 import { initialiseSidecarApi } from "./api"
 import { initConveyorBridge } from "./conveyor-bridge"
+import { installFrontendLogBridge } from "./frontend-log-bridge"
 import { deployStore } from "@/app/stores/deploy"
 
 // Import the real Bfloat IDE app component and its styles
@@ -30,6 +31,8 @@ import appIcon from "@/resources/build/icon.png"
 // ---------------------------------------------------------------------------
 // Deep link listener
 // ---------------------------------------------------------------------------
+
+installFrontendLogBridge()
 
 /**
  * Register the deep-link handler as early as possible so we do not miss any

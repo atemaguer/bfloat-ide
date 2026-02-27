@@ -55,6 +55,44 @@ All scripts run from `packages/sidecar/`.
 cd packages/sidecar && bun test
 ```
 
+## Frontend Console Logs (WebView)
+
+Frontend `console.log/info/warn/error/debug` logs are persisted in debug builds to:
+
+`<AppLocalData>/logs/frontend-console.log`
+
+The file is size-rotated automatically:
+- `frontend-console.log` (active)
+- `frontend-console.log.1`
+- `frontend-console.log.2`
+- `frontend-console.log.3`
+
+### Stream logs live
+
+macOS (dev identifier):
+
+```bash
+tail -F "$HOME/Library/Application Support/com.bfloat.ide.dev/logs/frontend-console.log"
+```
+
+### Determine the actual log location
+
+The base path is Tauri `BaseDirectory::AppLocalData`, which depends on OS + app identifier.
+
+1. Check identifier:
+   - Dev: `packages/desktop/src-tauri/tauri.conf.json` → `com.bfloat.ide.dev`
+   - Prod: `packages/desktop/src-tauri/tauri.prod.conf.json` → `com.bfloat.ide`
+2. Build path by OS:
+   - macOS: `~/Library/Application Support/<identifier>/logs/frontend-console.log`
+   - Linux: `~/.local/share/<identifier>/logs/frontend-console.log`
+   - Windows: `%APPDATA%\\<identifier>\\logs\\frontend-console.log`
+
+Example (macOS, dev):
+
+```bash
+open "$HOME/Library/Application Support/com.bfloat.ide.dev/logs"
+```
+
 ## Production Build (macOS ARM)
 
 ```bash
