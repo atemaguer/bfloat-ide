@@ -53,7 +53,7 @@ export interface RequestOptions {
  * Actual network calls are deferred until the first method invocation.
  */
 export class HttpClient {
-  private readonly baseUrl: string
+  readonly baseUrl: string
   /** Base64-encoded "bfloat:<password>" for the Authorization header. */
   private readonly authHeader: string
 
