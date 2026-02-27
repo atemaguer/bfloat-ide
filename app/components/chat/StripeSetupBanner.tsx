@@ -1,12 +1,19 @@
 import StripeLogo from '@/app/components/ui/icons/stripe-logo'
+import { Loader2 } from 'lucide-react'
 
 interface StripeSetupBannerProps {
   isConnected: boolean
+  isSettingUp?: boolean
   onConnect: () => void
   onUse: () => void
 }
 
-export function StripeSetupBanner({ isConnected, onConnect, onUse }: StripeSetupBannerProps) {
+export function StripeSetupBanner({
+  isConnected,
+  isSettingUp = false,
+  onConnect,
+  onUse,
+}: StripeSetupBannerProps) {
   return (
     <div
       style={{
@@ -28,6 +35,7 @@ export function StripeSetupBanner({ isConnected, onConnect, onUse }: StripeSetup
       {isConnected ? (
         <button
           onClick={onUse}
+          disabled={isSettingUp}
           style={{
             padding: '8px 16px',
             borderRadius: '8px',
@@ -36,11 +44,22 @@ export function StripeSetupBanner({ isConnected, onConnect, onUse }: StripeSetup
             color: '#fff',
             fontSize: '13px',
             fontWeight: 500,
-            cursor: 'pointer',
+            cursor: isSettingUp ? 'not-allowed' : 'pointer',
+            opacity: isSettingUp ? 0.7 : 1,
             alignSelf: 'flex-start',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
           }}
         >
-          Set up Stripe
+          {isSettingUp ? (
+            <>
+              <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+              Setting up Stripe...
+            </>
+          ) : (
+            'Set up Stripe'
+          )}
         </button>
       ) : (
         <button

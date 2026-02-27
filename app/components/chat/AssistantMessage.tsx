@@ -95,7 +95,9 @@ interface AssistantMessageProps {
   convexMissingKey?: 'url' | 'deploy_key' | null
   isFirebaseConnected?: boolean
   isStripeConnected?: boolean
+  isStripeSettingUp?: boolean
   isRevenueCatConnected?: boolean
+  isRevenueCatSettingUp?: boolean
   isClaudeAuthenticated?: boolean
 }
 
@@ -239,7 +241,9 @@ export const AssistantMessage = memo(function AssistantMessage({
   convexMissingKey,
   isFirebaseConnected,
   isStripeConnected,
+  isStripeSettingUp,
   isRevenueCatConnected,
+  isRevenueCatSettingUp,
   isClaudeAuthenticated,
 }: AssistantMessageProps) {
   // Track submitting state for AskUserQuestion
@@ -353,6 +357,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             <StripeSetupBanner
               key={`stripe-setup-${index}`}
               isConnected={!!isStripeConnected}
+              isSettingUp={!!isStripeSettingUp}
               onConnect={() => onIntegrationConnect?.('stripe')}
               onUse={() => onIntegrationUse?.('stripe')}
             />
@@ -364,6 +369,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             <RevenueCatSetupBanner
               key={`revenuecat-setup-${index}`}
               isConnected={!!isRevenueCatConnected}
+              isSettingUp={!!isRevenueCatSettingUp}
               onConnect={() => onIntegrationConnect?.('revenuecat')}
               onUse={() => onIntegrationUse?.('revenuecat')}
             />

@@ -143,6 +143,8 @@ export function Chat({
   const [convexProvisioned, setConvexProvisioned] = useState(false)
   const [firebaseProvisioned, setFirebaseProvisioned] = useState(false)
   const [revenuecatProvisioned, setRevenuecatProvisioned] = useState(false)
+  const [isStripeSettingUp, setIsStripeSettingUp] = useState(false)
+  const [isRevenueCatSettingUp, setIsRevenueCatSettingUp] = useState(false)
   const hasStartedInitialStream = useRef(false)
   const hasLoadedSession = useRef(false)
   // Capture the initial session ID at mount time - only this one should be loaded
@@ -403,18 +405,42 @@ export function Chat({
         setConvexProvisioned(true)
       }
       if (id === 'revenuecat') {
+        const revenuecatApiKey = projectSecrets.find((secret) => secret.key === 'EXPO_PUBLIC_REVENUECAT_API_KEY')?.value
+        if (revenuecatApiKey) {
+          workbenchStore.setPendingEnvVars({ EXPO_PUBLIC_REVENUECAT_API_KEY: revenuecatApiKey })
+        }
         setRevenuecatProvisioned(true)
+        setIsRevenueCatSettingUp(true)
+      }
+      if (id === 'stripe') {
+        setIsStripeSettingUp(true)
       }
 
       const prompt = prompts[id]
       if (prompt) {
         setInput(prompt)
         setTimeout(() => {
-          submitRef.current?.(prompt)
+          try {
+            submitRef.current?.(prompt)
+          } catch (error) {
+            if (id === 'stripe') {
+              setIsStripeSettingUp(false)
+            }
+            if (id === 'revenuecat') {
+              setIsRevenueCatSettingUp(false)
+            }
+            throw error
+          }
+          if (id === 'stripe') {
+            setIsStripeSettingUp(false)
+          }
+          if (id === 'revenuecat') {
+            setIsRevenueCatSettingUp(false)
+          }
         }, 100)
       }
     },
-    [convexSecretStatus]
+    [convexSecretStatus, projectSecrets]
   )
 
   // Convert session message to ChatMessage format
@@ -1246,6 +1272,7 @@ export function Chat({
         const errorMsg = err instanceof Error ? err.message : 'Local agent error'
         setError(errorMsg)
         setIsStreaming(false)
+        setIsRevenueCatSettingUp(false)
         toast.error(errorMsg, { id: 'agent-error' })
       }
 
@@ -1580,7 +1607,9 @@ export function Chat({
             convexMissingKey={convexSecretStatus.missingKey}
             isFirebaseConnected={integrationStatus.firebase}
             isStripeConnected={integrationStatus.stripe}
+            isStripeSettingUp={isStripeSettingUp}
             isRevenueCatConnected={integrationStatus.revenuecat}
+            isRevenueCatSettingUp={isRevenueCatSettingUp}
             isClaudeAuthenticated={providerAuthStatus.claude}
           />
         )}

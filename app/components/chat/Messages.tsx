@@ -27,7 +27,9 @@ interface MessagesProps {
   convexMissingKey?: 'url' | 'deploy_key' | null
   isFirebaseConnected?: boolean
   isStripeConnected?: boolean
+  isStripeSettingUp?: boolean
   isRevenueCatConnected?: boolean
+  isRevenueCatSettingUp?: boolean
   isClaudeAuthenticated?: boolean
 }
 
@@ -52,7 +54,9 @@ export const Messages = memo(function Messages({
   convexMissingKey,
   isFirebaseConnected,
   isStripeConnected,
+  isStripeSettingUp,
   isRevenueCatConnected,
+  isRevenueCatSettingUp,
   isClaudeAuthenticated,
 }: MessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -181,10 +185,12 @@ export const Messages = memo(function Messages({
                   convexStage={convexStage}
                   convexMissingKey={convexMissingKey}
                   isFirebaseConnected={isFirebaseConnected}
-                isStripeConnected={isStripeConnected}
-                isRevenueCatConnected={isRevenueCatConnected}
-                isClaudeAuthenticated={isClaudeAuthenticated}
-              />
+                  isStripeConnected={isStripeConnected}
+                  isStripeSettingUp={isStripeSettingUp}
+                  isRevenueCatConnected={isRevenueCatConnected}
+                  isRevenueCatSettingUp={isRevenueCatSettingUp}
+                  isClaudeAuthenticated={isClaudeAuthenticated}
+                />
               )}
             </motion.div>
           )
