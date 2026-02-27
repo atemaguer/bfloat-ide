@@ -21,6 +21,7 @@ import { providerRouter } from "./routes/provider.ts";
 import { localProjectsRouter } from "./routes/local-projects.ts";
 import { templateRouter } from "./routes/template.ts";
 import { screenshotRouter } from "./routes/screenshot.ts";
+import { workbenchRouter } from "./routes/workbench.ts";
 import { previewProxyRouter, previewProxyFallback, getActiveProxyTarget } from "./routes/preview-proxy.ts";
 import { shutdownBrowser } from "./services/screenshot.ts";
 
@@ -151,6 +152,9 @@ app.route("/api/template", templateRouter);
 
 // Screenshot capture via headless Chrome + preview URL registration
 app.route("/api/screenshot", screenshotRouter);
+
+// Workbench runtime metadata for managed dev-server awareness
+app.route("/api/workbench", workbenchRouter);
 
 // Catch-all: proxy unmatched requests to the active preview target (if any).
 // This handles sub-resources like <script src="/entry.bundle"> that the browser

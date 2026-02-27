@@ -75,4 +75,58 @@ describe("workspace-profile", () => {
     );
     expect(allowed.shouldBlock).toBe(false);
   });
+
+  it("classifies template-bootstrap workspaces as greenfield design mode", () => {
+    const cwd = createTempWorkspace("workspace-template-origin-");
+    fs.mkdirSync(path.join(cwd, ".bfloat-ide"), { recursive: true });
+    fs.writeFileSync(
+      path.join(cwd, ".bfloat-ide", "project-origin.json"),
+      JSON.stringify({ origin: "template-bootstrap" }, null, 2)
+    );
+    fs.writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({ dependencies: { expo: "^52.0.0" } }, null, 2)
+    );
+
+    const profile = buildWorkspaceProfile(cwd);
+    expect(profile.isTemplateBootstrap).toBe(true);
+    expect(profile.designMode).toBe("greenfield-template");
+  });
+
+  it("classifies starter-template signature workspaces as greenfield without marker", () => {
+    const cwd = createTempWorkspace("workspace-template-signature-");
+    fs.writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify(
+        {
+          name: "expo-template-default",
+          scripts: {
+            "reset-project": "node ./scripts/reset-project.js",
+          },
+          dependencies: { expo: "^52.0.0" },
+        },
+        null,
+        2
+      )
+    );
+    fs.mkdirSync(path.join(cwd, "app", "(tabs)"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, "app", "(tabs)", "index.tsx"), "export default function Screen() { return null }");
+
+    const profile = buildWorkspaceProfile(cwd);
+    expect(profile.isTemplateBootstrap).toBe(true);
+    expect(profile.designMode).toBe("greenfield-template");
+    expect(profile.reasons).toContain("origin:template-bootstrap-signature");
+  });
+
+  it("classifies non-template workspaces as adapt-existing design mode", () => {
+    const cwd = createTempWorkspace("workspace-imported-origin-");
+    fs.writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({ dependencies: { next: "^15.0.0" } }, null, 2)
+    );
+
+    const profile = buildWorkspaceProfile(cwd);
+    expect(profile.isTemplateBootstrap).toBe(false);
+    expect(profile.designMode).toBe("adapt-existing");
+  });
 });

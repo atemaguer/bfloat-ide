@@ -17,6 +17,8 @@ export interface WorkspaceProfile {
   hasFrameworkMarkers: boolean;
   isEffectivelyEmpty: boolean;
   isExistingApp: boolean;
+  isTemplateBootstrap: boolean;
+  designMode: "greenfield-template" | "adapt-existing";
   detectedFramework: DetectedFramework;
   reasons: string[];
 }
@@ -54,6 +56,8 @@ const APP_SOURCE_MARKERS = [
   "remix.config.mjs",
 ] as const;
 
+const PROJECT_ORIGIN_MARKER = path.join(".bfloat-ide", "project-origin.json");
+
 const SCAFFOLD_COMMAND_PATTERNS: RegExp[] = [
   /\bnpx\s+create-expo-app(?:@latest)?\b/i,
   /\bnpm\s+create\s+expo(?:@latest)?\b/i,
@@ -76,6 +80,45 @@ function safeReadJson(filePath: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function readStringProperty(
+  obj: Record<string, unknown> | null,
+  key: string
+): string | null {
+  const value = obj?.[key];
+  return typeof value === "string" ? value : null;
+}
+
+function isTemplateBootstrapWorkspace(cwd: string): boolean {
+  const markerPath = path.join(cwd, PROJECT_ORIGIN_MARKER);
+  const marker = safeReadJson(markerPath);
+  return marker?.origin === "template-bootstrap";
+}
+
+function looksLikeStarterTemplateWorkspace(
+  cwd: string,
+  packageJson: Record<string, unknown> | null
+): boolean {
+  const packageName = readStringProperty(packageJson, "name");
+  if (packageName === "expo-template-default" || packageName === "nextjs-app") {
+    return true;
+  }
+
+  const scripts = (packageJson?.scripts as Record<string, unknown> | undefined) || {};
+  if (typeof scripts["reset-project"] === "string") {
+    return true;
+  }
+
+  const starterMarkers = [
+    path.join("app", "(tabs)", "index.tsx"),
+    path.join("app", "(tabs)", "_layout.tsx"),
+    path.join("components", "themed-text.tsx"),
+    path.join("components", "parallax-scroll-view.tsx"),
+    path.join("scripts", "reset-project.js"),
+  ];
+
+  return starterMarkers.some((marker) => fs.existsSync(path.join(cwd, marker)));
 }
 
 function getDependencies(pkg: Record<string, unknown> | null): Record<string, unknown> {
@@ -121,12 +164,25 @@ export function buildWorkspaceProfile(cwd: string): WorkspaceProfile {
 
   const hasFrameworkMarkers = detectedFramework !== "unknown" || hasAppSource;
   const isExistingApp = !isEffectivelyEmpty && (hasPackageJson || hasFrameworkMarkers);
+  const hasTemplateOriginMarker = isTemplateBootstrapWorkspace(cwd);
+  const hasStarterTemplateSignature = looksLikeStarterTemplateWorkspace(cwd, packageJson);
+  const isTemplateBootstrap = hasTemplateOriginMarker || hasStarterTemplateSignature;
+  const designMode = isTemplateBootstrap ? "greenfield-template" : "adapt-existing";
 
   if (hasPackageJson) {
     reasons.push("package.json");
   }
   if (!isEffectivelyEmpty) {
     reasons.push("non-empty-workspace");
+  }
+  if (isTemplateBootstrap) {
+    if (hasTemplateOriginMarker) {
+      reasons.push("origin:template-bootstrap-marker");
+    } else {
+      reasons.push("origin:template-bootstrap-signature");
+    }
+  } else {
+    reasons.push("origin:unknown-or-imported");
   }
 
   return {
@@ -136,6 +192,8 @@ export function buildWorkspaceProfile(cwd: string): WorkspaceProfile {
     hasFrameworkMarkers,
     isEffectivelyEmpty,
     isExistingApp,
+    isTemplateBootstrap,
+    designMode,
     detectedFramework,
     reasons,
   };
