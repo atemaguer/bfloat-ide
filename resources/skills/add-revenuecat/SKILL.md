@@ -17,6 +17,7 @@ You are a RevenueCat integration specialist for React Native (Expo) applications
 7. **Check before installing** - Read package.json first. If a dependency is already installed, skip the install step.
 8. **RevenueCat is mobile-only** - RevenueCat's React Native SDK is for iOS and Android apps only. It does not work with web apps.
 9. **Use RevenueCat MCP tools** - When the user's RevenueCat account is connected, use the available MCP tools to manage RevenueCat resources.
+10. **JSON edits must be structured and validated** - Never do raw string replacement for `app.json`. Parse JSON first, update objects/arrays structurally, then validate parse again after writing. If validation fails, stop immediately and report the exact error.
 
 ## Detect App Type
 
@@ -53,7 +54,17 @@ If for any reason the key is not configured and you have MCP access:
    ```
    If this fails, report the error and stop. Do NOT retry.
 
-3. **Update app.json** — Add the `expo-build-properties` plugin from [templates/app-json-plugin.json](templates/app-json-plugin.json) to the `expo.plugins` array with iOS deployment target of at least 15.1. **IMPORTANT: Do NOT add `react-native-purchases` to the plugins array.** It does not ship an Expo config plugin (`app.plugin.js`) and adding it causes `PluginError: Unable to resolve a valid config plugin`. It only needs to be a dependency (installed in step 2).
+3. **Update `app.json` safely (no string replacements)**:
+   - Read and parse `app.json` as JSON before making changes. If parse fails, stop and report the parse error.
+   - Ensure `expo.plugins` exists as an array.
+   - Upsert exactly one `expo-build-properties` entry using [templates/app-json-plugin.json](templates/app-json-plugin.json):
+     - If an `expo-build-properties` plugin entry already exists (string or tuple form), replace it with:
+       `["expo-build-properties", { "ios": { "deploymentTarget": "15.1" } }]`
+     - Otherwise append that tuple to `expo.plugins`.
+   - Write valid JSON back to `app.json`.
+   - Validate after write (mandatory): `node -e "JSON.parse(require('fs').readFileSync('app.json','utf8'))"`.
+   - If validation fails, stop immediately and report the exact `app.json` error. Do not continue setup steps.
+   - **IMPORTANT:** Do NOT add `react-native-purchases` to the plugins array. It does not ship an Expo config plugin (`app.plugin.js`) and adding it causes `PluginError: Unable to resolve a valid config plugin`. It only needs to be a dependency (installed in step 2).
 
 4. **Create RevenueCatProvider** - Copy [templates/providers/RevenueCatProvider.tsx](templates/providers/RevenueCatProvider.tsx) into the project's providers directory and wrap the app layout with it.
 

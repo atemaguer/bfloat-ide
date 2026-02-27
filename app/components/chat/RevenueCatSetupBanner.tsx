@@ -1,12 +1,19 @@
 import RevenueCatLogo from '@/app/components/ui/icons/revenuecat-logo'
+import { Loader2 } from 'lucide-react'
 
 interface RevenueCatSetupBannerProps {
   isConnected: boolean
+  isSettingUp?: boolean
   onConnect: () => void
   onUse: () => void
 }
 
-export function RevenueCatSetupBanner({ isConnected, onConnect, onUse }: RevenueCatSetupBannerProps) {
+export function RevenueCatSetupBanner({
+  isConnected,
+  isSettingUp = false,
+  onConnect,
+  onUse,
+}: RevenueCatSetupBannerProps) {
   return (
     <div
       style={{
@@ -28,6 +35,7 @@ export function RevenueCatSetupBanner({ isConnected, onConnect, onUse }: Revenue
       {isConnected ? (
         <button
           onClick={onUse}
+          disabled={isSettingUp}
           style={{
             padding: '8px 16px',
             borderRadius: '8px',
@@ -36,11 +44,16 @@ export function RevenueCatSetupBanner({ isConnected, onConnect, onUse }: Revenue
             color: '#fff',
             fontSize: '13px',
             fontWeight: 500,
-            cursor: 'pointer',
+            cursor: isSettingUp ? 'not-allowed' : 'pointer',
             alignSelf: 'flex-start',
+            opacity: isSettingUp ? 0.7 : 1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
           }}
         >
-          Set up RevenueCat
+          {isSettingUp && <Loader2 size={14} className="animate-spin" />}
+          {isSettingUp ? 'Setting up RevenueCat...' : 'Set up RevenueCat'}
         </button>
       ) : (
         <button
