@@ -989,6 +989,30 @@ export const aiAgentBridge = {
         // Translate here so the rest of the app works unchanged.
         const translated = _translateAgentFrame(msg, sessionId)
 
+        // Bridge successful workbench restart tool results to restart listeners.
+        if ((translated as { type?: string }).type === "tool_result") {
+          const resultPayload = (translated as { content?: unknown }).content as
+            | { name?: unknown; isError?: unknown }
+            | undefined
+          const toolNameRaw = resultPayload?.name
+          const toolName = typeof toolNameRaw === "string" ? toolNameRaw.toLowerCase() : ""
+          const isError = resultPayload?.isError === true
+          const isWorkbenchRestartTool =
+            toolName === "restart_app" ||
+            toolName === "workbench:restart_app" ||
+            toolName === "workbench_restart_app"
+
+          if (isWorkbenchRestartTool && !isError) {
+            for (const listener of _restartDevServerListeners) {
+              try {
+                listener()
+              } catch (err) {
+                console.warn("[conveyor-bridge] restart listener error:", err)
+              }
+            }
+          }
+        }
+
         const e = _agentStreams.get(sessionId)
         if (e) {
           for (const cb of e.callbacks) {
@@ -1941,6 +1965,27 @@ export const secretsBridge = {
 }
 
 // ---------------------------------------------------------------------------
+// Preview Proxy URL helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the sidecar preview-proxy URL for a given target.
+ * The iframe loads this URL so that the sidecar can inject error-capture scripts.
+ */
+export function getPreviewProxyUrl(targetUrl: string): string {
+  const api = getSidecarApiSync()
+  return `${api.http.baseUrl}/preview-proxy/?target=${encodeURIComponent(targetUrl)}`
+}
+
+/**
+ * Build the sidecar preview-proxy WebSocket URL for HMR forwarding.
+ */
+export function getPreviewProxyWsUrl(targetUrl: string): string {
+  const api = getSidecarApiSync()
+  return api.http.wsUrl(`/preview-proxy/ws?target=${encodeURIComponent(targetUrl)}`)
+}
+
+// ---------------------------------------------------------------------------
 // Screenshot API bridge  →  /api/screenshot/*
 // ---------------------------------------------------------------------------
 
@@ -1962,6 +2007,52 @@ export const screenshotBridge = {
       await getSidecarApiSync().http.post("/api/screenshot/register-url", { cwd, url })
     } catch (err) {
       console.warn("[conveyor-bridge] screenshot.registerPreviewUrl error:", err)
+    }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Workbench runtime bridge  →  /api/workbench/*
+// ---------------------------------------------------------------------------
+
+export interface WorkbenchRuntimeUpdate {
+  cwd: string
+  serverStatus?: "starting" | "running" | "error" | "unknown"
+  previewUrl?: string
+  port?: number
+  expoUrl?: string
+  appType?: "web" | "mobile"
+  devServerTerminalId?: string
+}
+
+export const workbenchBridge = {
+  updateRuntime: async (state: WorkbenchRuntimeUpdate): Promise<{ success: boolean }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean }>(
+        "/api/workbench/runtime",
+        state,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] workbench.updateRuntime error:", err)
+      return { success: false }
+    }
+  },
+
+  getRuntime: async (
+    cwd: string,
+    includeChecks: boolean = true,
+  ): Promise<{ success: boolean; state?: unknown; assessment?: unknown; error?: string }> => {
+    try {
+      const params = new URLSearchParams({
+        cwd,
+        includeChecks: includeChecks ? "true" : "false",
+      })
+      return await getSidecarApiSync().http.get<{ success: boolean; state?: unknown; assessment?: unknown }>(
+        `/api/workbench/runtime?${params.toString()}`,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] workbench.getRuntime error:", err)
+      return { success: false, error: String(err) }
     }
   },
 }
@@ -2237,6 +2328,7 @@ export function initConveyorBridge(): void {
     deploy: deployBridge,
     secrets: secretsBridge,
     screenshot: screenshotBridge,
+    workbench: workbenchBridge,
     localProjects: localProjectsBridge,
     template: templateBridge,
   }

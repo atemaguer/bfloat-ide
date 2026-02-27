@@ -16,12 +16,13 @@ import { ConvexIntegration } from '@/app/components/integrations/ConvexIntegrati
 import { ProjectSettings } from '@/app/components/project/ProjectSettings'
 import { PaymentsOverview } from '@/app/components/payments/PaymentsOverview'
 import { AppTypeProvider } from '@/app/contexts/AppTypeContext'
-import { terminal, filesystem, aiAgent, projectSync, projectFiles, secrets as secretsApi } from '@/app/api/sidecar'
+import { terminal, filesystem, aiAgent, projectSync, projectFiles, secrets as secretsApi, workbench as workbenchApi } from '@/app/api/sidecar'
 import {
   getConvexDashboardConfigFromSecrets,
   getConvexSecretStatusFromSecrets,
   type SecretEntry,
 } from '@/app/lib/integrations/convex'
+import toast from 'react-hot-toast'
 import './styles.css'
 
 // Export interface for external access to workbench terminal commands
@@ -104,6 +105,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const terminalOutputBuffer = useRef('')
   const devServerTerminalIdRef = useRef<string | null>(null)
   const portConflictRef = useRef(false)
+  const runtimeCwdRef = useRef<string | null>(null)
 
   // Terminal panel state
   const [isTerminalOpen, setIsTerminalOpen] = useState(false)
@@ -936,7 +938,36 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // This captures clean error messages from the UI instead of raw terminal output
   const handlePreviewError = useCallback((error: string) => {
     console.log('[Workbench] Preview error received:', error)
-    // Only set the error if not currently streaming (to avoid interrupting AI work)
+    toast.error(
+      (t) => (
+        <div className="flex min-w-0 w-full flex-col">
+          <div className="min-w-0 text-sm leading-relaxed whitespace-normal break-words">
+            {error}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+            <button className="cursor-pointer rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-muted"
+              onClick={() => {
+                navigator.clipboard.writeText(error)
+                  .then(() => toast.success('Copied error'))
+                  .catch(() => toast.error('Failed to copy'))
+              }}>COPY</button>
+            <button className="cursor-pointer rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+              onClick={() => {
+                const errorPrompt = `Please fix the following error:\n\n\`\`\`\n${error}\n\`\`\``
+                workbenchStore.triggerChatPrompt(errorPrompt)
+                workbenchStore.clearPromptError()
+                toast.dismiss(t.id)
+              }}>FIX WITH AI</button>
+          </div>
+        </div>
+      ),
+      {
+        id: 'preview-error',
+        duration: 12000,
+        style: { width: 'min(560px, calc(100vw - 2rem))', maxWidth: 'min(560px, calc(100vw - 2rem))' },
+      },
+    )
+    // Also set the error banner above the chat input (when not streaming)
     if (!chatStreaming) {
       workbenchStore.setPromptError(error)
     }
@@ -949,6 +980,45 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       ;(window as any).__bfloatPreviewUrl = ''
     }
   }, [previewUrl])
+
+  // Publish managed dev-server runtime metadata for agent-side MCP checks.
+  useEffect(() => {
+    const publishRuntime = () => {
+      const cwd = tempDirPathRef.current || workbenchStore.projectPath.getState() || gitProjectPath || ''
+      if (!cwd) return
+
+      const previousCwd = runtimeCwdRef.current
+      if (previousCwd && previousCwd !== cwd) {
+        workbenchApi.updateRuntime({ cwd: previousCwd, serverStatus: 'unknown' }).catch(() => {})
+      }
+      runtimeCwdRef.current = cwd
+
+      workbenchApi.updateRuntime({
+        cwd,
+        serverStatus,
+        previewUrl: previewUrl || undefined,
+        port: actualPortRef.current || undefined,
+        expoUrl: expoUrl || undefined,
+        appType,
+        devServerTerminalId: devServerTerminalIdRef.current || undefined,
+      }).catch(() => {})
+    }
+
+    publishRuntime()
+    const timer = setInterval(publishRuntime, 5000)
+
+    return () => clearInterval(timer)
+  }, [serverStatus, previewUrl, expoUrl, appType, gitProjectPath, project.id])
+
+  // Mark runtime unknown on unmount to avoid stale "healthy" state.
+  useEffect(() => {
+    return () => {
+      const cwd = runtimeCwdRef.current
+      if (cwd) {
+        workbenchApi.updateRuntime({ cwd, serverStatus: 'unknown' }).catch(() => {})
+      }
+    }
+  }, [])
 
   // Handle screenshot from Preview component — add to chat as pending attachment
   const handleScreenshot = useCallback((dataUrl: string) => {
@@ -1366,7 +1436,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                     <Terminal
                       terminalId={tab.id}
                       onReady={() => handleTerminalReady(tab.id)}
-                      onOutput={activeTerminalId === tab.id ? handleTerminalOutput : undefined}
+                      onOutput={(activeTerminalId === tab.id || devServerTerminalIdRef.current === tab.id) ? handleTerminalOutput : undefined}
                       onExit={(exitCode) => handleTerminalExit(tab.id, exitCode)}
                     />
                   </div>
