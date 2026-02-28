@@ -339,6 +339,24 @@ const DEV_SERVER_START_PATTERNS: RegExp[] = [
   /\breact-native\s+start\b/i,
 ];
 
+const PACKAGE_INSTALL_PATTERNS: RegExp[] = [
+  /\bnpm\s+(install|i)\b/i,
+  /\bpnpm\s+add\b/i,
+  /\byarn\s+add\b/i,
+  /\bbun\s+add\b/i,
+  /\bnpx\s+expo\s+install\b/i,
+  /\bexpo\s+install\b/i,
+];
+
+const DEPRECATED_PACKAGE_REPLACEMENTS: Record<string, string> = {
+  "expo-av": "expo-audio and expo-video",
+  "expo-permissions": "individual package permission APIs",
+  "@expo/vector-icons": "expo-symbols",
+  "@react-native-async-storage/async-storage": "expo-sqlite/localStorage/install",
+  "expo-app-loading": "expo-splash-screen",
+  "expo-linear-gradient": "CSS gradients via experimental_backgroundImage",
+};
+
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, " ");
 }
@@ -346,6 +364,23 @@ function normalizeCommand(command: string): string {
 function isDevServerStartCommand(command: string): boolean {
   const normalized = normalizeCommand(command);
   return DEV_SERVER_START_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function getDeprecatedPackageInstall(command: string): { pkg: string; replacement: string } | null {
+  if (!PACKAGE_INSTALL_PATTERNS.some((pattern) => pattern.test(command))) return null;
+
+  const tokens = command
+    .replace(/["'`]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => token.toLowerCase());
+
+  for (const [pkg, replacement] of Object.entries(DEPRECATED_PACKAGE_REPLACEMENTS)) {
+    const target = pkg.toLowerCase();
+    const matched = tokens.some((token) => token === target || token.startsWith(`${target}@`));
+    if (matched) return { pkg, replacement };
+  }
+  return null;
 }
 
 /**
@@ -1218,6 +1253,22 @@ async function runStream(sessionId: string, message: string): Promise<void> {
                 code: "dev_server_already_managed",
                 message:
                   "Blocked dev-server start command because the workbench-managed server is already healthy. Use workbench.get_dev_server_status for metadata and continue editing without starting a new server.",
+                recoverable: true,
+              } satisfies ErrorPayload);
+              broadcastToSession(liveSession, frame);
+              broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
+              return;
+            }
+          }
+
+          if (isShellTool && command) {
+            const deprecatedInstall = getDeprecatedPackageInstall(command);
+            if (deprecatedInstall) {
+              liveSession.state.status = "error";
+              liveSession.state.endTime = Date.now();
+              frame = buildFrame(liveSession, "error", {
+                code: "deprecated_package_blocked",
+                message: `Blocked deprecated package install (${deprecatedInstall.pkg}). Use ${deprecatedInstall.replacement} instead.`,
                 recoverable: true,
               } satisfies ErrorPayload);
               broadcastToSession(liveSession, frame);

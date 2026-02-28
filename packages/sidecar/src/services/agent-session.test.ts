@@ -94,6 +94,45 @@ class ScaffoldAttemptProvider implements AgentProvider {
   }
 }
 
+class DeprecatedPackageInstallProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Deprecated Package Install Provider";
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-deprecated",
+      model: "stub-model",
+      availableTools: [],
+    };
+
+    yield {
+      kind: "tool_call",
+      callId: "bash-1",
+      name: "Bash",
+      input: { command: "npm install expo-av" },
+      status: "running",
+    };
+
+    // This should never be reached if deprecated-package guard works.
+    yield {
+      kind: "done",
+      interrupted: false,
+    };
+  }
+}
+
 async function waitForSessionStatus(
   sessionId: string,
   targetStatus: "completed" | "error",
@@ -168,5 +207,28 @@ describe("agent-session resume persistence", () => {
     const errorFrame = replay.messages.find((f) => f.type === "error");
     const payload = (errorFrame?.payload ?? {}) as { code?: string };
     expect(payload.code).toBe("scaffold_blocked_existing_workspace");
+  });
+
+  it("blocks deprecated package install commands", async () => {
+    const provider = new DeprecatedPackageInstallProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", { cwd: process.cwd(), projectId: "test-project-deprecated" });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const sessionId = created.sessionId;
+    const send = sendMessage(sessionId, "Install expo-av");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(sessionId, "error");
+
+    const session = getSession(sessionId);
+    expect(session?.status).toBe("error");
+
+    const replay = getBackgroundMessages(sessionId);
+    expect(replay.success).toBe(true);
+    const errorFrame = replay.messages.find((f) => f.type === "error");
+    const payload = (errorFrame?.payload ?? {}) as { code?: string };
+    expect(payload.code).toBe("deprecated_package_blocked");
   });
 });

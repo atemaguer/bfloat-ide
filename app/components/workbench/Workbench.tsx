@@ -105,6 +105,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const terminalOutputBuffer = useRef('')
   const devServerTerminalIdRef = useRef<string | null>(null)
   const portConflictRef = useRef(false)
+  const lastAcceptedExpoPortPromptRef = useRef<number | null>(null)
   const runtimeCwdRef = useRef<string | null>(null)
 
   // Terminal panel state
@@ -270,11 +271,40 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       portConflictRef.current = true
     }
 
+    // Expo can still prompt for fallback port selection at runtime.
+    // Auto-accept so startup remains non-interactive for users.
+    const expoPortPromptMatch = cleanData.match(/(?:Use|Would you like to use) port (\d+) (?:instead)?\?/i)
+      || terminalOutputBuffer.current.match(/(?:Use|Would you like to use) port (\d+) (?:instead)?\?/i)
+    if (expoPortPromptMatch) {
+      const suggestedPort = parseInt(expoPortPromptMatch[1], 10)
+      const shouldAutoAccept = Number.isFinite(suggestedPort)
+        && suggestedPort > 0
+        && suggestedPort <= 65535
+        && lastAcceptedExpoPortPromptRef.current !== suggestedPort
+
+      if (shouldAutoAccept) {
+        const terminalId = devServerTerminalIdRef.current || activeTerminalIdRef.current
+        console.log(`[Workbench] Auto-accepting Expo port fallback: ${suggestedPort}`)
+        lastAcceptedExpoPortPromptRef.current = suggestedPort
+        actualPortRef.current = suggestedPort
+        portConflictRef.current = true
+        terminal.write(terminalId, 'y\r')
+      }
+    }
+
     // Parse "Starting Metro on port XXXXX" to update actualPortRef after a port switch
     const metroPortMatch = cleanData.match(/Starting Metro on port (\d+)/i)
       || terminalOutputBuffer.current.match(/Starting Metro on port (\d+)/i)
     if (metroPortMatch) {
       actualPortRef.current = parseInt(metroPortMatch[1], 10)
+      portConflictRef.current = false
+    }
+
+    // Expo may also confirm fallback with variants like "Using port 19001".
+    const usingPortMatch = cleanData.match(/\busing port (\d+)\b/i)
+      || terminalOutputBuffer.current.match(/\busing port (\d+)\b/i)
+    if (usingPortMatch) {
+      actualPortRef.current = parseInt(usingPortMatch[1], 10)
       portConflictRef.current = false
     }
 
@@ -679,6 +709,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       terminalOutputBuffer.current = ''
       actualPortRef.current = portRange.start
       portConflictRef.current = false
+      lastAcceptedExpoPortPromptRef.current = null
 
       // Cleanup old project's temp directory if it exists
       if (tempDirPathRef.current) {
@@ -763,6 +794,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
       // Store the actual port for preview URL
       actualPortRef.current = actualPort
+      lastAcceptedExpoPortPromptRef.current = null
 
       // Track which terminal is running the dev server (for sending keypresses like 'i' for iOS)
       devServerTerminalIdRef.current = capturedTerminalId
@@ -1098,6 +1130,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     }
 
     actualPortRef.current = actualPort
+    lastAcceptedExpoPortPromptRef.current = null
 
     // Build and run the command
     const command = buildFullCommand(launchConfig, projectDir, actualPort)
