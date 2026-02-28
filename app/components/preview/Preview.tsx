@@ -85,6 +85,7 @@ interface PreviewProps {
 const COMPACT_PANE_PX = 520
 const TIGHT_PANE_PX = 420
 const MOBILE_PREVIEW_STYLE_ID = 'bfloat-mobile-preview-guard'
+const MOBILE_PREVIEW_FIT_ROOT_ATTR = 'data-bfloat-fit-root'
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -104,6 +105,7 @@ export function Preview(props: PreviewProps) {
   const webIframeRef = useRef<HTMLIFrameElement | null>(null) // For Tauri web preview (replaces webview)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const mobileLayoutRef = useRef<HTMLDivElement | null>(null)
+  const mobilePreviewGuardCleanupRef = useRef<(() => void) | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isDevToolsOpen, setIsDevToolsOpen] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -346,7 +348,13 @@ export function Preview(props: PreviewProps) {
   }, [currentUrl])
 
   // Iframe handlers for mobile preview
+  const cleanupMobilePreviewGuard = useCallback(() => {
+    mobilePreviewGuardCleanupRef.current?.()
+    mobilePreviewGuardCleanupRef.current = null
+  }, [])
+
   const applyMobileViewportGuards = useCallback((iframe: HTMLIFrameElement | null) => {
+    cleanupMobilePreviewGuard()
     if (!iframe) return
     if (!isSameOriginWithHost(iframe.src)) return
 
@@ -382,11 +390,118 @@ export function Preview(props: PreviewProps) {
         *, *::before, *::after { box-sizing: border-box !important; }
         img, video, canvas, svg { max-width: 100% !important; }
       `
+
+      const getFitRoot = () => {
+        return (
+          doc.querySelector('[data-expo-root]') ||
+          doc.getElementById('root') ||
+          doc.getElementById('__next') ||
+          doc.body?.firstElementChild ||
+          doc.body
+        ) as HTMLElement | null
+      }
+
+      const clearFitScale = (el: HTMLElement | null) => {
+        if (!el) return
+        el.removeAttribute(MOBILE_PREVIEW_FIT_ROOT_ATTR)
+        el.style.removeProperty('transform')
+        el.style.removeProperty('transform-origin')
+        el.style.removeProperty('width')
+        el.style.removeProperty('height')
+      }
+
+      let activeRoot: HTMLElement | null = null
+      let rafId: number | null = null
+      const timers = new Set<number>()
+
+      const applyFitScale = () => {
+        const root = getFitRoot()
+        if (!root) return
+
+        if (activeRoot !== root) {
+          clearFitScale(activeRoot)
+          activeRoot = root
+          activeRoot.setAttribute(MOBILE_PREVIEW_FIT_ROOT_ATTR, 'true')
+        }
+
+        const viewportWidth = Math.max(1, iframe.clientWidth || doc.documentElement.clientWidth || 1)
+        const viewportHeight = Math.max(1, iframe.clientHeight || doc.documentElement.clientHeight || 1)
+        const rootRect = root.getBoundingClientRect()
+        const contentWidth = Math.max(root.scrollWidth, rootRect.width)
+        const contentHeight = Math.max(root.scrollHeight, rootRect.height)
+        const scale = Math.min(1, viewportWidth / Math.max(contentWidth, 1), viewportHeight / Math.max(contentHeight, 1))
+        const roundedScale = Math.max(0.5, Math.round(scale * 1000) / 1000)
+
+        if (roundedScale >= 0.999) {
+          clearFitScale(activeRoot)
+          return
+        }
+
+        root.style.setProperty('transform-origin', 'top center', 'important')
+        root.style.setProperty('transform', `scale(${roundedScale})`, 'important')
+        root.style.setProperty('width', `${100 / roundedScale}%`, 'important')
+        root.style.setProperty('height', `${100 / roundedScale}%`, 'important')
+      }
+
+      const scheduleFit = () => {
+        if (rafId !== null) return
+        rafId = window.requestAnimationFrame(() => {
+          rafId = null
+          applyFitScale()
+        })
+      }
+
+      const resizeObserver = new ResizeObserver(() => scheduleFit())
+      resizeObserver.observe(doc.documentElement)
+      if (doc.body) resizeObserver.observe(doc.body)
+
+      const mutationObserver = new MutationObserver(() => scheduleFit())
+      if (doc.body) {
+        mutationObserver.observe(doc.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class', 'style'],
+        })
+      }
+
+      const contentWindow = iframe.contentWindow
+      const onInnerResize = () => scheduleFit()
+      contentWindow?.addEventListener('resize', onInnerResize)
+
+      const registerTimer = (delayMs: number) => {
+        const id = window.setTimeout(() => {
+          timers.delete(id)
+          scheduleFit()
+        }, delayMs)
+        timers.add(id)
+      }
+
+      scheduleFit()
+      registerTimer(120)
+      registerTimer(320)
+
+      mobilePreviewGuardCleanupRef.current = () => {
+        if (rafId !== null) {
+          window.cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        timers.forEach((id) => window.clearTimeout(id))
+        timers.clear()
+        resizeObserver.disconnect()
+        mutationObserver.disconnect()
+        contentWindow?.removeEventListener('resize', onInnerResize)
+        clearFitScale(activeRoot)
+      }
     } catch {
       // Cross-origin or sandbox restrictions can block iframe document access.
       // In that case we silently keep the preview running.
     }
-  }, [])
+  }, [cleanupMobilePreviewGuard])
+
+  useEffect(() => {
+    return () => cleanupMobilePreviewGuard()
+  }, [cleanupMobilePreviewGuard])
 
   const handleIframeLoad = useCallback(() => {
     applyMobileViewportGuards(iframeRef.current)
