@@ -74,6 +74,22 @@ For Expo apps that run on web:
 `.trim()
 
 /**
+ * Guardrail for mobile-only or device APIs that can crash Expo web.
+ */
+const MOBILE_ONLY_PACKAGE_SAFETY_PROMPT = `
+## Expo Web Mobile-Only Package Safety
+
+For Expo apps that run on web:
+- Do not add unguarded top-level imports for device-only APIs that may be unavailable on web.
+- Common risky examples include: \`expo-haptics\`, \`expo-notifications\`, \`expo-sensors\`, \`expo-camera\`, \`expo-location\`.
+- For risky APIs, prefer a safe helper pattern:
+  1. Early return on web (\`if (Platform.OS === 'web') return\`).
+  2. Dynamically import only when needed (\`await import('expo-haptics')\`).
+  3. Wrap calls in \`try/catch\` and fail gracefully if unsupported.
+- If a feature is unavailable on web, keep the app functional with a no-op fallback instead of crashing.
+`.trim()
+
+/**
  * Instruction to keep tool-heavy sessions conversational.
  */
 const TOOL_TRANSPARENCY_PROMPT = `
@@ -138,13 +154,27 @@ If you encounter code that already uses a deprecated package, do not add it as a
 `.trim()
 
 /**
+ * Instruction for the agent to use IconSymbol correctly and maintain the mapping table.
+ */
+const EXPO_ICON_USAGE_PROMPT = `
+## Expo Icon Usage
+
+Icons use \`IconSymbol\` from \`@/components/ui/icon-symbol\`. Use SF Symbol names as the \`name\` prop.
+
+- On iOS, SF Symbols render natively. On Android/web, they map to Material Icons via \`MAPPING\` in \`components/ui/icon-symbol.tsx\`.
+- Before using an icon, check that its SF Symbol name has an entry in that \`MAPPING\` table.
+- If the name is missing, add it. Look up the equivalent at https://icons.expo.fyi and add: \`"sf-name": "material-name"\` to \`MAPPING\`.
+- Never use \`@expo/vector-icons\` directly — always go through \`IconSymbol\`.
+`.trim()
+
+/**
  * Get the system prompt. Always returns a prompt string.
  * - New sessions: exploration instructions + suggestions instructions
  * - Resumed sessions: suggestions instructions only
  */
 export function getSystemPrompt(isResumedSession: boolean): string {
   if (isResumedSession) {
-    return TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+    return TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + MOBILE_ONLY_PACKAGE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + EXPO_ICON_USAGE_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
   }
-  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + MOBILE_ONLY_PACKAGE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + EXPO_ICON_USAGE_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
 }
