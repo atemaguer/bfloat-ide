@@ -112,6 +112,29 @@ When generating or editing mobile apps (Expo/React Native), default to layouts t
 - Prefer flex-based full-height layouts over fixed pixel heights
 - Avoid \`100vw\`, \`w-screen\`, large fixed widths, or nested containers that can exceed viewport width
 - Keep top-level containers width-constrained (\`width: '100%'\` / \`flex: 1\`) and avoid accidental sideways overflow
+- Respect safe areas for top and bottom UI; avoid placing labels/buttons flush to edges
+- Avoid fixed bottom bars and large vertical gaps that can push controls below smaller phone heights
+- Test layouts against narrow phone widths and ensure text labels remain fully visible
+`.trim()
+
+/**
+ * Blocklist of deprecated packages the agent must never install.
+ */
+const DEPRECATED_PACKAGES_PROMPT = `
+## Deprecated Packages — Do Not Install
+
+Never install any of the following deprecated packages. Use the replacement instead.
+
+| Deprecated Package | Replacement |
+|---|---|
+| \`expo-av\` | \`expo-audio\` and \`expo-video\` |
+| \`expo-permissions\` | Individual package permission APIs |
+| \`@expo/vector-icons\` | \`expo-symbols\` |
+| \`@react-native-async-storage/async-storage\` | \`expo-sqlite/localStorage/install\` |
+| \`expo-app-loading\` | \`expo-splash-screen\` |
+| \`expo-linear-gradient\` | CSS gradients via \`experimental_backgroundImage\` |
+
+If you encounter code that already uses a deprecated package, do not add it as a new dependency. Migrate to the replacement.
 `.trim()
 
 /**
@@ -121,7 +144,7 @@ When generating or editing mobile apps (Expo/React Native), default to layouts t
  */
 export function getSystemPrompt(isResumedSession: boolean): string {
   if (isResumedSession) {
-    return TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+    return TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
   }
-  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
 }
