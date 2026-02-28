@@ -28,6 +28,7 @@ import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { syncAgentInstructionFiles } from "../services/agent-instructions.ts";
 
 // ---------------------------------------------------------------------------
 // Template map (mirrors template-handler.ts TEMPLATE_MAP)
@@ -317,5 +318,22 @@ templateRouter.post("/initialize", async (c) => {
   }
 
   const result = await initializeFromTemplate(resolvedPath, appType);
-  return c.json(result, result.success ? 200 : 500);
+  if (!result.success) {
+    return c.json(result, 500);
+  }
+
+  try {
+    await syncAgentInstructionFiles(resolvedPath, undefined);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json(
+      {
+        success: false,
+        error: `Template initialized but failed to sync AGENTS.md/CLAUDE.md: ${msg}`,
+      },
+      500
+    );
+  }
+
+  return c.json({ success: true }, 200);
 });
