@@ -70,7 +70,26 @@ For Expo apps that run on web:
 - Avoid RN-only object-valued DOM style payloads on web-rendered nodes (e.g. \`shadowOffset\`).
 - Do not use generic \`tint\` token as filled button background. Use semantic pairs like \`accent\` + \`onAccent\` for filled controls.
 - Ensure text/icon foreground remains visible against background in both light and dark themes.
-- Remove unused Expo starter tab scaffolding. If the app does not need bottom tabs, delete \`app/(tabs)\` routing from \`app/_layout.tsx\` and use a Stack + \`app/index.tsx\`.
+`.trim()
+
+/**
+ * Guidance on when to keep or remove the Expo template's tab scaffolding.
+ */
+const EXPO_NAVIGATION_PROMPT = `
+## Expo Navigation Structure
+
+The template ships with bottom tabs at \`app/(tabs)/\`. **Default to removing them** unless the app clearly needs multiple top-level sections.
+
+**Keep tabs** when: the app has 2–5 distinct top-level sections the user switches between frequently (e.g. Feed / Search / Profile / Settings).
+
+**Remove tabs** when: the app is single-purpose, has one main screen, or uses flow-based navigation (onboarding, wizard, detail drill-down). Most simple apps (timer, calculator, single-form tools, landing pages) do not need tabs.
+
+When removing tabs:
+1. Delete \`app/(tabs)/\` entirely.
+2. Move the main screen to \`app/index.tsx\`.
+3. In \`app/_layout.tsx\`, remove the \`(tabs)\` Stack.Screen and \`unstable_settings\` anchor. Keep the root Stack with \`index\` (and \`modal\` if needed).
+4. Delete \`components/haptic-tab.tsx\` (only used by the tab bar).
+5. Remove \`tabIconDefault\` and \`tabIconSelected\` from \`constants/theme.ts\` if unused.
 `.trim()
 
 /**
@@ -174,7 +193,7 @@ Icons use \`IconSymbol\` from \`@/components/ui/icon-symbol\`. Use SF Symbol nam
  */
 export function getSystemPrompt(isResumedSession: boolean): string {
   if (isResumedSession) {
-    return TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + MOBILE_ONLY_PACKAGE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + EXPO_ICON_USAGE_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+    return TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + EXPO_NAVIGATION_PROMPT + '\n\n' + MOBILE_ONLY_PACKAGE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + EXPO_ICON_USAGE_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
   }
-  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + MOBILE_ONLY_PACKAGE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + EXPO_ICON_USAGE_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + EXPO_NAVIGATION_PROMPT + '\n\n' + MOBILE_ONLY_PACKAGE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + EXPO_ICON_USAGE_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
 }
