@@ -290,6 +290,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     const cleanData = stripAnsi(data)
     terminalOutputBuffer.current += cleanData
 
+    // Treat each "Starting project at ..." line as a new Expo start attempt.
+    // This allows repeated restarts to auto-accept the same suggested fallback
+    // port across runs while still deduplicating within a single prompt cycle.
+    if (/\bStarting project at\b/i.test(cleanData)) {
+      lastAcceptedExpoPortPromptRef.current = null
+    }
+
     // Detect Expo port fallback — "Something is already running on port 19000"
     // When this happens, clear the stale port so the fallback doesn't use it
     const portConflict = cleanData.match(/already running on port (\d+)/i)

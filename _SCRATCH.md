@@ -25,3 +25,33 @@
 ### Verification
 - Typecheck desktop package (or broader typecheck if needed).
 - Inspect diff to confirm matching logic is scoped to restart tool aliases only.
+
+# Task 2026-03-01_016_more-restarts
+
+## Phase 2 Plan
+
+### Files to modify
+- `app/components/workbench/Workbench.tsx`
+
+### Order of operations and why
+1. Audit existing Expo port-prompt auto-accept flow in `handleTerminalOutput` and identify why repeated restarts can stop auto-answering.
+2. Add a per-run reset trigger for Expo prompt de-duplication so each new `expo start` invocation can auto-accept fallback prompts again.
+3. Keep the rest of restart flow unchanged to minimize risk.
+4. Run targeted lint on the touched file.
+5. Self-review the diff, stage only task changes, and commit with task ID format.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: reset prompt de-duplication when a new Expo startup sequence is detected in terminal output (`Starting project at ...`), which covers both UI-triggered and manually-entered restart commands.
+- Rejected: removing de-duplication entirely, because that can spam `y` on subsequent output chunks from a single prompt and introduce new racey behavior.
+
+### Assumptions
+1. The observed third-run failure comes from stale `lastAcceptedExpoPortPromptRef` state surviving into a new startup attempt.
+2. Expo consistently emits `Starting project at ...` once per new startup invocation, making it a safe boundary to reset prompt acceptance state.
+→ Proceeding with these.
+
+### Risk areas
+- If Expo output format changes and no longer includes `Starting project at`, reset may not trigger for some runs.
+
+### Verification
+- `pnpm eslint app/components/workbench/Workbench.tsx`
+- Diff review to ensure only restart-prompt robustness logic changed.
