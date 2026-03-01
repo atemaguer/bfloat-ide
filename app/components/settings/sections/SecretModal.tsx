@@ -202,6 +202,7 @@ export function SecretModal({
 
         <DialogFooter>
           <Button
+            type="button"
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={isSaving}
@@ -209,6 +210,7 @@ export function SecretModal({
             Cancel
           </Button>
           <Button
+            type="button"
             onClick={handleSave}
             disabled={isSaving || !key.trim() || !value.trim()}
           >

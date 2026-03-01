@@ -131,6 +131,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const terminalReadyRef = useRef<Set<string>>(new Set())
   const terminalExitedRef = useRef<Set<string>>(new Set())
   const terminalFirstOutputRef = useRef<Set<string>>(new Set())
+  const terminalLastOutputAtRef = useRef<Map<string, number>>(new Map())
   const shellReadyResolversRef = useRef<Map<string, () => void>>(new Map())
 
   // Re-mount the preview iframe when switching back to the preview tab.
@@ -203,6 +204,31 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     })
   }, [])
 
+  // Wait until terminal output has been quiet for a short duration.
+  const waitForTerminalQuiet = useCallback(
+    (terminalId: string, quietMs = 800, maxWaitMs = 5000): Promise<boolean> => {
+      return new Promise((resolve) => {
+        const startedAt = Date.now()
+        const checkInterval = setInterval(() => {
+          const now = Date.now()
+          const lastOutputAt = terminalLastOutputAtRef.current.get(terminalId) ?? startedAt
+
+          if (now - lastOutputAt >= quietMs) {
+            clearInterval(checkInterval)
+            resolve(true)
+            return
+          }
+
+          if (now - startedAt >= maxWaitMs) {
+            clearInterval(checkInterval)
+            resolve(false)
+          }
+        }, 100)
+      })
+    },
+    [],
+  )
+
   const addTerminalTab = useCallback(() => {
     terminalCountRef.current += 1
     const newId = `terminal-${terminalCountRef.current}`
@@ -241,6 +267,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const handleTerminalOutput = useCallback((data: string) => {
     // Mark shell as ready on first output (the shell prompt)
     const currentTerminalId = activeTerminalIdRef.current
+    terminalLastOutputAtRef.current.set(currentTerminalId, Date.now())
     if (!terminalFirstOutputRef.current.has(currentTerminalId)) {
       terminalFirstOutputRef.current.add(currentTerminalId)
       console.log(`[Workbench] Shell first output detected for ${currentTerminalId}`)
@@ -262,6 +289,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     // Accumulate output in buffer (strip ANSI for cleaner matching)
     const cleanData = stripAnsi(data)
     terminalOutputBuffer.current += cleanData
+
+    // Treat each "Starting project at ..." line as a new Expo start attempt.
+    // This allows repeated restarts to auto-accept the same suggested fallback
+    // port across runs while still deduplicating within a single prompt cycle.
+    if (/\bStarting project at\b/i.test(cleanData)) {
+      lastAcceptedExpoPortPromptRef.current = null
+    }
 
     // Detect Expo port fallback — "Something is already running on port 19000"
     // When this happens, clear the stale port so the fallback doesn't use it
@@ -1089,8 +1123,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     // Send Ctrl+C to kill the current process
     terminal.write(terminalId, '\x03')
 
-    // Wait for the process to be interrupted
-    await new Promise(resolve => setTimeout(resolve, 500))
+    // Wait for interruption output to settle before sending a new start command.
+    terminalLastOutputAtRef.current.set(terminalId, Date.now())
+    const becameQuiet = await waitForTerminalQuiet(terminalId, 800, 5000)
+    if (!becameQuiet) {
+      console.warn('[Workbench] Terminal did not become quiet after Ctrl+C; applying fallback delay')
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
 
     // Find the project directory
     const projectDir = tempDirPathRef.current || workbenchStore.projectPath.getState()
@@ -1141,7 +1180,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       console.error('[Workbench] Failed to restart dev server:', result.error)
       setServerStatus('error')
     }
-  }, [files, appType])
+  }, [files, appType, waitForTerminalQuiet])
 
   // Keep ref in sync so the IPC listener always calls the latest version
   handleRestartServerRef.current = handleRestartServer
