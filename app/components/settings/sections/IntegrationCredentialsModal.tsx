@@ -168,10 +168,10 @@ export function IntegrationCredentialsModal({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={isSaving || !!missingRequired}>
+          <Button type="button" onClick={handleSave} disabled={isSaving || !!missingRequired}>
             {isSaving ? 'Saving...' : 'Save Credentials'}
           </Button>
         </DialogFooter>
