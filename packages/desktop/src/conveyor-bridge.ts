@@ -542,11 +542,13 @@ export const windowBridge = {
 
 type TerminalDataCallback = (terminalId: string, data: string) => void
 type TerminalExitCallback = (terminalId: string, exitCode: number) => void
+type TerminalWriteResult = { success: boolean; error?: string }
 
 // Module-level maps that mirror the Electron pattern of storing per-terminal
 // callbacks.  The Tauri bridge uses SidecarWebSocket events instead of IPC.
 const _termDataCallbacks = new Map<string, TerminalDataCallback>()
 const _termExitCallbacks = new Map<string, TerminalExitCallback>()
+const _terminalWriteQueues = new Map<string, Promise<TerminalWriteResult>>()
 
 // Agent terminal event emitters (no native Tauri equivalent yet — stubbed).
 const _agentTerminalCreatedListeners = new Set<(id: string) => void>()
@@ -573,8 +575,35 @@ export const terminalBridge = {
     return result
   },
 
-  write: (terminalId: string, data: string) =>
-    getSidecarApiSync().terminal.write(terminalId, data),
+  write: async (terminalId: string, data: string): Promise<TerminalWriteResult> => {
+    // Prefer WebSocket transport for low-latency, ordered input delivery.
+    _ensureTerminalStream(terminalId)
+    const ws = _terminalStreams.get(terminalId)
+    if (ws?.isConnected) {
+      try {
+        ws.sendRaw(data)
+        return { success: true }
+      } catch {
+        // Fall back to queued HTTP writes below.
+      }
+    }
+
+    // HTTP write fallback: serialize writes per terminal to preserve order.
+    const api = getSidecarApiSync()
+    const previous = _terminalWriteQueues.get(terminalId) ?? Promise.resolve({ success: true })
+
+    const nextWrite = previous
+      .catch(() => ({ success: true }))
+      .then(() => api.terminal.write(terminalId, data))
+
+    _terminalWriteQueues.set(terminalId, nextWrite)
+
+    return nextWrite.finally(() => {
+      if (_terminalWriteQueues.get(terminalId) === nextWrite) {
+        _terminalWriteQueues.delete(terminalId)
+      }
+    })
+  },
 
   resize: (terminalId: string, cols: number, rows: number) =>
     getSidecarApiSync().terminal.resize(terminalId, cols, rows),
@@ -692,6 +721,7 @@ export const terminalBridge = {
   removeListeners: (terminalId: string): void => {
     _termDataCallbacks.delete(terminalId)
     _termExitCallbacks.delete(terminalId)
+    _terminalWriteQueues.delete(terminalId)
     const ws = _terminalStreams.get(terminalId)
     if (ws) {
       ws.close()
@@ -763,7 +793,8 @@ function _ensureTerminalStream(terminalId: string): void {
 
     ws.on("error", (err) => {
       console.warn(`[conveyor-bridge] terminal stream error (${terminalId}):`, err)
-      _terminalStreams.delete(terminalId)
+      // Keep the stream registered so SidecarWebSocket can auto-reconnect.
+      // Deleting it here can lead to duplicate streams for one terminal.
     })
 
     ws.connect()
