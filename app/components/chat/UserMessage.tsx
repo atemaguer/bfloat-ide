@@ -6,7 +6,7 @@
  * Loads persisted attachments from disk when reopening chat.
  */
 
-import { memo, useState, useEffect } from 'react'
+import { memo, useState, useEffect, useMemo } from 'react'
 import type { MessagePart } from '@/app/types/project'
 import { Markdown } from './Markdown'
 import { projectFiles } from '@/app/api/sidecar'
@@ -77,6 +77,7 @@ export const UserMessage = memo(function UserMessage({
   parts = [],
 }: UserMessageProps) {
   const [loadedImages, setLoadedImages] = useState<LoadedImage[]>([])
+  const [expandedImage, setExpandedImage] = useState<LoadedImage | null>(null)
 
   // Extract image parts - parts with type 'image' and a url
   const imageParts = parts.filter(
@@ -84,7 +85,10 @@ export const UserMessage = memo(function UserMessage({
   )
 
   // Parse attachment paths from content (for persisted messages)
-  const { paths: attachmentPaths, cleanContent } = parseAttachmentPaths(content)
+  const { paths: attachmentPaths, cleanContent } = useMemo(
+    () => parseAttachmentPaths(content),
+    [content]
+  )
 
   // Load images from disk if we have attachment paths but no image parts
   useEffect(() => {
@@ -113,7 +117,22 @@ export const UserMessage = memo(function UserMessage({
     }
 
     loadImages()
-  }, [attachmentPaths.join(','), imageParts.length])
+  }, [attachmentPaths, imageParts.length])
+
+  useEffect(() => {
+    if (!expandedImage) {
+      return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setExpandedImage(null)
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [expandedImage])
 
   // Extract text parts and clean any attachment notation from them
   const textParts = parts.filter((part) => part.type === 'text')
@@ -142,18 +161,52 @@ export const UserMessage = memo(function UserMessage({
         <div className="user-message-images">
           {allImages.map((image, index) => (
             <div key={index} className="user-message-image">
-              <img
-                src={image.url}
-                alt={image.filename}
-                style={{
-                  maxWidth: '200px',
-                  maxHeight: '200px',
-                  borderRadius: '8px',
-                  objectFit: 'cover',
-                }}
-              />
+              <button
+                type="button"
+                className="user-message-image-button"
+                onClick={() => setExpandedImage(image)}
+                aria-label={`Expand ${image.filename}`}
+              >
+                <img
+                  src={image.url}
+                  alt={image.filename}
+                  className="user-message-image-thumbnail"
+                />
+              </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {expandedImage && (
+        <div
+          className="chat-image-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Expanded preview: ${expandedImage.filename}`}
+        >
+          <button
+            type="button"
+            className="chat-image-modal-dismiss-zone"
+            onClick={() => setExpandedImage(null)}
+            aria-label="Close expanded image"
+          />
+          <div className="chat-image-modal-content">
+            <button
+              type="button"
+              className="chat-image-modal-close"
+              onClick={() => setExpandedImage(null)}
+              aria-label="Close expanded image preview"
+            >
+              ×
+            </button>
+            <img
+              src={expandedImage.url}
+              alt={expandedImage.filename}
+              className="chat-image-modal-image"
+            />
+            <div className="chat-image-modal-caption">{expandedImage.filename}</div>
+          </div>
         </div>
       )}
 

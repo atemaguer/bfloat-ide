@@ -1,36 +1,32 @@
-# Task 2026-03-01_004_broken-images
+# Task 2026-03-01_007_expanded-images
 
 ## Phase 2 Plan
 
 ### Files to modify
-- `packages/desktop/src/conveyor-bridge.ts`
 - `app/components/chat/UserMessage.tsx`
+- `app/components/chat/styles.css`
 
 ### Order of operations and why
-1. Update attachment write behavior in the desktop bridge first so new attachments are stored as actual binary image bytes.
-2. Add read-time fallback in `UserMessage` so existing already-broken persisted attachments can still render after reopening projects.
-3. Run verification and inspect `git diff` to ensure only task-scoped changes.
-4. Stage hunk-by-hunk and commit.
-5. Update Obsidian task note and move card to `Review`.
+1. Extend `UserMessage` to track the selected image and render an expanded image overlay when clicked.
+2. Add close interactions (backdrop click, close button, Escape key) for modal-like behavior.
+3. Add scoped CSS classes for image hover affordance and expanded-view backdrop/layout.
+4. Run lint on touched files and review diff for task-only changes.
+5. Stage by hunk, commit with task-scoped message, update task note, and move board card to `Review`.
 
-### Approach chosen
-- Chosen:
-  - Strip `data:*;base64,` prefix before saving attachments and call `/api/project-files/write/:projectId` with `{ encoding: "base64" }`.
-  - In message rendering, detect legacy files where the on-disk content is itself a text data URL and use that data URL directly.
-- Alternative considered and rejected:
-  - Fix only `UserMessage` fallback: rejected because it does not prevent future broken saves.
-  - Fix only `saveAttachment`: rejected because already-saved legacy files would remain broken.
+### Approach chosen (and alternative rejected)
+- Chosen: Implement a lightweight local overlay in `UserMessage` using component state and CSS classes, so it works for both inline and persisted image attachments without changing shared dialog primitives.
+- Rejected: Reusing the global `Dialog` component because it adds extra structure/styling constraints and would require additional wrapper logic for image-specific layout.
 
 ### Assumptions
-1. Attachment `data` passed to `saveAttachment` is usually a data URL (e.g., `data:image/png;base64,...`) and not arbitrary text.
-2. `projectFiles.readFile()` for binary attachments returns base64 bytes of file contents, which allows detecting legacy text payloads by decoding.
-3. A small utility in `UserMessage` for legacy decoding is acceptable within scope because the bug is explicitly about reopen/render behavior.
+1. The expanded view should apply to user message image attachments only (this task scope), not all images across the app.
+2. The modal can render in-place with `position: fixed` and high `z-index`, without portal usage, and still satisfy backdrop/modal acceptance criteria.
+3. Existing message rendering behavior (including attachment loading fallback from prior task) must remain unchanged.
 
 ### Risk areas
-- Incorrect base64 parsing could cause save failures for some attachment formats.
-- Legacy detection must avoid false positives for valid binary image files.
+- Overlay layering/z-index conflicts with existing app UI.
+- Click handling could accidentally close immediately if event propagation is not contained.
 
 ### Verification
-- Run lint/type checks on touched code paths if available.
-- Confirm diff only affects attachment save/reload behavior.
-- Ensure no unrelated files are modified.
+- `npx eslint app/components/chat/UserMessage.tsx app/components/chat/styles.css`
+- Manual logic review: clicking thumbnail opens expanded image; backdrop/click-close button/Escape closes.
+- `git diff` inspection to ensure only task-scoped changes.
