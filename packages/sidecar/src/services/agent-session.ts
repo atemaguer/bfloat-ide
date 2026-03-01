@@ -900,12 +900,37 @@ function loadProjectEnv(cwd: string): Record<string, string> {
   }
 }
 
+function loadProjectEnvByProjectId(projectId?: string): Record<string, string> {
+  if (!projectId) return {};
+
+  const projectDir = path.join(os.homedir(), ".bfloat-ide", "projects", projectId);
+  const envLocalPath = path.join(projectDir, ".env.local");
+  const envPath = path.join(projectDir, ".env");
+  const candidatePath = fs.existsSync(envLocalPath)
+    ? envLocalPath
+    : fs.existsSync(envPath)
+      ? envPath
+      : null;
+
+  if (!candidatePath) return {};
+
+  try {
+    const content = fs.readFileSync(candidatePath, "utf-8");
+    return parseEnvContent(content);
+  } catch (error) {
+    console.warn("[AgentSession] Failed to load project-id env for MCP config:", error);
+    return {};
+  }
+}
+
 function buildAutoMcpServers(
   cwd: string,
-  sessionEnv?: Record<string, string>
+  sessionEnv?: Record<string, string>,
+  projectId?: string
 ): Record<string, unknown> {
-  const projectEnv = loadProjectEnv(cwd);
-  const mergedEnv = { ...projectEnv, ...(sessionEnv ?? {}) };
+  const cwdEnv = loadProjectEnv(cwd);
+  const projectScopedEnv = loadProjectEnvByProjectId(projectId);
+  const mergedEnv = { ...cwdEnv, ...projectScopedEnv, ...(sessionEnv ?? {}) };
   const autoServers: Record<string, unknown> = {};
 
   const revenueCatKey =
@@ -945,7 +970,7 @@ export function createSession(
 
   const sessionId = randomUUID();
   const now = Date.now();
-  const autoMcpServers = buildAutoMcpServers(options.cwd, options.env);
+  const autoMcpServers = buildAutoMcpServers(options.cwd, options.env, options.projectId);
   const mergedMcpServers = {
     ...autoMcpServers,
     ...(options.mcpServers ?? {}),
