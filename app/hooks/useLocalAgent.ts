@@ -26,7 +26,9 @@ const DISALLOWED_TOOLS = ['AskUserQuestion']
 function isSessionLostError(error: string | undefined): boolean {
   if (!error) return false
   const lower = error.toLowerCase()
-  return lower.includes('not found') && lower.includes('session')
+  // Some API paths collapse 404s to just "Not Found" without including
+  // the full session message body. Treat that as recoverable here.
+  return lower.includes('not found') && (lower.includes('session') || lower.trim() === 'not found')
 }
 
 interface LocalAgentState {
@@ -72,6 +74,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   const sessionIdRef = useRef<string | null>(null)
   const providerSessionIdRef = useRef<string | null>(options.resumeSessionId || null)
   const requestedResumeSessionIdRef = useRef<string | null>(options.resumeSessionId || null)
+  const skipResumeOnceRef = useRef(false)
   const cwdRef = useRef<string>(options.cwd)
   const hasReconnected = useRef(false)
   /** Per-session last seen seq number for deduplication on reconnect */
@@ -90,7 +93,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     onErrorRef.current = options.onError
 
     requestedResumeSessionIdRef.current = options.resumeSessionId || null
-    if (options.resumeSessionId && providerSessionIdRef.current !== options.resumeSessionId) {
+    if (!skipResumeOnceRef.current && options.resumeSessionId && providerSessionIdRef.current !== options.resumeSessionId) {
       providerSessionIdRef.current = options.resumeSessionId
     }
   })
@@ -145,6 +148,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         console.log('[useLocalAgent] Has onSessionId callback:', !!onSessionIdRef.current)
         console.log('[useLocalAgent] ========================================')
         if (initContent.sessionId) {
+          skipResumeOnceRef.current = false
           if (providerSessionIdRef.current && providerSessionIdRef.current !== initContent.sessionId) {
             console.warn('[useLocalAgent] Provider session ID rotated during active session', {
               previousProviderSessionId: providerSessionIdRef.current,
@@ -472,7 +476,10 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     if (options.provider) sessionOptions.provider = options.provider
     if (options.model) sessionOptions.model = options.model
     if (options.systemPrompt) sessionOptions.systemPrompt = options.systemPrompt
-    if (options.resumeSessionId) sessionOptions.resumeSessionId = options.resumeSessionId
+    const resumeSessionId = skipResumeOnceRef.current ? null : providerSessionIdRef.current || options.resumeSessionId || null
+    if (resumeSessionId) {
+      sessionOptions.resumeSessionId = resumeSessionId
+    }
     if (options.allowedTools) sessionOptions.allowedTools = options.allowedTools
     if (Object.keys(sessionEnvVars).length > 0) sessionOptions.env = sessionEnvVars
     if (options.projectId) sessionOptions.projectId = options.projectId
@@ -488,14 +495,16 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     } else {
       console.log('[useLocalAgent] No session env vars')
     }
-    console.log('[useLocalAgent] ' + (options.resumeSessionId ? 'RESUMING SESSION' : 'CREATING NEW SESSION'))
+    console.log('[useLocalAgent] ' + (resumeSessionId ? 'RESUMING SESSION' : 'CREATING NEW SESSION'))
     console.log('[useLocalAgent] CWD:', options.cwd)
     console.log('[useLocalAgent] Provider:', options.provider || 'default')
     console.log('[useLocalAgent] Model:', options.model || 'default')
     console.log('[useLocalAgent] Project ID:', options.projectId || 'none')
     console.log('[useLocalAgent] sessionOptions.env keys:', sessionOptions.env ? Object.keys(sessionOptions.env) : 'none')
-    if (options.resumeSessionId) {
-      console.log('[useLocalAgent] Resume Session ID:', options.resumeSessionId)
+    if (resumeSessionId) {
+      console.log('[useLocalAgent] Resume Session ID:', resumeSessionId)
+    } else if (skipResumeOnceRef.current) {
+      console.log('[useLocalAgent] Resume temporarily disabled after stale-session recovery')
     }
     console.log('[useLocalAgent] ========================================')
     const result = await aiAgent.createSession(sessionOptions)
@@ -550,7 +559,10 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
               oldSessionId: sessionId,
               error: result.error,
             })
+            skipResumeOnceRef.current = true
             sessionIdRef.current = null
+            providerSessionIdRef.current = null
+            requestedResumeSessionIdRef.current = null
             setState((prev) => ({ ...prev, sessionId: null }))
             sessionId = await createSession()
             result = await aiAgent.prompt(sessionId, message)

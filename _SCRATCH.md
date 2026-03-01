@@ -55,3 +55,33 @@
 ### Verification
 - `pnpm eslint app/components/workbench/Workbench.tsx`
 - Diff review to ensure only restart-prompt robustness logic changed.
+
+# Task 2026-03-01_018_not-found-bug
+
+## Phase 2 Plan
+
+### Files to modify
+- `app/hooks/useLocalAgent.ts`
+
+### Order of operations and why
+1. Tighten session-loss detection so prompt failures that only return `"Not Found"` still trigger recovery.
+2. Add a one-cycle "skip resume" guard for session recreation after a session-not-found failure, to avoid retrying with the same stale resume session ID.
+3. Clear stale provider/resume refs during recovery and only re-enable resume after a fresh `init` arrives.
+4. Run focused verification (typecheck/lint for touched file area if feasible) and inspect diff for scope.
+5. Stage only task-related changes and commit with required task ID format.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: local, hook-level resilience in `useLocalAgent.sendPrompt/createSession` to recover from stale IDs and remount races without changing sidecar API semantics.
+- Rejected: sidecar route changes, because the failure is UI lifecycle/race-related and this task requests single-bug mitigation with minimal surface area.
+
+### Assumptions
+1. The quick-exit/re-enter failure path is driven by stale resumed session IDs and prompt 404 responses that currently surface as `"Not Found"`.
+2. For `POST /api/agent/sessions/:id/message`, a 404 effectively means "session is gone" and should trigger local session recreation.
+→ Proceeding with these.
+
+### Risk areas
+- Over-broad not-found matching could recreate sessions for non-session-related errors if message formats change.
+
+### Verification
+- `pnpm eslint app/hooks/useLocalAgent.ts` (or nearest available lint command).
+- `git diff` review to confirm only session recovery/resume logic changed.
