@@ -45,6 +45,12 @@ interface UseLocalAgentOptions {
   onSessionId?: (sessionId: string) => void // Called when we get a session ID from init
 }
 
+function isSessionNotFoundError(error: string | undefined): boolean {
+  if (!error) return false
+  const normalized = error.toLowerCase()
+  return normalized.includes('session') && normalized.includes('not found')
+}
+
 export function useLocalAgent(options: UseLocalAgentOptions) {
   const [state, setState] = useState<LocalAgentState>({
     isConnected: false,
@@ -492,7 +498,21 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
         console.log('[useLocalAgent] Sending prompt to session:', sessionId)
         console.log('[useLocalAgent] Prompt message:', message)
-        const result = await aiAgent.prompt(sessionId, message)
+        let result = await aiAgent.prompt(sessionId, message)
+
+        // Session IDs can become stale after sidecar restarts or background cleanup.
+        // Recover by creating a fresh sidecar session and retrying the prompt once.
+        if ((!result.success || !result.streamChannel) && isSessionNotFoundError(result.error)) {
+          console.warn('[useLocalAgent] Session not found while sending prompt, recreating session and retrying', {
+            sessionId,
+            error: result.error,
+          })
+          sessionIdRef.current = null
+          setState((prev) => ({ ...prev, sessionId: null }))
+
+          sessionId = await createSession()
+          result = await aiAgent.prompt(sessionId, message)
+        }
 
         if (!result.success || !result.streamChannel) {
           throw new Error(result.error || 'Failed to send prompt')
