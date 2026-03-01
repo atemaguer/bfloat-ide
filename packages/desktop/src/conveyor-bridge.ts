@@ -1995,11 +1995,25 @@ export function getPreviewProxyWsUrl(targetUrl: string): string {
 // ---------------------------------------------------------------------------
 
 export const screenshotBridge = {
-  capture: async (options?: { url?: string; cwd?: string }): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
+  capture: async (options?: {
+    url?: string
+    cwd?: string
+    width?: number
+    height?: number
+    mobile?: boolean
+    deviceScaleFactor?: number
+  }): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
     try {
       return await getSidecarApiSync().http.post<{ success: boolean; dataUrl?: string; error?: string }>(
         "/api/screenshot/capture",
-        { url: options?.url, cwd: options?.cwd },
+        {
+          url: options?.url,
+          cwd: options?.cwd,
+          width: options?.width,
+          height: options?.height,
+          mobile: options?.mobile,
+          deviceScaleFactor: options?.deviceScaleFactor,
+        },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] screenshot.capture error:", err)

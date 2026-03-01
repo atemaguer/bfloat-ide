@@ -238,7 +238,9 @@ export interface CaptureOptions {
   url: string;
   width?: number;
   height?: number;
-  /** Extra delay (ms) after page load before capturing. Default: 1500 */
+  mobile?: boolean;
+  deviceScaleFactor?: number;
+  /** Extra delay (ms) after page load before capturing. Default: 500 */
   renderDelay?: number;
 }
 
@@ -249,8 +251,11 @@ export interface CaptureResult {
 }
 
 export async function captureScreenshot(options: CaptureOptions): Promise<CaptureResult> {
-  const width = options.width || 1280;
-  const height = options.height || 800;
+  const isMobile = options.mobile ?? false;
+  const width = Math.max(1, Math.round(options.width ?? (isMobile ? 390 : 1280)));
+  const height = Math.max(1, Math.round(options.height ?? (isMobile ? 844 : 800)));
+  const deviceScaleFactor = options.deviceScaleFactor ?? (isMobile ? 2 : 1);
+  const renderDelay = options.renderDelay ?? 500;
 
   try {
     const browserWsUrl = await ensureChrome();
@@ -288,8 +293,8 @@ export async function captureScreenshot(options: CaptureOptions): Promise<Captur
       await cdpSend(pageWs, "Emulation.setDeviceMetricsOverride", {
         width,
         height,
-        deviceScaleFactor: 1,
-        mobile: false,
+        deviceScaleFactor,
+        mobile: isMobile,
       });
 
       // Enable page events so we can wait for load
@@ -301,7 +306,7 @@ export async function captureScreenshot(options: CaptureOptions): Promise<Captur
       await loadPromise;
 
       // Small extra wait for rendering to settle
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, renderDelay));
 
       // Capture screenshot
       const screenshotResult = await cdpSend(pageWs, "Page.captureScreenshot", {

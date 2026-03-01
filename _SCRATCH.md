@@ -1,32 +1,35 @@
-# Task 2026-03-01_007_expanded-images
+# Task 2026-03-01_008_broken-screenshots
 
 ## Phase 2 Plan
 
 ### Files to modify
-- `app/components/chat/UserMessage.tsx`
-- `app/components/chat/styles.css`
+- `app/components/preview/Preview.tsx`
+- `packages/desktop/src/conveyor-bridge.ts`
+- `packages/sidecar/src/services/screenshot.ts`
+- `packages/sidecar/src/services/screenshot-mcp.ts`
 
 ### Order of operations and why
-1. Extend `UserMessage` to track the selected image and render an expanded image overlay when clicked.
-2. Add close interactions (backdrop click, close button, Escape key) for modal-like behavior.
-3. Add scoped CSS classes for image hover affordance and expanded-view backdrop/layout.
-4. Run lint on touched files and review diff for task-only changes.
-5. Stage by hunk, commit with task-scoped message, update task note, and move board card to `Review`.
+1. Extend screenshot bridge request options (width/height/mobile/deviceScaleFactor) so UI can request explicit viewport emulation.
+2. Update screenshot capture service to accept and apply viewport mode (`mobile` vs `web`) while preserving current defaults for web captures.
+3. Update Preview screenshot action to pass mobile-frame dimensions for mobile app captures and web dimensions for web captures.
+4. Update screenshot MCP tool to infer app type from runtime metadata (`cwd`) and choose correct viewport defaults when capturing without explicit dimensions.
+5. Run targeted type-check/lint/tests for changed packages, then review and commit.
 
-### Approach chosen (and alternative rejected)
-- Chosen: Implement a lightweight local overlay in `UserMessage` using component state and CSS classes, so it works for both inline and persisted image attachments without changing shared dialog primitives.
-- Rejected: Reusing the global `Dialog` component because it adds extra structure/styling constraints and would require additional wrapper logic for image-specific layout.
+### Approach chosen (and alternatives rejected)
+- Chosen: Add explicit, backward-compatible capture options and infer defaults from runtime app type for MCP.
+- Rejected: Hardcoding a single mobile viewport globally in capture service, because it would regress web behavior and ignore explicit caller intent.
 
 ### Assumptions
-1. The expanded view should apply to user message image attachments only (this task scope), not all images across the app.
-2. The modal can render in-place with `position: fixed` and high `z-index`, without portal usage, and still satisfy backdrop/modal acceptance criteria.
-3. Existing message rendering behavior (including attachment loading fallback from prior task) must remain unchanged.
+1. `workbench` runtime metadata (`appType`) is reliably published often enough for MCP screenshot calls to infer current mode.
+2. For mobile UI button captures, using the rendered phone-frame dimensions is preferred over a fixed handset size.
+3. Existing callers that omit new options should continue using current web-like defaults.
 
 ### Risk areas
-- Overlay layering/z-index conflicts with existing app UI.
-- Click handling could accidentally close immediately if event propagation is not contained.
+- Incorrect viewport options could alter screenshot output unexpectedly for existing web paths.
+- App-type inference can be stale if runtime metadata has not been published yet; fallback must remain safe.
 
 ### Verification
-- `npx eslint app/components/chat/UserMessage.tsx app/components/chat/styles.css`
-- Manual logic review: clicking thumbnail opens expanded image; backdrop/click-close button/Escape closes.
-- `git diff` inspection to ensure only task-scoped changes.
+- Typecheck/lint for touched code paths.
+- Validate that mobile capture requests set `mobile: true` + mobile-sized viewport.
+- Validate web capture requests remain non-mobile with web-sized viewport.
+- Validate MCP tool chooses mobile defaults when runtime `appType` is `mobile` and web defaults otherwise.

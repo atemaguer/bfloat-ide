@@ -12,7 +12,7 @@ export const screenshotRouter = new Hono();
 
 /**
  * POST /capture
- * Body: { url?: string, cwd?: string, width?: number, height?: number }
+ * Body: { url?: string, cwd?: string, width?: number, height?: number, mobile?: boolean, deviceScaleFactor?: number }
  *
  * If `url` is omitted, looks up the registered preview URL for `cwd`.
  * Returns: { success: boolean, dataUrl?: string, error?: string }
@@ -23,6 +23,8 @@ screenshotRouter.post("/capture", async (c) => {
     cwd?: string;
     width?: number;
     height?: number;
+    mobile?: boolean;
+    deviceScaleFactor?: number;
   }>();
 
   let targetUrl = body.url;
@@ -42,6 +44,8 @@ screenshotRouter.post("/capture", async (c) => {
     url: targetUrl,
     width: body.width,
     height: body.height,
+    mobile: body.mobile,
+    deviceScaleFactor: body.deviceScaleFactor,
   });
 
   return c.json(result);
