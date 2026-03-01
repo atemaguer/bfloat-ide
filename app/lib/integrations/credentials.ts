@@ -86,12 +86,13 @@ export function getIntegrationCredentialSpec(
     case 'revenuecat':
       return {
         title: 'Connect RevenueCat',
-        description: 'Add the public SDK key required for RevenueCat in-app purchases.',
+        description: 'Add a RevenueCat API v2 secret key with read/write Project configuration permissions.',
         fields: [
           {
-            key: 'EXPO_PUBLIC_REVENUECAT_API_KEY',
-            label: 'RevenueCat Public SDK Key',
-            placeholder: 'test_***',
+            key: 'REVENUECAT_API_KEY',
+            label: 'RevenueCat API v2 Secret Key',
+            placeholder: 'sk_***',
+            description: 'Required scope: Project configuration (read and write).',
             required: true,
             sensitive: true,
           },
