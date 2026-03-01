@@ -54,6 +54,24 @@ function getMimeType(filename: string): string {
   return mimeTypes[ext || ''] || 'image/png'
 }
 
+/**
+ * Legacy fallback:
+ * Older versions persisted data URLs as plain text inside image files.
+ * If we detect this payload after base64-decoding file bytes, return it.
+ */
+function extractLegacyDataUrlFromBinaryBase64(content: string): string | null {
+  try {
+    const decoded = atob(content)
+    const trimmed = decoded.trim()
+    if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(trimmed)) {
+      return trimmed
+    }
+  } catch {
+    // Not decodable as text payload, treat as normal binary image
+  }
+  return null
+}
+
 export const UserMessage = memo(function UserMessage({
   content,
   parts = [],
@@ -81,8 +99,8 @@ export const UserMessage = memo(function UserMessage({
         try {
           const result = await projectFiles.readFile(path)
           if (result.isBinary && result.content) {
-            const mimeType = getMimeType(path)
-            const dataUrl = `data:${mimeType};base64,${result.content}`
+            const legacyDataUrl = extractLegacyDataUrlFromBinaryBase64(result.content)
+            const dataUrl = legacyDataUrl ?? `data:${getMimeType(path)};base64,${result.content}`
             const filename = path.split('/').pop() || 'image'
             loaded.push({ url: dataUrl, filename })
           }
