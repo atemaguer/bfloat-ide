@@ -1,32 +1,37 @@
-# Task 2026-03-01_007_expanded-images
+# 2026-03-01_009_continue-with-rc Plan
 
-## Phase 2 Plan
+## Scope
+Complete dependent task `2026-03-01_007_rc-tools` to unblock this task, then perform both handoffs.
 
-### Files to modify
-- `app/components/chat/UserMessage.tsx`
-- `app/components/chat/styles.css`
+## Files to modify
+- `_SCRATCH.md` (this plan + assumptions)
+- `reports/2026-03-01_007_rc-tools-report.md` (already drafted report; adjust only if evidence mismatch)
+- Obsidian task notes: `2026-03-01_007_rc-tools`, `2026-03-01_009_continue-with-rc`
+- Obsidian board: `BOARDS/IDE Tasks.md`
 
-### Order of operations and why
-1. Extend `UserMessage` to track the selected image and render an expanded image overlay when clicked.
-2. Add close interactions (backdrop click, close button, Escape key) for modal-like behavior.
-3. Add scoped CSS classes for image hover affordance and expanded-view backdrop/layout.
-4. Run lint on touched files and review diff for task-only changes.
-5. Stage by hunk, commit with task-scoped message, update task note, and move board card to `Review`.
+## Order of operations
+1. Validate report evidence in `bfloat-ide` and `bfloat-workbench` references.
+2. Self-review current git diff; stage only task artifacts (exclude unrelated lockfile churn).
+3. Commit with task-scoped message for `007` completion.
+4. Append handoff to `2026-03-01_007_rc-tools` and `2026-03-01_009_continue-with-rc` including commit hash.
+5. Move both cards from `In Progress` to `Review` on the Kanban board.
 
-### Approach chosen (and alternative rejected)
-- Chosen: Implement a lightweight local overlay in `UserMessage` using component state and CSS classes, so it works for both inline and persisted image attachments without changing shared dialog primitives.
-- Rejected: Reusing the global `Dialog` component because it adds extra structure/styling constraints and would require additional wrapper logic for image-specific layout.
+## Approach and alternatives
+- Chosen: ship the existing detailed feasibility report and finish protocol steps.
+- Rejected: modify runtime OAuth implementation now (out of scope; this task requests analysis/report only).
 
-### Assumptions
-1. The expanded view should apply to user message image attachments only (this task scope), not all images across the app.
-2. The modal can render in-place with `position: fixed` and high `z-index`, without portal usage, and still satisfy backdrop/modal acceptance criteria.
-3. Existing message rendering behavior (including attachment loading fallback from prior task) must remain unchanged.
+## ASSUMPTIONS
+1. The existing `pnpm-lock.yaml` diff is unrelated noise from prior execution and should be ignored for this task.
+2. Acceptance for `007` is satisfied by a detailed, evidence-backed feasibility report.
+3. `009` is complete once `007` is completed and both cards are moved to `Review`.
+→ Proceeding with these.
 
-### Risk areas
-- Overlay layering/z-index conflicts with existing app UI.
-- Click handling could accidentally close immediately if event propagation is not contained.
+## Risks
+- Board/task-note formatting could be corrupted if overwritten incorrectly.
+- Accidentally staging unrelated files.
 
-### Verification
-- `npx eslint app/components/chat/UserMessage.tsx app/components/chat/styles.css`
-- Manual logic review: clicking thumbnail opens expanded image; backdrop/click-close button/Escape closes.
-- `git diff` inspection to ensure only task-scoped changes.
+## Verification
+- `git status --short` shows only intended files staged for commit.
+- Commit contains the report and plan artifacts.
+- Obsidian notes include handoff sections with commit hash.
+- Board shows both `[[2026-03-01_007_rc-tools]]` and `[[2026-03-01_009_continue-with-rc]]` under `## Review`.
