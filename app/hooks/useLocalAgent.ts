@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { workbenchStore } from '@/app/stores/workbench'
-import { aiAgent } from '@/app/api/sidecar'
+import { aiAgent, secrets as secretsApi } from '@/app/api/sidecar'
 import type { AgentMessage, SessionOptions, ProviderId, AgentTool } from '@/lib/conveyor/schemas/ai-agent-schema'
 
 // Tools to disable - AskUserQuestion requires special UI handling that isn't fully reliable yet
@@ -439,8 +439,28 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
     console.log('[useLocalAgent] createSession called, current sessionId:', sessionIdRef.current)
 
-    // Get any pending environment variables (e.g., Apple credentials for iOS deployment)
+    // Get any pending environment variables (e.g., credentials saved in settings)
     const pendingEnvVars = workbenchStore.takePendingEnvVars()
+    const sessionEnvVars: Record<string, string> = {}
+
+    if (options.projectId) {
+      try {
+        const secretResult = await secretsApi.readSecrets(options.projectId)
+        if (!secretResult.error && Array.isArray(secretResult.secrets)) {
+          for (const secret of secretResult.secrets) {
+            if (secret?.key && typeof secret.value === 'string') {
+              sessionEnvVars[secret.key] = secret.value
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('[useLocalAgent] Failed to load project secrets for session env:', error)
+      }
+    }
+
+    if (pendingEnvVars) {
+      Object.assign(sessionEnvVars, pendingEnvVars)
+    }
 
     // Build session options - only include properties that are defined
     const sessionOptions: SessionOptions = {
@@ -454,19 +474,19 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     if (options.systemPrompt) sessionOptions.systemPrompt = options.systemPrompt
     if (options.resumeSessionId) sessionOptions.resumeSessionId = options.resumeSessionId
     if (options.allowedTools) sessionOptions.allowedTools = options.allowedTools
-    if (pendingEnvVars) sessionOptions.env = pendingEnvVars
+    if (Object.keys(sessionEnvVars).length > 0) sessionOptions.env = sessionEnvVars
     if (options.projectId) sessionOptions.projectId = options.projectId
     sessionOptions.maxTurns = options.maxTurns || 50
     if (options.agents) sessionOptions.agents = options.agents
 
     console.log('[useLocalAgent] ========================================')
-    if (pendingEnvVars) {
-      console.log('[useLocalAgent] Pending env vars:', Object.keys(pendingEnvVars))
+    if (Object.keys(sessionEnvVars).length > 0) {
+      console.log('[useLocalAgent] Session env vars:', Object.keys(sessionEnvVars))
       console.log('[useLocalAgent] Env var values (sanitized):', Object.fromEntries(
-        Object.entries(pendingEnvVars).map(([k, v]) => [k, k.includes('PASSWORD') || k.includes('SECRET') ? '***' : v])
+        Object.entries(sessionEnvVars).map(([k, v]) => [k, k.includes('PASSWORD') || k.includes('SECRET') ? '***' : v])
       ))
     } else {
-      console.log('[useLocalAgent] No pending env vars')
+      console.log('[useLocalAgent] No session env vars')
     }
     console.log('[useLocalAgent] ' + (options.resumeSessionId ? 'RESUMING SESSION' : 'CREATING NEW SESSION'))
     console.log('[useLocalAgent] CWD:', options.cwd)

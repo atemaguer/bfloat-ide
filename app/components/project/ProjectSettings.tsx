@@ -29,7 +29,7 @@ interface ProjectSettingsProps {
   onProjectUpdate?: (project: Project) => void
 }
 
-const REVENUECAT_PUBLIC_KEY = 'EXPO_PUBLIC_REVENUECAT_API_KEY'
+const REVENUECAT_API_KEY = 'REVENUECAT_API_KEY'
 
 export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsProps) {
   const [isSaving, setIsSaving] = useState(false)
@@ -72,6 +72,31 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     project.appType === 'nextjs' || project.appType === 'vite' || project.appType === 'node' || project.appType === 'web'
       ? 'web'
       : 'mobile'
+
+  const validateSecretWriteTarget = (
+    result: { projectId?: string; writePath?: string },
+    actionLabel: string
+  ): boolean => {
+    if (!project.id) return true
+
+    if (result.projectId && result.projectId !== project.id) {
+      const msg = `${actionLabel} targeted ${result.projectId}, but active project is ${project.id}.`
+      console.error('[ProjectSettings]', msg, result)
+      setSecretsError(msg)
+      toast.error('Secret save targeted a different project. Please reload the project.')
+      return false
+    }
+
+    if (result.writePath && !result.writePath.includes(project.id)) {
+      const msg = `${actionLabel} wrote to ${result.writePath}, which does not match active project ${project.id}.`
+      console.error('[ProjectSettings]', msg, result)
+      setSecretsError(msg)
+      toast.error('Secret write path does not match active project. Please reload the project.')
+      return false
+    }
+
+    return true
+  }
 
   // Sync form with updated project prop
   useEffect(() => {
@@ -148,9 +173,15 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     if (!result.success) {
       throw new Error(result.error || 'Failed to save secret')
     }
+    if (!validateSecretWriteTarget(result, `Saving ${key}`)) {
+      return
+    }
 
     await loadSecrets()
     workbenchStore.bumpSecretsVersion()
+    if (isChanged && nextValue) {
+      workbenchStore.mergePendingEnvVars({ [key]: nextValue })
+    }
 
     // Auto-run Convex setup only when URL + deploy key are both present.
     if (isConvexSecretKey(key) && isChanged) {
@@ -172,8 +203,14 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       }
     }
 
-    if (key === REVENUECAT_PUBLIC_KEY && isChanged && nextValue) {
-      workbenchStore.triggerChatPrompt('Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project')
+    if (key === REVENUECAT_API_KEY && isChanged && nextValue) {
+      workbenchStore.triggerChatPrompt('Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project', {
+        integrationId: 'revenuecat',
+        projectId: project.id,
+        requiredSecretKeys: [REVENUECAT_API_KEY],
+        waitForSecrets: true,
+        timeoutMs: 8000,
+      })
       toast.success('RevenueCat key saved. Starting RevenueCat setup in chat...')
     }
   }
@@ -197,6 +234,13 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     for (const entry of entries) {
       const result = await secretsApi.setSecret(project.id, entry.key, entry.value)
       if (result.success) {
+        if (!validateSecretWriteTarget(result, `Saving ${entry.key}`)) {
+          failures.push({
+            key: entry.key,
+            error: 'Secret write target mismatch',
+          })
+          continue
+        }
         successes.push(entry.key)
       } else {
         failures.push({
@@ -209,6 +253,15 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     if (successes.length > 0) {
       await loadSecrets()
       workbenchStore.bumpSecretsVersion()
+      const pendingEnv: Record<string, string> = {}
+      for (const entry of entries) {
+        if (successes.includes(entry.key) && entry.value.trim()) {
+          pendingEnv[entry.key] = entry.value.trim()
+        }
+      }
+      if (Object.keys(pendingEnv).length > 0) {
+        workbenchStore.mergePendingEnvVars(pendingEnv)
+      }
     }
 
     if (activeIntegrationId === 'convex' && successes.length > 0) {
@@ -234,7 +287,13 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       const hasRevenuecatKey = hasRequiredSecrets(secretKeys, 'revenuecat', normalizedAppType)
 
       if (hasRevenuecatKey) {
-        workbenchStore.triggerChatPrompt('Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project')
+        workbenchStore.triggerChatPrompt('Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project', {
+          integrationId: 'revenuecat',
+          projectId: project.id,
+          requiredSecretKeys: [REVENUECAT_API_KEY],
+          waitForSecrets: true,
+          timeoutMs: 8000,
+        })
         toast.success('RevenueCat credentials saved. Starting RevenueCat setup in chat...')
       }
     }

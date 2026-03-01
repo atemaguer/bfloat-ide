@@ -164,6 +164,7 @@ export function Chat({
     revenuecat: false,
   })
   const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
+  const activePendingPromptIdRef = useRef<string | null>(null)
   const files = useStore(workbenchStore.files)
   const convexSecretStatus = useMemo(
     () => getConvexSecretStatusFromSecrets(projectSecrets, normalizedAppType),
@@ -400,17 +401,33 @@ export function Chat({
 
         const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
         if (Object.keys(pendingEnvVars).length > 0) {
-          workbenchStore.setPendingEnvVars(pendingEnvVars)
+          workbenchStore.mergePendingEnvVars(pendingEnvVars)
         }
         setConvexProvisioned(true)
       }
       if (id === 'revenuecat') {
-        const revenuecatApiKey = projectSecrets.find((secret) => secret.key === 'EXPO_PUBLIC_REVENUECAT_API_KEY')?.value
+        const revenuecatApiKey = projectSecrets.find((secret) => secret.key === 'REVENUECAT_API_KEY')?.value
+        const revenuecatPublicKey = projectSecrets.find((secret) => secret.key === 'EXPO_PUBLIC_REVENUECAT_API_KEY')?.value
+        const pendingRevenuecatEnv: Record<string, string> = {}
         if (revenuecatApiKey) {
-          workbenchStore.setPendingEnvVars({ EXPO_PUBLIC_REVENUECAT_API_KEY: revenuecatApiKey })
+          pendingRevenuecatEnv.REVENUECAT_API_KEY = revenuecatApiKey
+        }
+        if (revenuecatPublicKey) {
+          pendingRevenuecatEnv.EXPO_PUBLIC_REVENUECAT_API_KEY = revenuecatPublicKey
+        }
+        if (Object.keys(pendingRevenuecatEnv).length > 0) {
+          workbenchStore.mergePendingEnvVars(pendingRevenuecatEnv)
         }
         setRevenuecatProvisioned(true)
         setIsRevenueCatSettingUp(true)
+
+        const revenuecatPrompt = prompts.revenuecat
+        if (revenuecatPrompt) {
+          workbenchStore.triggerChatPrompt(revenuecatPrompt, {
+            integrationId: 'revenuecat',
+          })
+        }
+        return
       }
       if (id === 'stripe') {
         setIsStripeSettingUp(true)
@@ -441,6 +458,37 @@ export function Chat({
       }
     },
     [convexSecretStatus, projectSecrets]
+  )
+
+  const waitForRequiredSecrets = useCallback(
+    async (projectIdToCheck: string, requiredSecretKeys: string[], timeoutMs = 8000): Promise<SecretEntry[] | null> => {
+      const startedAt = Date.now()
+      const pollIntervalMs = 250
+
+      while (Date.now() - startedAt <= timeoutMs) {
+        try {
+          const result = await secrets.readSecrets(projectIdToCheck)
+          if (!result.error && Array.isArray(result.secrets)) {
+            const secretMap = new Map(
+              result.secrets
+                .filter((secret): secret is SecretEntry => !!secret?.key && typeof secret.value === 'string')
+                .map((secret) => [secret.key, secret.value.trim()])
+            )
+            const allPresent = requiredSecretKeys.every((key) => (secretMap.get(key) || '').length > 0)
+            if (allPresent) {
+              return result.secrets
+            }
+          }
+        } catch {
+          // Retry until timeout
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+      }
+
+      return null
+    },
+    []
   )
 
   // Convert session message to ChatMessage format
@@ -1441,43 +1489,113 @@ export function Chat({
   }, [])
 
   // Watch for pending prompts from external components (e.g., deployment)
-  const pendingPrompt = useStore(workbenchStore.pendingPrompt)
+  const pendingPromptRequest = useStore(workbenchStore.pendingPrompt)
   useEffect(() => {
+    const pendingPrompt = pendingPromptRequest?.prompt
     console.log('[Chat] pendingPrompt effect fired', {
       hasPendingPrompt: !!pendingPrompt,
       isStreaming,
       hasProjectPath: !!usableProjectPath,
       pendingPrompt: pendingPrompt?.substring(0, 100),
     })
-    if (pendingPrompt && !isStreaming && usableProjectPath) {
-      console.log('[Chat] Sending pending prompt:', pendingPrompt)
-      if (/\/convex-setup\b/i.test(pendingPrompt)) {
-        if (!convexSecretStatus.isConfigured) {
-          workbenchStore.setActiveTab('settings')
-          workbenchStore.setPendingIntegrationConnect({
-            integrationId: 'convex',
-            source: 'chat',
-          })
-          workbenchStore.clearPendingPrompt()
-          return
-        }
 
-        const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
-        if (Object.keys(pendingEnvVars).length > 0) {
-          workbenchStore.setPendingEnvVars(pendingEnvVars)
-        }
-        setConvexProvisioned(true)
-      }
-      handleSubmit(pendingPrompt)
-      workbenchStore.clearPendingPrompt()
-    } else {
+    if (!pendingPromptRequest || !pendingPrompt || isStreaming || !usableProjectPath) {
       console.log('[Chat] Not sending pending prompt, conditions:', {
         hasPrompt: !!pendingPrompt,
         isStreaming,
         hasProjectPath: !!usableProjectPath,
       })
+      return
     }
-  }, [pendingPrompt, isStreaming, usableProjectPath, handleSubmit, convexSecretStatus])
+
+    const requestId = pendingPromptRequest.id
+    if (activePendingPromptIdRef.current === requestId) {
+      return
+    }
+    activePendingPromptIdRef.current = requestId
+
+    const run = async () => {
+      console.log('[Chat] Sending pending prompt:', pendingPrompt)
+      const isRevenueCatPrompt =
+        pendingPromptRequest.integrationId === 'revenuecat' || /\/add-revenuecat\b/i.test(pendingPrompt)
+
+      if (isRevenueCatPrompt) {
+        setIsRevenueCatSettingUp(true)
+      }
+
+      try {
+        if (/\/convex-setup\b/i.test(pendingPrompt)) {
+          if (!convexSecretStatus.isConfigured) {
+            workbenchStore.setActiveTab('settings')
+            workbenchStore.setPendingIntegrationConnect({
+              integrationId: 'convex',
+              source: 'chat',
+            })
+            return
+          }
+
+          const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
+          if (Object.keys(pendingEnvVars).length > 0) {
+            workbenchStore.mergePendingEnvVars(pendingEnvVars)
+          }
+          setConvexProvisioned(true)
+        }
+
+        if (
+          pendingPromptRequest.waitForSecrets &&
+          pendingPromptRequest.projectId &&
+          pendingPromptRequest.requiredSecretKeys &&
+          pendingPromptRequest.requiredSecretKeys.length > 0
+        ) {
+          const resolvedSecrets = await waitForRequiredSecrets(
+            pendingPromptRequest.projectId,
+            pendingPromptRequest.requiredSecretKeys,
+            pendingPromptRequest.timeoutMs ?? 8000
+          )
+
+          if (activePendingPromptIdRef.current !== requestId) {
+            return
+          }
+
+          if (!resolvedSecrets) {
+            const requiredKeysText = pendingPromptRequest.requiredSecretKeys.join(', ')
+            toast.error(`Setup paused: required secret(s) not readable in time (${requiredKeysText}).`)
+            return
+          }
+
+          const envFromSecrets: Record<string, string> = {}
+          for (const key of pendingPromptRequest.requiredSecretKeys) {
+            const match = resolvedSecrets.find((secret) => secret.key === key)
+            const value = match?.value?.trim()
+            if (value) {
+              envFromSecrets[key] = value
+            }
+          }
+          if (Object.keys(envFromSecrets).length > 0) {
+            workbenchStore.mergePendingEnvVars(envFromSecrets)
+          }
+        }
+
+        if (activePendingPromptIdRef.current !== requestId) {
+          return
+        }
+
+        await handleSubmit(pendingPrompt)
+      } catch (err) {
+        console.error('[Chat] Failed to handle pending prompt:', err)
+      } finally {
+        if (activePendingPromptIdRef.current === requestId) {
+          workbenchStore.clearPendingPrompt()
+          activePendingPromptIdRef.current = null
+        }
+        if (isRevenueCatPrompt) {
+          setIsRevenueCatSettingUp(false)
+        }
+      }
+    }
+
+    run()
+  }, [pendingPromptRequest, isStreaming, usableProjectPath, handleSubmit, convexSecretStatus, waitForRequiredSecrets])
 
   // Extract todos from messages (find most recent TodoWrite)
   const todos = useMemo(() => {
