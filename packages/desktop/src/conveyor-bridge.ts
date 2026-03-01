@@ -263,6 +263,9 @@ interface SecretsReadResult {
 interface SecretOperationResult {
   success: boolean
   error?: string
+  projectId?: string
+  readPath?: string
+  writePath?: string
 }
 
 // LocalProjectsApi types  — use `unknown` for Project/AgentSession since we

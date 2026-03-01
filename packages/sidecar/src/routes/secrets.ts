@@ -213,8 +213,8 @@ secretsRouter.post("/:projectId", async (c) => {
     const updated = updateEnvContent(content, key, value);
     await Bun.write(writePath, updated);
 
-    console.log(`[Secrets] Set secret: ${key} for project ${projectId}`);
-    return c.json({ success: true });
+    console.log(`[Secrets] Set secret: ${key} for project ${projectId} (writePath=${writePath})`);
+    return c.json({ success: true, projectId, readPath, writePath });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Secrets] Error setting secret ${key}:`, err);
@@ -231,7 +231,7 @@ secretsRouter.delete("/:projectId/:key", async (c) => {
   const { readPath } = resolveEnvPath(projectId);
 
   if (!fs.existsSync(readPath)) {
-    return c.json({ success: true }); // nothing to delete
+    return c.json({ success: true, projectId, readPath, writePath: readPath }); // nothing to delete
   }
 
   try {
@@ -239,8 +239,8 @@ secretsRouter.delete("/:projectId/:key", async (c) => {
     const updated = removeFromEnvContent(content, key);
     await Bun.write(readPath, updated);
 
-    console.log(`[Secrets] Deleted secret: ${key} for project ${projectId}`);
-    return c.json({ success: true });
+    console.log(`[Secrets] Deleted secret: ${key} for project ${projectId} (path=${readPath})`);
+    return c.json({ success: true, projectId, readPath, writePath: readPath });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Secrets] Error deleting secret ${key}:`, err);
