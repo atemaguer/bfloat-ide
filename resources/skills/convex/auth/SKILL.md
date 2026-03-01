@@ -17,10 +17,11 @@ You are a Convex authentication specialist for React Native (Expo) and Next.js a
 7. **NEVER retry failed commands** - If a command fails, report the error and stop. Do NOT run the same command again.
 8. **Check before installing** - Read package.json first. If a dependency is already installed, skip the install step.
 9. **Detect the framework** - Read package.json to determine if this is an Expo (React Native) or Next.js project. Use the correct env var prefix accordingly.
-10. **COPY TEMPLATES EXACTLY** - Do NOT speculate or generate auth code. Copy the templates provided below.
+10. **COPY TEMPLATES EXACTLY** - Do NOT speculate or generate auth code. Copy templates from this skill directory (`resources/skills/convex/auth/templates/...`).
 11. **NO CODE IN CHAT** - NEVER show code snippets in the chat. Just write code directly to files.
 12. **AUTH MEANS SCREENS** - When adding authentication, ALWAYS create sign-up and sign-in screens. Auth is not complete without user-facing screens.
 13. **HOOKS BEFORE RETURNS** - ALL React hooks MUST be called BEFORE any conditional return statements.
+14. **ICON MAPPING SAFETY** - If auth/tabs screens use `IconSymbol` names on Expo web/android, you MUST either use names already mapped in `components/ui/icon-symbol.tsx` or update that mapping in the same change. Never leave unmapped names.
 
 ## Framework Detection
 
@@ -42,6 +43,7 @@ npx convex dev --once
 ```
 
 Do NOT pass `--configure`, `--team`, or `--project` flags. Do NOT try to log in interactively. If this fails, report the error and stop.
+NEVER fabricate files in `convex/_generated/`.
 
 Create `convex/schema.ts` with the user's data model if it doesn't exist. Do NOT spread `authTables` — Better Auth manages its own schema via the component. Only define the user's own tables:
 
@@ -67,7 +69,7 @@ Check package.json first. Only install what's missing:
 **Expo:**
 ```bash
 npm install convex@latest @convex-dev/better-auth better-auth@1.4.9 @better-auth/expo@1.4.9 --save-exact
-npx expo install expo-secure-store
+npx expo install expo-secure-store expo-network
 ```
 
 **Next.js:**
@@ -79,7 +81,11 @@ If this fails, report the error and stop.
 
 ## Step 3: Verify Auth Secrets
 
-The `CONVEX_DEPLOY_KEY` environment variable is pre-configured by the IDE.
+This skill requires existing Convex credentials in project secrets before it runs:
+- URL (`EXPO_PUBLIC_CONVEX_URL` for Expo or `NEXT_PUBLIC_CONVEX_URL` for Next.js)
+- `CONVEX_DEPLOY_KEY`
+
+If either is missing, stop and report that Convex auth setup cannot continue yet.
 
 Verify `BETTER_AUTH_SECRET` exists on the Convex deployment (pre-provisioned by the IDE):
 
@@ -111,7 +117,12 @@ Copy [templates/convex/auth.config.ts](templates/convex/auth.config.ts) to `conv
 
 ## Step 6: Create Auth Functions
 
-Copy [templates/convex/auth.ts](templates/convex/auth.ts) to `convex/auth.ts`.
+Use the framework-specific template:
+
+- **Expo**: Copy [templates/convex/auth.expo.ts](templates/convex/auth.expo.ts) to `convex/auth.ts`.
+- **Next.js**: Copy [templates/convex/auth.next.ts](templates/convex/auth.next.ts) to `convex/auth.ts`.
+
+Do not mix templates across frameworks.
 
 ## Step 7: Create HTTP Router
 
@@ -132,6 +143,8 @@ After pushing, use the `restart_dev_server` tool to restart the dev server so it
 ### Step 9: Create Auth Client
 
 Copy [templates/lib/auth-client-expo.ts](templates/lib/auth-client-expo.ts) to `lib/auth-client.ts` (or `src/lib/auth-client.ts` depending on project structure). Update the `scheme` to match the app's URL scheme from `app.json`.
+
+Important: `expoClient` MUST be imported from `@better-auth/expo/client` (not `@better-auth/expo`).
 
 ### Step 10: Set Up the Provider
 
@@ -161,7 +174,7 @@ authClient.signOut();
 const { data: session } = authClient.useSession();
 ```
 
-After successful auth, use `router.replace("/")` to navigate.
+After successful sign-up, the user must be signed in automatically and can navigate with `router.replace("/")`.
 
 ### Step 12: Create Query and Mutation Functions
 
@@ -170,6 +183,7 @@ Create Convex functions in the `convex/` directory. Use `authComponent.getAuthUs
 ### Step 13: Update Existing Components
 
 Replace any local storage usage (AsyncStorage, etc.) with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`. Use `Authenticated`, `Unauthenticated`, and `AuthLoading` from `convex/react` to gate UI on auth state.
+Before finishing, verify there are no unmapped `IconSymbol` names in auth/tabs/modal screens that would crash web/android fallback rendering.
 
 ---
 
@@ -367,17 +381,21 @@ function ItemList() {
 
 ## Required Secrets
 
-The Convex URL and deploy key are configured automatically by the IDE when the user connects Convex. The URL is stored under the framework-appropriate key (`EXPO_PUBLIC_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL`), and `CONVEX_DEPLOY_KEY` is always available.
+This skill requires existing project secrets before running:
+- Convex URL under the framework key (`EXPO_PUBLIC_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL`)
+- `CONVEX_DEPLOY_KEY`
+
+If either is missing, stop and report that auth setup cannot proceed yet.
 
 The `BETTER_AUTH_SECRET` and `SITE_URL` environment variables are pre-provisioned by the IDE on the Convex deployment when the project is created. They can also be set manually via `npx convex env set` if missing.
 
 For **production** deployments, `BETTER_AUTH_SECRET` and `SITE_URL` are set automatically by the bfloat deployment pipeline via the Convex Deployment API when the user deploys their app. The agent does NOT need to handle production auth env vars.
 
-Do NOT tell users to set secrets manually — they are managed through the IDE and Convex CLI.
+Do NOT assume those secrets exist in all projects. Validate them before running Convex commands.
 
 ## After Integration
 
-Tell the user: "Convex is connected with email/password authentication via Better Auth. Your Convex URL and auth keys have been configured automatically."
+Tell the user: "Convex is connected with email/password authentication via Better Auth."
 
 Do NOT tell users to:
 - Edit `.env` files
@@ -435,6 +453,9 @@ Note: Expo apps run natively and DO need `baseURL` since they connect directly t
 - ✅ Correct: `plugins: [convex({ authConfig })]`
 
 Note: Expo apps DO need `crossDomainClient()` on the client and the corresponding `crossDomain()` server plugin since the app and Convex are on different domains.
+Treat this as a paired requirement:
+- Expo client has `crossDomainClient()` -> Expo server must include `crossDomain({ siteUrl: process.env.SITE_URL! })`
+- Next.js client has no `crossDomainClient()` -> Next.js server must not include `crossDomain(...)`
 
 ### Expo-Specific: Deep Linking
 
@@ -447,7 +468,11 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
     database: authComponent.adapter(ctx),
     emailAndPassword: { enabled: true, requireEmailVerification: false },
     trustedOrigins: ["*"],
-    plugins: [convex({ authConfig })],
+    plugins: [
+      expo(),
+      crossDomain({ siteUrl: process.env.SITE_URL! }),
+      convex({ authConfig }),
+    ],
   });
 };
 ```

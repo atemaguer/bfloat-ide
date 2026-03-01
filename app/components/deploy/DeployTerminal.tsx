@@ -28,6 +28,7 @@ export function DeployTerminal({
   const terminalRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const isInitializedRef = useRef(false)
+  const ptyCreatedRef = useRef(false)
   const onOutputRef = useRef(onOutput)
   const onReadyRef = useRef(onReady)
   const onExitRef = useRef(onExit)
@@ -51,6 +52,7 @@ export function DeployTerminal({
 
     console.log(`[DeployTerminal] Initializing terminal: ${terminalId}`)
     isInitializedRef.current = true
+    ptyCreatedRef.current = false
 
     const xterminal = new XTerm({
       cursorBlink: true,
@@ -74,10 +76,6 @@ export function DeployTerminal({
       if (terminalRef.current) {
         terminalRef.current.options.theme = getDeployTerminalTheme(resolved)
       }
-    })
-
-    requestAnimationFrame(() => {
-      fitAddon.fit()
     })
 
     // Set up listeners
@@ -107,30 +105,7 @@ export function DeployTerminal({
       terminal.resize(terminalId, cols, rows)
     })
 
-    // Create PTY
-    if (!createdTerminals.has(terminalId)) {
-      createdTerminals.add(terminalId)
-      terminal.create(terminalId).then((result) => {
-        if (result.success) {
-          requestAnimationFrame(() => {
-            if (fitAddonRef.current && terminalRef.current) {
-              fitAddonRef.current.fit()
-              terminal.resize(
-                terminalId,
-                terminalRef.current.cols,
-                terminalRef.current.rows
-              )
-            }
-          })
-          onReadyRef.current?.()
-        } else {
-          if (terminalRef.current) {
-            terminalRef.current.writeln(`\x1b[31mFailed to create terminal: ${result.error}\x1b[0m`)
-          }
-          createdTerminals.delete(terminalId)
-        }
-      })
-    }
+    // PTY creation is deferred to the ResizeObserver callback (see below)
 
     return () => {
       console.log(`[DeployTerminal] Disposing terminal: ${terminalId}`)
@@ -141,9 +116,67 @@ export function DeployTerminal({
     }
   }, [terminalId])
 
-  // Handle container resize
+  // Handle container resize — also triggers initial PTY creation
   useEffect(() => {
+    const createPtyIfNeeded = async () => {
+      if (ptyCreatedRef.current || !fitAddonRef.current || !terminalRef.current) return
+
+      const xterminal = terminalRef.current
+      const fitAddon = fitAddonRef.current
+
+      // Check container has real dimensions
+      const container = containerRef.current
+      if (!container || container.clientWidth === 0 || container.clientHeight === 0) return
+
+      fitAddon.fit()
+      const cols = xterminal.cols
+      const rows = xterminal.rows
+
+      // Sanity check: don't create PTY with default/zero dimensions
+      if (cols <= 1 || rows <= 1) return
+
+      // Already tracked globally — skip
+      if (createdTerminals.has(terminalId)) {
+        ptyCreatedRef.current = true
+        console.log(`[DeployTerminal] PTY already exists for: ${terminalId}, reconnecting`)
+        terminal.resize(terminalId, cols, rows)
+        onReadyRef.current?.()
+        return
+      }
+
+      ptyCreatedRef.current = true
+      createdTerminals.add(terminalId)
+      console.log(`[DeployTerminal] Creating PTY with initial size: ${cols}x${rows}`)
+
+      const result = await terminal.create(terminalId, undefined, cols, rows)
+
+      if (result.success) {
+        // Re-fit and sync in case container resized during PTY creation
+        requestAnimationFrame(() => {
+          if (fitAddonRef.current && terminalRef.current) {
+            fitAddonRef.current.fit()
+            terminal.resize(
+              terminalId,
+              terminalRef.current.cols,
+              terminalRef.current.rows
+            )
+          }
+        })
+        onReadyRef.current?.()
+      } else {
+        if (terminalRef.current) {
+          terminalRef.current.writeln(`\x1b[31mFailed to create terminal: ${result.error}\x1b[0m`)
+        }
+        createdTerminals.delete(terminalId)
+        ptyCreatedRef.current = false
+      }
+    }
+
     const handleResize = () => {
+      if (!ptyCreatedRef.current) {
+        createPtyIfNeeded()
+        return
+      }
       if (fitAddonRef.current && terminalRef.current) {
         fitAddonRef.current.fit()
       }
@@ -160,7 +193,7 @@ export function DeployTerminal({
       resizeObserver.disconnect()
       window.removeEventListener('resize', handleResize)
     }
-  }, [])
+  }, [terminalId])
 
   const handleClick = useCallback(() => {
     terminalRef.current?.focus()

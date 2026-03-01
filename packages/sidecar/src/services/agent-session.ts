@@ -23,6 +23,12 @@ import { query, type SDKMessage, type Options } from "@anthropic-ai/claude-agent
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { createScreenshotMcpServer } from "./screenshot-mcp.ts";
+import { createWorkbenchMcpServer } from "./workbench-mcp.ts";
+import { buildWorkspaceProfile, shouldBlockScaffoldCommand } from "./workspace-profile.ts";
+import { assessDevServer } from "./workbench-runtime.ts";
+import { updateSessionInProject } from "../routes/local-projects.ts";
+import { CodexProvider } from "./codex-provider.ts";
 
 // ---------------------------------------------------------------------------
 // Frame types (wire format over WebSocket and HTTP responses)
@@ -316,6 +322,67 @@ function buildEnhancedPath(): string {
     .join(path.delimiter);
 }
 
+const DEV_SERVER_START_PATTERNS: RegExp[] = [
+  /\bnpm\s+start\b/i,
+  /\bnpm\s+run\s+dev\b/i,
+  /\bnpm\s+run\s+start\b/i,
+  /\bpnpm\s+dev\b/i,
+  /\bpnpm\s+run\s+dev\b/i,
+  /\byarn\s+dev\b/i,
+  /\byarn\s+start\b/i,
+  /\bbun\s+run\s+dev\b/i,
+  /\bbun\s+dev\b/i,
+  /\bnpx\s+expo\s+start\b/i,
+  /\bexpo\s+start\b/i,
+  /\bnext\s+dev\b/i,
+  /\bvite\b(?:\s|$)/i,
+  /\breact-native\s+start\b/i,
+];
+
+const PACKAGE_INSTALL_PATTERNS: RegExp[] = [
+  /\bnpm\s+(install|i)\b/i,
+  /\bpnpm\s+add\b/i,
+  /\byarn\s+add\b/i,
+  /\bbun\s+add\b/i,
+  /\bnpx\s+expo\s+install\b/i,
+  /\bexpo\s+install\b/i,
+];
+
+const DEPRECATED_PACKAGE_REPLACEMENTS: Record<string, string> = {
+  "expo-av": "expo-audio and expo-video",
+  "expo-permissions": "individual package permission APIs",
+  "@expo/vector-icons": "expo-symbols",
+  "@react-native-async-storage/async-storage": "expo-sqlite/localStorage/install",
+  "expo-app-loading": "expo-splash-screen",
+  "expo-linear-gradient": "CSS gradients via experimental_backgroundImage",
+};
+
+function normalizeCommand(command: string): string {
+  return command.trim().replace(/\s+/g, " ");
+}
+
+function isDevServerStartCommand(command: string): boolean {
+  const normalized = normalizeCommand(command);
+  return DEV_SERVER_START_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function getDeprecatedPackageInstall(command: string): { pkg: string; replacement: string } | null {
+  if (!PACKAGE_INSTALL_PATTERNS.some((pattern) => pattern.test(command))) return null;
+
+  const tokens = command
+    .replace(/["'`]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => token.toLowerCase());
+
+  for (const [pkg, replacement] of Object.entries(DEPRECATED_PACKAGE_REPLACEMENTS)) {
+    const target = pkg.toLowerCase();
+    const matched = tokens.some((token) => token === target || token.startsWith(`${target}@`));
+    if (matched) return { pkg, replacement };
+  }
+  return null;
+}
+
 /**
  * Convert a raw SDKMessage from the Claude Agent SDK into a ProviderStreamEvent.
  *
@@ -355,6 +422,47 @@ function convertSDKMessageToEvent(
             name: block.name,
             input: block.input as Record<string, unknown>,
             status: "running",
+          });
+        }
+      }
+
+      return events.length === 1 ? events[0] : events.length > 0 ? events : null;
+    }
+
+    case "user": {
+      const blocks = sdkMessage.message.content;
+      const events: ProviderStreamEvent[] = [];
+
+      for (const block of blocks) {
+        if ("type" in block && block.type === "tool_result") {
+          const output =
+            typeof block.content === "string"
+              ? block.content
+              : Array.isArray(block.content)
+                ? block.content
+                    .map((entry) => {
+                      if (typeof entry === "string") return entry;
+                      if (entry && typeof entry === "object" && "text" in entry) {
+                        const text = (entry as { text?: unknown }).text;
+                        return typeof text === "string" ? text : "";
+                      }
+                      return "";
+                    })
+                    .join("\n")
+                : "";
+
+          events.push({
+            kind: "tool_result",
+            callId:
+              ("tool_use_id" in block && typeof block.tool_use_id === "string"
+                ? block.tool_use_id
+                : ("id" in block && typeof block.id === "string" ? block.id : "")),
+            name:
+              ("name" in block && typeof block.name === "string"
+                ? block.name
+                : ""),
+            output,
+            isError: Boolean("is_error" in block ? block.is_error : false),
           });
         }
       }
@@ -507,7 +615,11 @@ class ClaudeProvider implements AgentProvider {
       env,
       pathToClaudeCodeExecutable: claudeBinaryPath,
       maxTurns: options.maxTurns || 50,
-      mcpServers: options.mcpServers as Record<string, any>,
+      mcpServers: {
+        ...(options.mcpServers as Record<string, any>),
+        screenshot: createScreenshotMcpServer({ cwd: options.cwd }),
+        workbench: createWorkbenchMcpServer({ cwd: options.cwd }),
+      },
       stderr: (data: string) => {
         console.log(`${CLAUDE_LOG} [stderr] ${data}`);
       },
@@ -599,8 +711,9 @@ class ClaudeProvider implements AgentProvider {
   }
 }
 
-// Register the real Claude provider on module load
+// Register providers on module load
 registerProvider(new ClaudeProvider());
+registerProvider(new CodexProvider());
 
 // ---------------------------------------------------------------------------
 // Session registry
@@ -628,6 +741,7 @@ interface BackgroundSession {
 }
 
 const MAX_BUFFERED_FRAMES = 500;
+const REVENUECAT_MCP_URL = "https://mcp.revenuecat.ai/mcp";
 
 /** projectId → BackgroundSession */
 const backgroundSessions = new Map<string, BackgroundSession>();
@@ -736,6 +850,108 @@ export function getBackgroundMessages(
   return { success: true, messages: frames };
 }
 
+function parseEnvContent(content: string): Record<string, string> {
+  const parsed: Record<string, string> = {};
+
+  for (const rawLine of content.split("\n")) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) {
+      line = line.slice("export ".length).trim();
+    }
+
+    const equalsIndex = line.indexOf("=");
+    if (equalsIndex <= 0) continue;
+
+    const key = line.slice(0, equalsIndex).trim();
+    if (!key) continue;
+
+    let value = line.slice(equalsIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    parsed[key] = value;
+  }
+
+  return parsed;
+}
+
+function loadProjectEnv(cwd: string): Record<string, string> {
+  const envLocalPath = path.join(cwd, ".env.local");
+  const envPath = path.join(cwd, ".env");
+  const candidatePath = fs.existsSync(envLocalPath)
+    ? envLocalPath
+    : fs.existsSync(envPath)
+      ? envPath
+      : null;
+
+  if (!candidatePath) return {};
+
+  try {
+    const content = fs.readFileSync(candidatePath, "utf-8");
+    return parseEnvContent(content);
+  } catch (error) {
+    console.warn("[AgentSession] Failed to load project env for MCP config:", error);
+    return {};
+  }
+}
+
+function loadProjectEnvByProjectId(projectId?: string): Record<string, string> {
+  if (!projectId) return {};
+
+  const projectDir = path.join(os.homedir(), ".bfloat-ide", "projects", projectId);
+  const envLocalPath = path.join(projectDir, ".env.local");
+  const envPath = path.join(projectDir, ".env");
+  const candidatePath = fs.existsSync(envLocalPath)
+    ? envLocalPath
+    : fs.existsSync(envPath)
+      ? envPath
+      : null;
+
+  if (!candidatePath) return {};
+
+  try {
+    const content = fs.readFileSync(candidatePath, "utf-8");
+    return parseEnvContent(content);
+  } catch (error) {
+    console.warn("[AgentSession] Failed to load project-id env for MCP config:", error);
+    return {};
+  }
+}
+
+function buildAutoMcpServers(
+  cwd: string,
+  sessionEnv?: Record<string, string>,
+  projectId?: string
+): Record<string, unknown> {
+  const cwdEnv = loadProjectEnv(cwd);
+  const projectScopedEnv = loadProjectEnvByProjectId(projectId);
+  const mergedEnv = { ...cwdEnv, ...projectScopedEnv, ...(sessionEnv ?? {}) };
+  const autoServers: Record<string, unknown> = {};
+
+  const revenueCatKey =
+    mergedEnv.REVENUECAT_API_KEY?.trim() ||
+    mergedEnv.EXPO_PUBLIC_REVENUECAT_API_KEY?.trim() ||
+    "";
+
+  if (revenueCatKey) {
+    autoServers.revenuecat = {
+      type: "http",
+      url: REVENUECAT_MCP_URL,
+      headers: {
+        Authorization: `Bearer ${revenueCatKey}`,
+      },
+    };
+    console.log("[AgentSession] Auto-configured RevenueCat MCP server from project/session env");
+  }
+
+  return autoServers;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -754,15 +970,24 @@ export function createSession(
 
   const sessionId = randomUUID();
   const now = Date.now();
+  const autoMcpServers = buildAutoMcpServers(options.cwd, options.env, options.projectId);
+  const mergedMcpServers = {
+    ...autoMcpServers,
+    ...(options.mcpServers ?? {}),
+  };
+  const normalizedOptions: SessionCreateOptions =
+    Object.keys(mergedMcpServers).length > 0
+      ? { ...options, mcpServers: mergedMcpServers }
+      : { ...options };
 
   const state: AgentSessionState = {
     id: sessionId,
     provider: providerId,
     status: "idle",
-    model: options.model ?? "default",
-    cwd: options.cwd,
-    projectId: options.projectId,
-    realSessionId: options.resumeSessionId,
+    model: normalizedOptions.model ?? "default",
+    cwd: normalizedOptions.cwd,
+    projectId: normalizedOptions.projectId,
+    realSessionId: normalizedOptions.resumeSessionId,
     conversation: [],
     totalTokens: 0,
     totalCostUsd: 0,
@@ -772,15 +997,15 @@ export function createSession(
 
   sessions.set(sessionId, {
     state,
-    options,
+    options: normalizedOptions,
     abortController: null,
     subscribers: new Set(),
     seq: 0,
   });
 
   // Register as background session so the renderer can reconnect on re-mount
-  if (options.projectId) {
-    registerBackgroundSession(sessionId, options.projectId, providerId, options.cwd);
+  if (normalizedOptions.projectId) {
+    registerBackgroundSession(sessionId, normalizedOptions.projectId, providerId, normalizedOptions.cwd);
   }
 
   console.log(`[AgentSession] Created session ${sessionId} (provider=${providerId})`);
@@ -1024,13 +1249,35 @@ async function runStream(sessionId: string, message: string): Promise<void> {
   }
 
   session.abortController = new AbortController();
+  const workspaceProfile = buildWorkspaceProfile(session.state.cwd);
 
   // Accumulate assistant text for conversation history
   let assistantText = "";
+  const toolNameByCallId = new Map<string, string>();
 
   try {
+    const designModeDirective = workspaceProfile.isTemplateBootstrap
+      ? [
+          "## Frontend Design Mode",
+          "Workspace classification: template-bootstrap.",
+          "Treat this as a greenfield app scaffolded from a starter template.",
+          "Do NOT treat starter template styling as an established design system.",
+          "For frontend UI requests, prioritize creative/new design direction via /frontend-design skill.",
+        ].join("\n")
+      : [
+          "## Frontend Design Mode",
+          "Workspace classification: existing app.",
+          "Treat this as an established product unless the user explicitly requests a redesign.",
+          "Preserve existing design system tokens/components and adapt in place.",
+        ].join("\n");
+
+    const mergedSystemPrompt = session.options.systemPrompt
+      ? `${session.options.systemPrompt}\n\n${designModeDirective}`
+      : designModeDirective;
+
     const streamOptions = {
       ...session.options,
+      systemPrompt: mergedSystemPrompt,
       abortController: session.abortController,
     };
 
@@ -1050,6 +1297,7 @@ async function runStream(sessionId: string, message: string): Promise<void> {
         case "init": {
           // Store the real provider session ID for future resume
           liveSession.state.realSessionId = event.realSessionId;
+          liveSession.options.resumeSessionId = event.realSessionId;
           liveSession.state.model = event.model;
 
           frame = buildFrame(liveSession, "init", {
@@ -1076,19 +1324,89 @@ async function runStream(sessionId: string, message: string): Promise<void> {
         }
 
         case "tool_call": {
+          const normalizedToolName = event.name.toLowerCase();
+          const isShellTool =
+            normalizedToolName.includes("bash") ||
+            normalizedToolName.includes("shell") ||
+            normalizedToolName.includes("command");
+          const command =
+            typeof event.input.command === "string"
+              ? event.input.command
+              : typeof event.input.cmd === "string"
+                ? event.input.cmd
+                : "";
+          const decision =
+            isShellTool && command
+              ? shouldBlockScaffoldCommand(command, workspaceProfile)
+              : { shouldBlock: false };
+          if (decision.shouldBlock) {
+            liveSession.state.status = "error";
+            liveSession.state.endTime = Date.now();
+            frame = buildFrame(liveSession, "error", {
+              code: "scaffold_blocked_existing_workspace",
+              message:
+                "Blocked scaffold command in existing workspace. This project already has app files; modify the existing project instead of creating a new app.",
+              recoverable: true,
+            } satisfies ErrorPayload);
+            broadcastToSession(liveSession, frame);
+            broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
+            return;
+          }
+
+          if (isShellTool && command && isDevServerStartCommand(command)) {
+            const assessment = await assessDevServer(liveSession.state.cwd, true);
+            const isManagedAndHealthy =
+              assessment.status === "running" || assessment.status === "starting";
+
+            if (isManagedAndHealthy) {
+              liveSession.state.status = "error";
+              liveSession.state.endTime = Date.now();
+              frame = buildFrame(liveSession, "error", {
+                code: "dev_server_already_managed",
+                message:
+                  "Blocked dev-server start command because the workbench-managed server is already healthy. Use workbench.get_dev_server_status for metadata and continue editing without starting a new server.",
+                recoverable: true,
+              } satisfies ErrorPayload);
+              broadcastToSession(liveSession, frame);
+              broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
+              return;
+            }
+          }
+
+          if (isShellTool && command) {
+            const deprecatedInstall = getDeprecatedPackageInstall(command);
+            if (deprecatedInstall) {
+              liveSession.state.status = "error";
+              liveSession.state.endTime = Date.now();
+              frame = buildFrame(liveSession, "error", {
+                code: "deprecated_package_blocked",
+                message: `Blocked deprecated package install (${deprecatedInstall.pkg}). Use ${deprecatedInstall.replacement} instead.`,
+                recoverable: true,
+              } satisfies ErrorPayload);
+              broadcastToSession(liveSession, frame);
+              broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
+              return;
+            }
+          }
+
           frame = buildFrame(liveSession, "tool_call", {
             callId: event.callId,
             name: event.name,
             input: event.input,
             status: event.status,
           } satisfies ToolCallPayload);
+          if (event.callId && event.name) {
+            toolNameByCallId.set(event.callId, event.name);
+          }
           break;
         }
 
         case "tool_result": {
+          const resolvedName =
+            event.name || toolNameByCallId.get(event.callId) || "unknown_tool";
           frame = buildFrame(liveSession, "tool_result", {
             callId: event.callId,
-            name: event.name,
+            name: resolvedName,
             output: event.output,
             isError: event.isError,
           } satisfies ToolResultPayload);
@@ -1116,6 +1434,18 @@ async function runStream(sessionId: string, message: string): Promise<void> {
           }
           if (event.totalCostUsd) {
             liveSession.state.totalCostUsd += event.totalCostUsd;
+          }
+
+          // Persist token/cost to projects.json (fire-and-forget)
+          const projectId = sessionToProject.get(sessionId);
+          const realSid = liveSession.state.realSessionId;
+          if (projectId && realSid) {
+            updateSessionInProject(projectId, realSid, {
+              totalTokens: liveSession.state.totalTokens,
+              totalCostUsd: liveSession.state.totalCostUsd,
+            }).catch((err) =>
+              console.warn("[AgentSession] Failed to persist token/cost:", err)
+            );
           }
 
           // Save assistant turn to conversation history

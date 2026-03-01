@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronRight, ChevronDown, Folder, FolderOpen, Search } from 'lucide-react'
+import { ChevronRight, ChevronDown, Folder, FolderOpen, Search, Eye, EyeOff } from 'lucide-react'
 import type { FileMap, Dirent } from '@/app/types/project'
 import { FileIcon } from './FileIcons'
 
@@ -19,7 +19,9 @@ interface TreeNode {
   children?: TreeNode[]
 }
 
-function buildTree(files: FileMap): TreeNode[] {
+const HIDDEN_AGENT_FILES = new Set(['AGENTS.md', 'CLAUDE.md'])
+
+function buildTree(files: FileMap, showAgentFiles: boolean): TreeNode[] {
   const root: Record<string, TreeNode> = {}
 
   // Sort file paths for consistent ordering
@@ -60,6 +62,9 @@ function buildTree(files: FileMap): TreeNode[] {
         if (node.type === 'folder' && node.name.startsWith('.')) {
           return false
         }
+        if (!showAgentFiles && node.type === 'file' && HIDDEN_AGENT_FILES.has(node.name)) {
+          return false
+        }
         return true
       })
       .map((node) => ({
@@ -79,7 +84,8 @@ function buildTree(files: FileMap): TreeNode[] {
 export function FileTree({ files, selectedFile, onFileSelect, unsavedFiles, projectName }: FileTreeProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [isProjectCollapsed, setIsProjectCollapsed] = useState(false)
-  const tree = useMemo(() => buildTree(files), [files])
+  const [showAgentFiles, setShowAgentFiles] = useState(false)
+  const tree = useMemo(() => buildTree(files, showAgentFiles), [files, showAgentFiles])
 
   // Filter files based on search query
   const filteredFiles = useMemo(() => {
@@ -119,6 +125,15 @@ export function FileTree({ files, selectedFile, onFileSelect, unsavedFiles, proj
           onChange={handleSearchChange}
           className="file-tree-search-input"
         />
+        <button
+          type="button"
+          className="file-tree-agent-toggle"
+          onClick={() => setShowAgentFiles((prev) => !prev)}
+          title={showAgentFiles ? 'Hide agent files' : 'Show agent files'}
+          aria-label={showAgentFiles ? 'Hide agent files' : 'Show agent files'}
+        >
+          {showAgentFiles ? <EyeOff size={13} /> : <Eye size={13} />}
+        </button>
       </div>
 
       {/* Project Header */}
@@ -253,4 +268,3 @@ function TreeItem({ node, depth, selectedFile, onFileSelect, unsavedFiles, isSea
     </div>
   )
 }
-

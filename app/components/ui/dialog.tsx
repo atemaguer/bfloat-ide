@@ -74,7 +74,7 @@ export const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps
         {/* Dialog */}
         <div
           ref={ref}
-          className={`relative z-50 w-full rounded-xl bg-[hsl(var(--card))] border border-[hsl(var(--border))] p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200 ${className}`}
+          className={`relative z-50 w-full max-w-md rounded-xl bg-[hsl(var(--card))] border border-[hsl(var(--border))] p-6 shadow-lg animate-in fade-in-0 zoom-in-95 duration-200 ${className}`}
           {...props}
         >
           {children}

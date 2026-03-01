@@ -84,7 +84,7 @@ const ProjectTitlebarContent = () => {
 
   return (
     <>
-      <div className="window-titlebar-project-left">
+      <div className="window-titlebar-project-left" data-tauri-drag-region>
         {isChatCollapsed && (
           <button
             className="window-titlebar-expand-btn"
@@ -102,9 +102,10 @@ const ProjectTitlebarContent = () => {
           <ArrowLeft size={14} />
         </button>
         <FileText size={13} className="window-titlebar-project-icon" />
-        <h1 className="window-titlebar-project-title" style={{ opacity: isLoading ? 0.6 : 1 }}>
+        <h1 className="window-titlebar-project-title" style={{ opacity: isLoading ? 0.6 : 1 }} data-tauri-drag-region>
           {projectTitle}
         </h1>
+        <div className="window-titlebar-drag-spacer" data-tauri-drag-region />
       </div>
 
       {/* Workbench Tabs - centered in titlebar */}
@@ -179,7 +180,7 @@ export const Titlebar = () => {
   if (isAuthPage) return null
 
   return (
-    <div className={`window-titlebar ${wcontext?.platform ? `platform-${wcontext.platform}` : ''}`}>
+    <div className={`window-titlebar ${wcontext?.platform ? `platform-${wcontext.platform}` : ''}`} data-tauri-drag-region>
       {wcontext?.platform === 'win32' && !isProjectPage && (
         <div className="window-titlebar-icon">
           <img src={icon} alt="App icon" />

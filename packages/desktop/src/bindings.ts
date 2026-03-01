@@ -11,6 +11,9 @@ async killSidecar() : Promise<void> {
 async awaitInitialization(events: TAURI_CHANNEL<InitStep>) : Promise<ServerReadyData> {
     return await TAURI_INVOKE("await_initialization", { events });
 },
+async appendFrontendLog(line: string) : Promise<null> {
+    return await TAURI_INVOKE("append_frontend_log", { line });
+},
 async getDefaultServerUrl() : Promise<string | null> {
     return await TAURI_INVOKE("get_default_server_url");
 },

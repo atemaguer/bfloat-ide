@@ -11,11 +11,23 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { workbenchStore } from '@/app/stores/workbench'
-import { aiAgent } from '@/app/api/sidecar'
+import { aiAgent, secrets as secretsApi } from '@/app/api/sidecar'
 import type { AgentMessage, SessionOptions, ProviderId, AgentTool } from '@/lib/conveyor/schemas/ai-agent-schema'
 
 // Tools to disable - AskUserQuestion requires special UI handling that isn't fully reliable yet
 const DISALLOWED_TOOLS = ['AskUserQuestion']
+
+/**
+ * Detect whether a prompt error indicates the session no longer exists on the
+ * sidecar (e.g., the backing CLI process died mid-stream and the in-memory
+ * session was cleaned up).  When this returns true the caller should clear the
+ * stale session ref and retry with a fresh session.
+ */
+function isSessionLostError(error: string | undefined): boolean {
+  if (!error) return false
+  const lower = error.toLowerCase()
+  return lower.includes('not found') && lower.includes('session')
+}
 
 interface LocalAgentState {
   isConnected: boolean
@@ -45,12 +57,6 @@ interface UseLocalAgentOptions {
   onSessionId?: (sessionId: string) => void // Called when we get a session ID from init
 }
 
-function isSessionNotFoundError(error: string | undefined): boolean {
-  if (!error) return false
-  const normalized = error.toLowerCase()
-  return normalized.includes('session') && normalized.includes('not found')
-}
-
 export function useLocalAgent(options: UseLocalAgentOptions) {
   const [state, setState] = useState<LocalAgentState>({
     isConnected: false,
@@ -64,6 +70,8 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   /** Monotonically incrementing counter used to detect and discard stale subscription callbacks */
   const activeSubscriptionIdRef = useRef(0)
   const sessionIdRef = useRef<string | null>(null)
+  const providerSessionIdRef = useRef<string | null>(options.resumeSessionId || null)
+  const requestedResumeSessionIdRef = useRef<string | null>(options.resumeSessionId || null)
   const cwdRef = useRef<string>(options.cwd)
   const hasReconnected = useRef(false)
   /** Per-session last seen seq number for deduplication on reconnect */
@@ -80,6 +88,11 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     onCompleteRef.current = options.onComplete
     onSessionIdRef.current = options.onSessionId
     onErrorRef.current = options.onError
+
+    requestedResumeSessionIdRef.current = options.resumeSessionId || null
+    if (options.resumeSessionId && providerSessionIdRef.current !== options.resumeSessionId) {
+      providerSessionIdRef.current = options.resumeSessionId
+    }
   })
 
   const getLastSeq = useCallback((sessionId: string): number => {
@@ -132,6 +145,16 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         console.log('[useLocalAgent] Has onSessionId callback:', !!onSessionIdRef.current)
         console.log('[useLocalAgent] ========================================')
         if (initContent.sessionId) {
+          if (providerSessionIdRef.current && providerSessionIdRef.current !== initContent.sessionId) {
+            console.warn('[useLocalAgent] Provider session ID rotated during active session', {
+              previousProviderSessionId: providerSessionIdRef.current,
+              nextProviderSessionId: initContent.sessionId,
+              activeSidecarSessionId: sessionIdRef.current,
+              requestedResumeSessionId: requestedResumeSessionIdRef.current,
+            })
+          }
+
+          providerSessionIdRef.current = initContent.sessionId
           console.log('[useLocalAgent] Calling onSessionId callback...')
           onSessionIdRef.current?.(initContent.sessionId)
           console.log('[useLocalAgent] onSessionId callback completed')
@@ -416,8 +439,28 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
     console.log('[useLocalAgent] createSession called, current sessionId:', sessionIdRef.current)
 
-    // Get any pending environment variables (e.g., Apple credentials for iOS deployment)
+    // Get any pending environment variables (e.g., credentials saved in settings)
     const pendingEnvVars = workbenchStore.takePendingEnvVars()
+    const sessionEnvVars: Record<string, string> = {}
+
+    if (options.projectId) {
+      try {
+        const secretResult = await secretsApi.readSecrets(options.projectId)
+        if (!secretResult.error && Array.isArray(secretResult.secrets)) {
+          for (const secret of secretResult.secrets) {
+            if (secret?.key && typeof secret.value === 'string') {
+              sessionEnvVars[secret.key] = secret.value
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('[useLocalAgent] Failed to load project secrets for session env:', error)
+      }
+    }
+
+    if (pendingEnvVars) {
+      Object.assign(sessionEnvVars, pendingEnvVars)
+    }
 
     // Build session options - only include properties that are defined
     const sessionOptions: SessionOptions = {
@@ -431,19 +474,19 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     if (options.systemPrompt) sessionOptions.systemPrompt = options.systemPrompt
     if (options.resumeSessionId) sessionOptions.resumeSessionId = options.resumeSessionId
     if (options.allowedTools) sessionOptions.allowedTools = options.allowedTools
-    if (pendingEnvVars) sessionOptions.env = pendingEnvVars
+    if (Object.keys(sessionEnvVars).length > 0) sessionOptions.env = sessionEnvVars
     if (options.projectId) sessionOptions.projectId = options.projectId
     sessionOptions.maxTurns = options.maxTurns || 50
     if (options.agents) sessionOptions.agents = options.agents
 
     console.log('[useLocalAgent] ========================================')
-    if (pendingEnvVars) {
-      console.log('[useLocalAgent] Pending env vars:', Object.keys(pendingEnvVars))
+    if (Object.keys(sessionEnvVars).length > 0) {
+      console.log('[useLocalAgent] Session env vars:', Object.keys(sessionEnvVars))
       console.log('[useLocalAgent] Env var values (sanitized):', Object.fromEntries(
-        Object.entries(pendingEnvVars).map(([k, v]) => [k, k.includes('PASSWORD') || k.includes('SECRET') ? '***' : v])
+        Object.entries(sessionEnvVars).map(([k, v]) => [k, k.includes('PASSWORD') || k.includes('SECRET') ? '***' : v])
       ))
     } else {
-      console.log('[useLocalAgent] No pending env vars')
+      console.log('[useLocalAgent] No session env vars')
     }
     console.log('[useLocalAgent] ' + (options.resumeSessionId ? 'RESUMING SESSION' : 'CREATING NEW SESSION'))
     console.log('[useLocalAgent] CWD:', options.cwd)
@@ -500,22 +543,23 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         console.log('[useLocalAgent] Prompt message:', message)
         let result = await aiAgent.prompt(sessionId, message)
 
-        // Session IDs can become stale after sidecar restarts or background cleanup.
-        // Recover by creating a fresh sidecar session and retrying the prompt once.
-        if ((!result.success || !result.streamChannel) && isSessionNotFoundError(result.error)) {
-          console.warn('[useLocalAgent] Session not found while sending prompt, recreating session and retrying', {
-            sessionId,
-            error: result.error,
-          })
-          sessionIdRef.current = null
-          setState((prev) => ({ ...prev, sessionId: null }))
-
-          sessionId = await createSession()
-          result = await aiAgent.prompt(sessionId, message)
-        }
-
         if (!result.success || !result.streamChannel) {
-          throw new Error(result.error || 'Failed to send prompt')
+          // Session is gone (404 or similar) — clear stale ref and retry once with a fresh session
+          if (isSessionLostError(result.error)) {
+            console.warn('[useLocalAgent] Session lost, recovering with new session:', {
+              oldSessionId: sessionId,
+              error: result.error,
+            })
+            sessionIdRef.current = null
+            setState((prev) => ({ ...prev, sessionId: null }))
+            sessionId = await createSession()
+            result = await aiAgent.prompt(sessionId, message)
+            if (!result.success || !result.streamChannel) {
+              throw new Error(result.error || 'Failed to send prompt after session recovery')
+            }
+          } else {
+            throw new Error(result.error || 'Failed to send prompt')
+          }
         }
 
         console.log('[useLocalAgent] Subscribed to stream channel:', result.streamChannel)

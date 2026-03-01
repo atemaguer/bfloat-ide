@@ -20,6 +20,8 @@ import "./styles.css"
 import { getPlatform } from "./platform"
 import { initialiseSidecarApi } from "./api"
 import { initConveyorBridge } from "./conveyor-bridge"
+import { installFrontendLogBridge } from "./frontend-log-bridge"
+import { deployStore } from "@/app/stores/deploy"
 
 // Import the real Bfloat IDE app component and its styles
 import App from "@/app/app"
@@ -29,6 +31,8 @@ import appIcon from "@/resources/build/icon.png"
 // ---------------------------------------------------------------------------
 // Deep link listener
 // ---------------------------------------------------------------------------
+
+installFrontendLogBridge()
 
 /**
  * Register the deep-link handler as early as possible so we do not miss any
@@ -145,6 +149,11 @@ function ServerGate({ children }: { children: React.ReactNode }) {
         // React code that calls window.conveyor.* continues to work unchanged
         // while the migration from Electron to Tauri is in progress.
         initConveyorBridge()
+
+        // One-time migration of deployments from localStorage → projects.json
+        deployStore.migrate().catch((err) =>
+          console.warn("[entry] deployment migration failed:", err)
+        )
 
         if (!cancelled) {
           setState({ status: "ready" })

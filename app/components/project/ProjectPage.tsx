@@ -9,10 +9,22 @@ import { projectStore } from '@/app/stores/project-store'
 import { localProjectsStore } from '@/app/stores/local-projects'
 import type { FileMap, Project } from '@/app/types/project'
 import type { ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
+import { detectAppTypeFromPackageJson } from '@/lib/launch'
 import { Button } from '@/app/components/ui/button'
 import { ProjectContent } from './ProjectContent'
 import { filesystem, terminal, aiAgent } from '@/app/api/sidecar'
 import './styles.css'
+
+function normalizePathForProjectMatch(input: string): string {
+  return input.replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+function isPathForProject(candidatePath: string | null | undefined, projectId: string): boolean {
+  if (!candidatePath) return false
+  const normalized = normalizePathForProjectMatch(candidatePath)
+  const segments = normalized.split('/').filter(Boolean)
+  return segments[segments.length - 1] === projectId
+}
 
 function ProjectPageContent() {
   const { id } = useParams<{ id: string }>()
@@ -36,6 +48,7 @@ function ProjectPageContent() {
 
   // Use new projectStore for file system state
   const syncStatus = useStore(projectStore.status)
+  const storeProjectId = useStore(projectStore.projectId)
   const projectPath = useStore(projectStore.projectPath)
   const storeError = useStore(projectStore.error)
 
@@ -147,8 +160,13 @@ function ProjectPageContent() {
             .then(() => {
               // Kill all terminal PTY processes and agent sessions
               console.log('[ProjectPage] Killing all terminals and agent sessions')
+              const killAllTerminals =
+                typeof (terminal as { killAll?: () => Promise<unknown> }).killAll === 'function'
+                  ? (terminal as { killAll: () => Promise<unknown> }).killAll()
+                  : Promise.resolve()
+
               return Promise.all([
-                terminal.killAll().catch((err: Error) => {
+                killAllTerminals.catch((err: Error) => {
                   console.error('[ProjectPage] Failed to kill terminals:', err)
                 }),
                 aiAgent.terminateAllSessions().catch((err: Error) => {
@@ -185,11 +203,17 @@ function ProjectPageContent() {
   // Track if initial sync has completed to avoid re-running full sync
   const initialSyncDone = useRef(false)
   const lastSyncedFileTree = useRef<string>('')
+  const normalizeAppType = (rawAppType?: Project['appType']): 'web' | 'mobile' => {
+    return rawAppType === 'nextjs' || rawAppType === 'vite' || rawAppType === 'node' || rawAppType === 'web'
+      ? 'web'
+      : 'mobile'
+  }
 
   // Initial file sync - only runs once when project becomes ready
   // Uses parallel loading with concurrency limit for performance
   useEffect(() => {
     if (syncStatus !== 'ready' || !project) return
+    if (storeProjectId !== project.id || !isPathForProject(projectPath, project.id)) return
 
     // Create a fingerprint of the file tree to detect actual changes
     const fileTreeFingerprint = fileTree.map(n => n.path).sort().join('|')
@@ -258,6 +282,28 @@ function ProjectPageContent() {
       const fileCount = Object.keys(fileMap).length
       console.log(`[ProjectPage] Initial sync: ${fileCount} files loaded to workbench`)
       workbenchStore.setFiles(fileMap)
+
+      const detectedAppType = detectAppTypeFromPackageJson(
+        fileMap as Record<string, { type: string; content: string } | null | undefined>
+      )
+      const currentAppType = normalizeAppType(project.appType)
+      if (detectedAppType && detectedAppType !== currentAppType) {
+        console.log(`[ProjectPage] Auto-detected app type "${detectedAppType}" (was "${project.appType || 'unset'}")`)
+        try {
+          await localProjectsStore.update(project.id, { appType: detectedAppType })
+          setProject((prev) => {
+            if (!prev) return prev
+            return {
+              ...prev,
+              appType: detectedAppType,
+              updatedAt: new Date().toISOString(),
+            }
+          })
+        } catch (err) {
+          console.error('[ProjectPage] Failed to persist detected app type:', err)
+        }
+      }
+
       initialSyncDone.current = true
       lastSyncedFileTree.current = fileTreeFingerprint
     }
@@ -268,13 +314,14 @@ function ProjectPageContent() {
     return () => {
       isCancelled = true
     }
-  }, [fileTree, syncStatus, project])
+  }, [fileTree, syncStatus, project, storeProjectId, projectPath])
 
   // Incremental file sync - only updates changed files, not the entire tree
   // This is much faster than re-reading all files on every change
   useEffect(() => {
     // Only run after initial sync is done
     if (!initialSyncDone.current || syncStatus !== 'ready' || !project) return
+    if (storeProjectId !== project.id || !isPathForProject(projectPath, project.id)) return
     // Skip the first run (initial sync handles it)
     if (lastFileChange === 0) return
 
@@ -336,7 +383,7 @@ function ProjectPageContent() {
     }
 
     reloadInvalidatedFiles()
-  }, [lastFileChange, syncStatus, project, fileTree])
+  }, [lastFileChange, syncStatus, project, fileTree, storeProjectId, projectPath])
 
   // Set up project metadata - files are handled separately by the sync effect above
   // This uses setProjectMetadata to avoid race conditions where setProject clears files
@@ -404,6 +451,10 @@ function ProjectPageContent() {
   const { convexDeployment, convexDeploymentKey, convexUrl } = project || {}
   // For local-first, Convex integration is manual via env vars
   const hasConvexIntegration = !!convexDeploymentKey
+  const alignedProjectPath =
+    storeProjectId === project.id && isPathForProject(projectPath, project.id)
+      ? projectPath
+      : null
 
   // Progressive loading: render content immediately, pass syncStatus for per-section loading states
   // - Chat renders immediately (shows "preparing workspace" if projectPath is null)
@@ -422,7 +473,8 @@ function ProjectPageContent() {
         convexDeploymentKey={convexDeploymentKey}
         convexUrl={convexUrl}
         convexDeployment={convexDeployment}
-        projectPath={projectPath}
+        projectPath={alignedProjectPath}
+        storeProjectId={storeProjectId}
         syncStatus={syncStatus}
         initialProvider={initialProvider}
         initialModel={initialModel}

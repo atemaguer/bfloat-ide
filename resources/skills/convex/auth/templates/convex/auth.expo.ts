@@ -1,0 +1,35 @@
+import { createClient, type GenericCtx } from "@convex-dev/better-auth";
+import { convex, crossDomain } from "@convex-dev/better-auth/plugins";
+import { expo } from "@better-auth/expo";
+import { components } from "./_generated/api";
+import { DataModel } from "./_generated/dataModel";
+import { query } from "./_generated/server";
+import { betterAuth } from "better-auth/minimal";
+import authConfig from "./auth.config";
+
+export const authComponent = createClient<DataModel>(components.betterAuth);
+
+export const createAuth = (ctx: GenericCtx<DataModel>) => {
+  return betterAuth({
+    baseURL: process.env.SITE_URL,
+    trustedOrigins: ["*"],
+    database: authComponent.adapter(ctx),
+    emailAndPassword: {
+      enabled: true,
+      requireEmailVerification: false,
+      autoSignIn: true,
+    },
+    plugins: [
+      expo(),
+      crossDomain({
+        siteUrl: process.env.SITE_URL!,
+      }),
+      convex({ authConfig }),
+    ],
+  });
+};
+
+export const getCurrentUser = query({
+  args: {},
+  handler: async (ctx) => authComponent.getAuthUser(ctx),
+});

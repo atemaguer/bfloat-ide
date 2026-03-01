@@ -263,6 +263,9 @@ interface SecretsReadResult {
 interface SecretOperationResult {
   success: boolean
   error?: string
+  projectId?: string
+  readPath?: string
+  writePath?: string
 }
 
 // LocalProjectsApi types  — use `unknown` for Project/AgentSession since we
@@ -542,11 +545,13 @@ export const windowBridge = {
 
 type TerminalDataCallback = (terminalId: string, data: string) => void
 type TerminalExitCallback = (terminalId: string, exitCode: number) => void
+type TerminalWriteResult = { success: boolean; error?: string }
 
 // Module-level maps that mirror the Electron pattern of storing per-terminal
 // callbacks.  The Tauri bridge uses SidecarWebSocket events instead of IPC.
 const _termDataCallbacks = new Map<string, TerminalDataCallback>()
 const _termExitCallbacks = new Map<string, TerminalExitCallback>()
+const _terminalWriteQueues = new Map<string, Promise<TerminalWriteResult>>()
 
 // Agent terminal event emitters (no native Tauri equivalent yet — stubbed).
 const _agentTerminalCreatedListeners = new Set<(id: string) => void>()
@@ -554,8 +559,8 @@ const _agentTerminalClosedListeners = new Set<(id: string) => void>()
 const _restartDevServerListeners = new Set<() => void>()
 
 export const terminalBridge = {
-  create: async (terminalId: string, cwd?: string) => {
-    const result = await getSidecarApiSync().terminal.create(terminalId, cwd)
+  create: async (terminalId: string, cwd?: string, cols?: number, rows?: number) => {
+    const result = await getSidecarApiSync().terminal.create(terminalId, cwd, cols, rows)
     // After creation, ensure the WebSocket stream is (re-)established.
     // _ensureTerminalStream may have been called before create() returned,
     // in which case the initial WS was closed by the sidecar (session did not
@@ -573,14 +578,48 @@ export const terminalBridge = {
     return result
   },
 
-  write: (terminalId: string, data: string) =>
-    getSidecarApiSync().terminal.write(terminalId, data),
+  write: async (terminalId: string, data: string): Promise<TerminalWriteResult> => {
+    // Prefer WebSocket transport for low-latency, ordered input delivery.
+    _ensureTerminalStream(terminalId)
+    const ws = _terminalStreams.get(terminalId)
+    if (ws?.isConnected) {
+      try {
+        ws.sendRaw(data)
+        return { success: true }
+      } catch {
+        // Fall back to queued HTTP writes below.
+      }
+    }
+
+    // HTTP write fallback: serialize writes per terminal to preserve order.
+    const api = getSidecarApiSync()
+    const previous = _terminalWriteQueues.get(terminalId) ?? Promise.resolve({ success: true })
+
+    const nextWrite = previous
+      .catch(() => ({ success: true }))
+      .then(() => api.terminal.write(terminalId, data))
+
+    _terminalWriteQueues.set(terminalId, nextWrite)
+
+    return nextWrite.finally(() => {
+      if (_terminalWriteQueues.get(terminalId) === nextWrite) {
+        _terminalWriteQueues.delete(terminalId)
+      }
+    })
+  },
 
   resize: (terminalId: string, cols: number, rows: number) =>
     getSidecarApiSync().terminal.resize(terminalId, cols, rows),
 
   kill: (terminalId: string) =>
     getSidecarApiSync().terminal.kill(terminalId),
+
+  killAll: async () => {
+    const api = getSidecarApiSync()
+    const { sessions } = await api.terminal.list()
+    await Promise.allSettled(sessions.map((session) => api.terminal.kill(session.terminalId)))
+    return { success: true }
+  },
 
   getCwd: (terminalId?: string) =>
     getSidecarApiSync().terminal.getCwd(terminalId),
@@ -685,6 +724,7 @@ export const terminalBridge = {
   removeListeners: (terminalId: string): void => {
     _termDataCallbacks.delete(terminalId)
     _termExitCallbacks.delete(terminalId)
+    _terminalWriteQueues.delete(terminalId)
     const ws = _terminalStreams.get(terminalId)
     if (ws) {
       ws.close()
@@ -756,7 +796,8 @@ function _ensureTerminalStream(terminalId: string): void {
 
     ws.on("error", (err) => {
       console.warn(`[conveyor-bridge] terminal stream error (${terminalId}):`, err)
-      _terminalStreams.delete(terminalId)
+      // Keep the stream registered so SidecarWebSocket can auto-reconnect.
+      // Deleting it here can lead to duplicate streams for one terminal.
     })
 
     ws.connect()
@@ -947,6 +988,13 @@ export const aiAgentBridge = {
   terminateSession: (sessionId: string) =>
     getSidecarApiSync().agent.terminateSession(sessionId),
 
+  terminateAllSessions: async () => {
+    const api = getSidecarApiSync()
+    const sessions = await api.agent.getActiveSessions()
+    await Promise.allSettled(sessions.map((session) => api.agent.terminateSession(session.id)))
+    return { success: true }
+  },
+
   // Streaming — maps the Electron "channel string + callback" pattern to
   // a SidecarWebSocket opened against the session stream URL.
   onStreamMessage: (
@@ -974,6 +1022,36 @@ export const aiAgentBridge = {
         //   { type, content, metadata?: { seq, timestamp, tokens, cost } }
         // Translate here so the rest of the app works unchanged.
         const translated = _translateAgentFrame(msg, sessionId)
+
+        // Bridge successful workbench restart tool results to restart listeners.
+        if ((translated as { type?: string }).type === "tool_result") {
+          const resultPayload = (translated as { content?: unknown }).content as
+            | { name?: unknown; isError?: unknown }
+            | undefined
+          const toolNameRaw = resultPayload?.name
+          const toolName = typeof toolNameRaw === "string" ? toolNameRaw.toLowerCase() : ""
+          const normalizedToolName = toolName
+            .replace(/[^a-z0-9]+/g, "_")
+            .replace(/^_+|_+$/g, "")
+          const isError = resultPayload?.isError === true
+          const isRestartAlias =
+            normalizedToolName === "restart_app" ||
+            normalizedToolName.endsWith("_restart_app")
+          const isWorkbenchScoped = normalizedToolName.includes("workbench")
+          const isWorkbenchRestartTool =
+            normalizedToolName === "restart_app" ||
+            (isWorkbenchScoped && isRestartAlias)
+
+          if (isWorkbenchRestartTool && !isError) {
+            for (const listener of _restartDevServerListeners) {
+              try {
+                listener()
+              } catch (err) {
+                console.warn("[conveyor-bridge] restart listener error:", err)
+              }
+            }
+          }
+        }
 
         const e = _agentStreams.get(sessionId)
         if (e) {
@@ -1382,14 +1460,34 @@ export const projectFilesBridge = {
     if (!pid) return ""
     try {
       const filePath = `.bfloat-ide/attachments/${name}`
+      const base64Content = data.replace(/^data:[^;]+;base64,/, "")
       await getSidecarApiSync().http.post<void>(
         `/api/project-files/write/${pid}`,
-        { path: filePath, content: data },
+        {
+          path: filePath,
+          content: base64Content,
+          encoding: "base64",
+        },
       )
       return filePath
     } catch (err) {
       console.warn("[conveyor-bridge] projectFiles.saveAttachment error:", err)
       return ""
+    }
+  },
+
+  syncAgentInstructions: async (agentInstructions?: string): Promise<boolean> => {
+    const pid = _activeProjectId
+    if (!pid) return false
+    try {
+      await getSidecarApiSync().http.post<{ success: boolean }>(
+        `/api/project-files/${pid}/sync-agent-instructions`,
+        { agentInstructions },
+      )
+      return true
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.syncAgentInstructions error:", err)
+      return false
     }
   },
 
@@ -1912,13 +2010,110 @@ export const secretsBridge = {
 }
 
 // ---------------------------------------------------------------------------
-// Screenshot API bridge  →  stub
-// Requires @tauri-apps/plugin-screenshot or webview capture which is not yet
-// available.  This remains a stub until the native plugin is integrated.
+// Preview Proxy URL helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the sidecar preview-proxy URL for a given target.
+ * The iframe loads this URL so that the sidecar can inject error-capture scripts.
+ */
+export function getPreviewProxyUrl(targetUrl: string): string {
+  const api = getSidecarApiSync()
+  return `${api.http.baseUrl}/preview-proxy/?target=${encodeURIComponent(targetUrl)}`
+}
+
+/**
+ * Build the sidecar preview-proxy WebSocket URL for HMR forwarding.
+ */
+export function getPreviewProxyWsUrl(targetUrl: string): string {
+  const api = getSidecarApiSync()
+  return api.http.wsUrl(`/preview-proxy/ws?target=${encodeURIComponent(targetUrl)}`)
+}
+
+// ---------------------------------------------------------------------------
+// Screenshot API bridge  →  /api/screenshot/*
 // ---------------------------------------------------------------------------
 
 export const screenshotBridge = {
-  capture: stub("screenshot.capture", null),
+  capture: async (options?: {
+    url?: string
+    cwd?: string
+    width?: number
+    height?: number
+    mobile?: boolean
+    deviceScaleFactor?: number
+  }): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean; dataUrl?: string; error?: string }>(
+        "/api/screenshot/capture",
+        {
+          url: options?.url,
+          cwd: options?.cwd,
+          width: options?.width,
+          height: options?.height,
+          mobile: options?.mobile,
+          deviceScaleFactor: options?.deviceScaleFactor,
+        },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] screenshot.capture error:", err)
+      return { success: false, error: String(err) }
+    }
+  },
+
+  registerPreviewUrl: async (cwd: string, url: string): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.post("/api/screenshot/register-url", { cwd, url })
+    } catch (err) {
+      console.warn("[conveyor-bridge] screenshot.registerPreviewUrl error:", err)
+    }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Workbench runtime bridge  →  /api/workbench/*
+// ---------------------------------------------------------------------------
+
+export interface WorkbenchRuntimeUpdate {
+  cwd: string
+  serverStatus?: "starting" | "running" | "error" | "unknown"
+  previewUrl?: string
+  port?: number
+  expoUrl?: string
+  appType?: "web" | "mobile"
+  devServerTerminalId?: string
+}
+
+export const workbenchBridge = {
+  updateRuntime: async (state: WorkbenchRuntimeUpdate): Promise<{ success: boolean }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean }>(
+        "/api/workbench/runtime",
+        state,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] workbench.updateRuntime error:", err)
+      return { success: false }
+    }
+  },
+
+  getRuntime: async (
+    cwd: string,
+    includeChecks: boolean = true,
+  ): Promise<{ success: boolean; state?: unknown; assessment?: unknown; error?: string }> => {
+    try {
+      const params = new URLSearchParams({
+        cwd,
+        includeChecks: includeChecks ? "true" : "false",
+      })
+      return await getSidecarApiSync().http.get<{ success: boolean; state?: unknown; assessment?: unknown }>(
+        `/api/workbench/runtime?${params.toString()}`,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] workbench.getRuntime error:", err)
+      return { success: false, error: String(err) }
+    }
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -2027,6 +2222,66 @@ export const localProjectsBridge = {
       console.warn("[conveyor-bridge] localProjects.deleteSession error:", err)
     }
   },
+
+  // Deployment CRUD
+  listDeployments: async (projectId: string): Promise<any[]> => {
+    try {
+      return await getSidecarApiSync().http.get<any[]>(
+        `/api/local-projects/${projectId}/deployments`,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.listDeployments error:", err)
+      return []
+    }
+  },
+
+  addDeployment: async (projectId: string, deployment: any): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.post<void>(
+        `/api/local-projects/${projectId}/deployments`,
+        deployment,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.addDeployment error:", err)
+    }
+  },
+
+  updateDeployment: async (
+    projectId: string,
+    deploymentId: string,
+    data: any,
+  ): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.put<void>(
+        `/api/local-projects/${projectId}/deployments/${deploymentId}`,
+        data,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.updateDeployment error:", err)
+    }
+  },
+
+  deleteDeployment: async (projectId: string, deploymentId: string): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.delete<void>(
+        `/api/local-projects/${projectId}/deployments/${deploymentId}`,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.deleteDeployment error:", err)
+    }
+  },
+
+  // Launch config cache
+  updateLaunchConfig: async (projectId: string, config: any): Promise<void> => {
+    try {
+      await getSidecarApiSync().http.put<void>(
+        `/api/local-projects/${projectId}/launch-config`,
+        config,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] localProjects.updateLaunchConfig error:", err)
+    }
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -2132,6 +2387,7 @@ export function initConveyorBridge(): void {
     deploy: deployBridge,
     secrets: secretsBridge,
     screenshot: screenshotBridge,
+    workbench: workbenchBridge,
     localProjects: localProjectsBridge,
     template: templateBridge,
   }

@@ -9,19 +9,18 @@ import { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import { useStore } from '@/app/hooks/useStore'
 import { generateId } from 'ai'
 
-import { workbenchStore } from '@/app/stores/workbench'
+import { workbenchStore, type PendingIntegrationId } from '@/app/stores/workbench'
 import type { ChatMessage, MessagePart } from '@/app/types/project'
 import { useLocalAgent } from '@/app/hooks/useLocalAgent'
 import { useSessions, useSaveSession, useDeleteSession, useUpdateSession } from '@/app/hooks/useSessions'
 import { getSystemPrompt } from '@/lib/launch/system-prompt'
-import { aiAgent, projectFiles, secrets, app } from '@/app/api/sidecar'
+import { aiAgent, projectFiles, secrets } from '@/app/api/sidecar'
 import type { ProviderId, SessionMessageData } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { Messages } from './Messages'
 import { ChatInput, type ImageAttachment } from './ChatInput'
 import { ErrorMessage } from './ErrorMessage'
-import { ClaudeAuthBanner, isClaudeAuthError } from './ClaudeAuthBanner'
+import { isClaudeAuthError } from './ClaudeAuthBanner'
 import { ProviderAuthModal } from '@/app/components/integrations/ProviderAuthModal'
-import { FirebaseSetupBanner } from './FirebaseSetupBanner'
 import { TaskProgress, type TodoItem } from './TaskProgress'
 import { SuggestionChips } from './SuggestionChips'
 import { generateSuggestions } from './generateSuggestions'
@@ -31,9 +30,29 @@ import ConvexLogo from '@/app/components/ui/icons/convex-logo'
 import RevenueCatLogo from '@/app/components/ui/icons/revenuecat-logo'
 import StripeLogo from '@/app/components/ui/icons/stripe-logo'
 import { isIntegrationAvailableForAppType, type IntegrationId } from '@/app/types/integrations'
+import {
+  detectIntegrationSecretsPresence,
+  type IntegrationSecretsPresence,
+} from '@/app/lib/integrations/secrets'
+import {
+  detectConvexBootstrap,
+  getConvexEnvVarsForSession,
+  getConvexSecretStatusFromSecrets,
+  type ConvexIntegrationStage,
+  type SecretEntry,
+} from '@/app/lib/integrations/convex'
 import toast from 'react-hot-toast'
 import './styles.css'
 
+const FRONTEND_DESIGN_SKILL_PREFIX =
+  'Use the /frontend-design skill for this request. If the project has an established design system, preserve it and adapt within it.'
+
+function withFrontendDesignSkillPrompt(prompt: string): string {
+  if (/\b\/frontend-design\b/i.test(prompt)) {
+    return prompt
+  }
+  return `${FRONTEND_DESIGN_SKILL_PREFIX}\n\n${prompt}`
+}
 
 // Image data passed from HomePage via navigation state
 interface InitialImageData {
@@ -62,6 +81,7 @@ interface ChatProps {
   projectHasConvex?: boolean // Whether Convex is already provisioned on this project
   projectHasFirebase?: boolean // Whether Firebase is already provisioned on this project
   projectHasStripe?: boolean // Whether Stripe is already provisioned on this project
+  projectHasRevenuecat?: boolean // Whether RevenueCat is already provisioned on this project
   appType?: string | null // Project app type (web, mobile, expo, nextjs, vite, etc.)
 }
 
@@ -76,9 +96,9 @@ export function Chat({
   autoStart = false,
   initialSessionId,
   onSessionIdChange,
-  projectHasConvex = false,
   projectHasFirebase = false,
   projectHasStripe = false,
+  projectHasRevenuecat = false,
   appType,
 }: ChatProps) {
   // Codex (OpenAI) provider is enabled by default
@@ -89,10 +109,24 @@ export function Chat({
     const rawType = appType || 'mobile'
     return rawType === 'nextjs' || rawType === 'vite' || rawType === 'node' || rawType === 'web' ? 'web' : 'mobile'
   }, [appType])
+  const usableProjectPath = useMemo(() => {
+    if (!projectPath) return null
+
+    const normalizedPath = projectPath.replace(/\\/g, '/')
+    const matchesProject =
+      normalizedPath.includes(`/projects/${projectId}`) ||
+      normalizedPath.endsWith(`/${projectId}`) ||
+      normalizedPath.endsWith(projectId)
+
+    if (!matchesProject) return null
+    return projectPath
+  }, [projectId, projectPath])
 
   // For local-first mode, session data is stored locally by CLI tools
   // No backend fetch needed - just use the provided session ID
   const resolvedInitialSessionId = initialSessionId ?? null
+  const isNewProjectAtMount = useRef(autoStart && resolvedInitialSessionId === null)
+  const forcedFrontendDesignSessionIdRef = useRef<string | null>(null)
 
   // State
   const [input, setInput] = useState('')
@@ -109,32 +143,68 @@ export function Chat({
   const [convexProvisioned, setConvexProvisioned] = useState(false)
   const [firebaseProvisioned, setFirebaseProvisioned] = useState(false)
   const [revenuecatProvisioned, setRevenuecatProvisioned] = useState(false)
+  const [isStripeSettingUp, setIsStripeSettingUp] = useState(false)
+  const [isRevenueCatSettingUp, setIsRevenueCatSettingUp] = useState(false)
   const hasStartedInitialStream = useRef(false)
   const hasLoadedSession = useRef(false)
   // Capture the initial session ID at mount time - only this one should be loaded
   // Any session IDs received during streaming (current session) should NOT trigger a load
   const initialSessionIdAtMount = useRef(resolvedInitialSessionId)
   const usageRef = useRef<{ inputTokens: number; outputTokens: number }>({ inputTokens: 0, outputTokens: 0 })
-  const submitRef = useRef<(text: string, attachments?: ImageAttachment[]) => void>()
+  const submitRef = useRef<((text: string, attachments?: ImageAttachment[]) => void) | null>(null)
   const messagesRef = useRef<ChatMessage[]>(messages)
   const [providerAuthStatus, setProviderAuthStatus] = useState<Record<string, boolean>>({})
-  const [integrationStatus, setIntegrationStatus] = useState<Record<string, boolean>>({
-    firebase: false,
-    convex: false,
-    stripe: false,
-    revenuecat: false,
-  })
-  // Track if Firebase connection expired and needs reconnection
-  const [showFirebaseReconnect, setShowFirebaseReconnect] = useState(false)
   // Track if Claude auth modal should be shown
   const [showClaudeAuthModal, setShowClaudeAuthModal] = useState(false)
   // Track which integrations have their required secrets already configured
-  const [hasIntegrationSecrets, setHasIntegrationSecrets] = useState<Record<string, boolean>>({
+  const [hasIntegrationSecrets, setHasIntegrationSecrets] = useState<IntegrationSecretsPresence>({
     firebase: false,
     convex: false,
     stripe: false,
     revenuecat: false,
   })
+  const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
+  const activePendingPromptIdRef = useRef<string | null>(null)
+  const files = useStore(workbenchStore.files)
+  const convexSecretStatus = useMemo(
+    () => getConvexSecretStatusFromSecrets(projectSecrets, normalizedAppType),
+    [projectSecrets, normalizedAppType]
+  )
+
+  const convexStage: ConvexIntegrationStage = useMemo(() => {
+    const convexBootstrapped = detectConvexBootstrap(files)
+    if (!convexSecretStatus.isConfigured) return 'disconnected'
+    if (convexBootstrapped) return 'ready'
+    if (convexProvisioned) return 'setting_up'
+    return 'connected'
+  }, [convexSecretStatus.isConfigured, files, convexProvisioned])
+
+  // Clear in-progress flag once Convex bootstrap artifacts are present.
+  useEffect(() => {
+    if (convexProvisioned && detectConvexBootstrap(files)) {
+      setConvexProvisioned(false)
+    }
+  }, [convexProvisioned, files])
+
+  const integrationStatus = useMemo(
+    () => ({
+      firebase: projectHasFirebase || firebaseProvisioned || hasIntegrationSecrets.firebase,
+      convex: convexStage === 'ready',
+      stripe: projectHasStripe || hasIntegrationSecrets.stripe,
+      revenuecat: projectHasRevenuecat || revenuecatProvisioned || hasIntegrationSecrets.revenuecat,
+    }),
+    [
+      projectHasFirebase,
+      firebaseProvisioned,
+      hasIntegrationSecrets.firebase,
+      convexStage,
+      projectHasStripe,
+      hasIntegrationSecrets.stripe,
+      projectHasRevenuecat,
+      revenuecatProvisioned,
+      hasIntegrationSecrets.revenuecat,
+    ]
+  )
 
   // Keep messagesRef in sync
   useEffect(() => {
@@ -149,6 +219,8 @@ export function Chat({
   // Mirrors workbench pattern but reads from projects.json instead of backend API
   console.log('[Chat] Calling useSessions with projectId:', projectId)
   const { sessions: allSessions, refresh: refreshSessions } = useSessions(projectId)
+  const activeTab = useStore(workbenchStore.activeTab)
+  const secretsVersion = useStore(workbenchStore.secretsVersion)
 
   // Debug: Log sessions when they change
   useEffect(() => {
@@ -222,83 +294,12 @@ export function Chat({
       .then((result) => {
         if (result.error || !result.secrets) return
 
+        setProjectSecrets(result.secrets)
         const secretKeys = result.secrets.map((s) => s.key)
-
-        // Firebase requires at least API key and project ID
-        const firebasePrefix = normalizedAppType === 'web' ? 'NEXT_PUBLIC_FIREBASE_' : 'EXPO_PUBLIC_FIREBASE_'
-        const hasFirebaseSecrets =
-          secretKeys.includes(`${firebasePrefix}API_KEY`) &&
-          secretKeys.includes(`${firebasePrefix}PROJECT_ID`)
-
-        // Convex requires the URL
-        const convexUrlKey = normalizedAppType === 'web' ? 'NEXT_PUBLIC_CONVEX_URL' : 'EXPO_PUBLIC_CONVEX_URL'
-        const hasConvexSecrets =
-          secretKeys.includes('CONVEX_URL') || secretKeys.includes(convexUrlKey)
-
-        // Stripe requires the publishable key (web-only, always NEXT_PUBLIC_ prefix)
-        const hasStripeSecrets = secretKeys.includes('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY')
-
-        // RevenueCat requires the API key (mobile-only, always EXPO_PUBLIC_ prefix)
-        const hasRevenuecatSecrets = secretKeys.includes('EXPO_PUBLIC_REVENUECAT_API_KEY')
-
-        setHasIntegrationSecrets({
-          firebase: hasFirebaseSecrets,
-          convex: hasConvexSecrets,
-          stripe: hasStripeSecrets,
-          revenuecat: hasRevenuecatSecrets,
-        })
+        setHasIntegrationSecrets(detectIntegrationSecretsPresence(secretKeys, normalizedAppType))
       })
       .catch(() => {})
-  }, [projectId])
-
-  // Re-fetch Stripe integration status after OAuth callback
-  useEffect(() => {
-    if (!app?.onStripeCallback) return
-
-    const unsubscribe = app.onStripeCallback(async (data) => {
-      if (data.success) {
-        setIntegrationStatus((prev) => ({ ...prev, stripe: true }))
-        setInput('Setting up Stripe...')
-        setIsProvisioning(true)
-
-        setIsProvisioning(false)
-        const prompt = 'Use the /add-stripe skill to set up Stripe payments integration for this project'
-        setInput(prompt)
-        setTimeout(() => {
-          submitRef.current?.(prompt)
-        }, 100)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
-
-  // Re-fetch RevenueCat integration status after OAuth callback
-  useEffect(() => {
-    if (!app?.onRevenueCatCallback) return
-
-    const unsubscribe = app.onRevenueCatCallback(async (data) => {
-      if (data.success) {
-        setIntegrationStatus((prev) => ({ ...prev, revenuecat: true }))
-        setInput('Setting up RevenueCat...')
-        setIsProvisioning(true)
-
-        setIsProvisioning(false)
-        setRevenuecatProvisioned(true)
-        const prompt = 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project'
-        setInput(prompt)
-        setTimeout(() => {
-          submitRef.current?.(prompt)
-        }, 100)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
+  }, [projectId, normalizedAppType, activeTab, secretsVersion])
 
   // Handle Claude re-authentication - opens the auth modal
   const handleClaudeReconnect = useCallback(() => {
@@ -338,14 +339,43 @@ export function Chat({
 
   // Integration menu handlers
   const handleIntegrationConnect = useCallback(async (id: string) => {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined
-    if (id === 'firebase') {
-      toast.error('Configure Firebase credentials in Project Settings > Integrations')
-      return
+    const setupPromptByIntegration: Record<string, MessagePart['type']> = {
+      firebase: 'firebase-setup-prompt',
+      convex: 'convex-setup-prompt',
+      stripe: 'stripe-setup-prompt',
+      revenuecat: 'revenuecat-setup-prompt',
     }
-    if (id === 'convex') window.open(`${backendUrl}/desktop/convex/connect`, '_blank')
-    if (id === 'stripe') window.open(`${backendUrl}/desktop/stripe/connect`, '_blank')
-    if (id === 'revenuecat') window.open(`${backendUrl}/desktop/revenuecat/connect`, '_blank')
+
+    const promptType = setupPromptByIntegration[id]
+    workbenchStore.setActiveTab('settings')
+    if (id === 'firebase' || id === 'convex' || id === 'stripe' || id === 'revenuecat') {
+      workbenchStore.setPendingIntegrationConnect({
+        integrationId: id as PendingIntegrationId,
+        source: 'chat',
+      })
+    }
+
+    if (!promptType) return
+
+    setMessages((prev) => {
+      const lastMessage = prev[prev.length - 1]
+      const isDuplicatePrompt =
+        lastMessage?.role === 'assistant' && !!lastMessage.parts?.some((part) => part?.type === promptType)
+
+      if (isDuplicatePrompt) {
+        return prev
+      }
+
+      const guidanceMessage: ChatMessage = {
+        id: generateId(),
+        role: 'assistant',
+        content: '',
+        parts: [{ type: promptType } as MessagePart],
+        createdAt: new Date().toISOString(),
+      }
+
+      return [...prev, guidanceMessage]
+    })
   }, [])
 
   const handleIntegrationUse = useCallback(
@@ -360,16 +390,103 @@ export function Chat({
         setFirebaseProvisioned(true)
       }
       if (id === 'convex') {
+        if (!convexSecretStatus.isConfigured) {
+          workbenchStore.setActiveTab('settings')
+          workbenchStore.setPendingIntegrationConnect({
+            integrationId: 'convex',
+            source: 'chat',
+          })
+          return
+        }
+
+        const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
+        if (Object.keys(pendingEnvVars).length > 0) {
+          workbenchStore.mergePendingEnvVars(pendingEnvVars)
+        }
         setConvexProvisioned(true)
+      }
+      if (id === 'revenuecat') {
+        const revenuecatApiKey = projectSecrets.find((secret) => secret.key === 'REVENUECAT_API_KEY')?.value
+        const revenuecatPublicKey = projectSecrets.find((secret) => secret.key === 'EXPO_PUBLIC_REVENUECAT_API_KEY')?.value
+        const pendingRevenuecatEnv: Record<string, string> = {}
+        if (revenuecatApiKey) {
+          pendingRevenuecatEnv.REVENUECAT_API_KEY = revenuecatApiKey
+        }
+        if (revenuecatPublicKey) {
+          pendingRevenuecatEnv.EXPO_PUBLIC_REVENUECAT_API_KEY = revenuecatPublicKey
+        }
+        if (Object.keys(pendingRevenuecatEnv).length > 0) {
+          workbenchStore.mergePendingEnvVars(pendingRevenuecatEnv)
+        }
+        setRevenuecatProvisioned(true)
+        setIsRevenueCatSettingUp(true)
+
+        const revenuecatPrompt = prompts.revenuecat
+        if (revenuecatPrompt) {
+          workbenchStore.triggerChatPrompt(revenuecatPrompt, {
+            integrationId: 'revenuecat',
+          })
+        }
+        return
+      }
+      if (id === 'stripe') {
+        setIsStripeSettingUp(true)
       }
 
       const prompt = prompts[id]
       if (prompt) {
         setInput(prompt)
         setTimeout(() => {
-          submitRef.current?.(prompt)
+          try {
+            submitRef.current?.(prompt)
+          } catch (error) {
+            if (id === 'stripe') {
+              setIsStripeSettingUp(false)
+            }
+            if (id === 'revenuecat') {
+              setIsRevenueCatSettingUp(false)
+            }
+            throw error
+          }
+          if (id === 'stripe') {
+            setIsStripeSettingUp(false)
+          }
+          if (id === 'revenuecat') {
+            setIsRevenueCatSettingUp(false)
+          }
         }, 100)
       }
+    },
+    [convexSecretStatus, projectSecrets]
+  )
+
+  const waitForRequiredSecrets = useCallback(
+    async (projectIdToCheck: string, requiredSecretKeys: string[], timeoutMs = 8000): Promise<SecretEntry[] | null> => {
+      const startedAt = Date.now()
+      const pollIntervalMs = 250
+
+      while (Date.now() - startedAt <= timeoutMs) {
+        try {
+          const result = await secrets.readSecrets(projectIdToCheck)
+          if (!result.error && Array.isArray(result.secrets)) {
+            const secretMap = new Map(
+              result.secrets
+                .filter((secret): secret is SecretEntry => !!secret?.key && typeof secret.value === 'string')
+                .map((secret) => [secret.key, secret.value.trim()])
+            )
+            const allPresent = requiredSecretKeys.every((key) => (secretMap.get(key) || '').length > 0)
+            if (allPresent) {
+              return result.secrets
+            }
+          }
+        } catch {
+          // Retry until timeout
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+      }
+
+      return null
     },
     []
   )
@@ -459,12 +576,12 @@ export function Chat({
     console.log('[Chat] Loading session from local storage:', {
       sessionId: sessionIdToLoad,
       provider,
-      projectPath,
+      projectPath: usableProjectPath,
       initialMessagesCount: initialMessages?.length || 0,
     })
 
     aiAgentApi
-      .readSession(sessionIdToLoad, provider, projectPath || undefined)
+      .readSession(sessionIdToLoad, provider, usableProjectPath || undefined)
       .then((result) => {
         if (result.success && result.session?.messages) {
           // Debug: Log detailed session info
@@ -542,11 +659,12 @@ export function Chat({
       })
     // Note: Also depends on resolvedInitialSessionId to handle async session fetch
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiAgentApi, resolvedInitialSessionId])
+  }, [aiAgentApi, resolvedInitialSessionId, usableProjectPath])
 
   // Log when projectPath is received
   useEffect(() => {
     console.log('[Chat] Project path received:', projectPath)
+    console.log('[Chat] Usable project path:', usableProjectPath)
     console.log('[Chat] Initial provider:', initialProvider, '-> using:', provider)
     console.log('[Chat] Initial session ID:', initialSessionId)
     console.log('[Chat] Initial messages count:', initialMessages?.length || 0)
@@ -560,7 +678,7 @@ export function Chat({
     if (initialMessages?.length) {
       console.log('[Chat] First message:', initialMessages[0]?.role, initialMessages[0]?.content?.substring(0, 100))
     }
-  }, [projectPath, initialSessionId, initialMessages, initialImages])
+  }, [projectPath, usableProjectPath, initialSessionId, initialMessages, initialImages])
 
   // Subscribe to prompt errors from preview/runtime
   const promptError = useStore(workbenchStore.promptError)
@@ -581,6 +699,17 @@ export function Chat({
     workbenchStore.pendingScreenshot.setState(null, true)
   }, [])
 
+  const shouldForceFrontendDesignForCurrentSession = useCallback(() => {
+    if (!isNewProjectAtMount.current) return false
+
+    const forcedSessionId = forcedFrontendDesignSessionIdRef.current
+    if (forcedSessionId === null) {
+      // Before the first session ID is assigned, we are still in the first session.
+      return agentSessionId === null
+    }
+    return agentSessionId === forcedSessionId
+  }, [agentSessionId])
+
   // Handle session ID changes - update local state and persist to projects.json
   // For local-first mode, sessions are stored in ~/.bfloat-ide/projects.json
   const handleSessionIdChange = useCallback(
@@ -589,6 +718,11 @@ export function Chat({
       console.log('[Chat] NEW AGENT SESSION ID RECEIVED:', sessionId)
       console.log('[Chat] Provider:', provider)
       console.log('[Chat] ========================================')
+
+      if (isNewProjectAtMount.current && forcedFrontendDesignSessionIdRef.current === null) {
+        forcedFrontendDesignSessionIdRef.current = sessionId
+      }
+
       setAgentSessionId(sessionId)
 
       // Mark session as loaded so the load-session effect won't re-run
@@ -611,9 +745,9 @@ export function Chat({
     return getSystemPrompt(!!agentSessionId)
   }, [agentSessionId])
 
-  // Local agent hook - use projectPath or empty string (will be updated when projectPath becomes available)
+  // Local agent hook - only use path when it belongs to this project
   const localAgent = useLocalAgent({
-    cwd: projectPath || '',
+    cwd: usableProjectPath || '',
     provider,
     model: selectedModel,
     projectId, // Project ID for background session tracking
@@ -625,6 +759,31 @@ export function Chat({
 
       if (msg.type === 'text') {
         const textContent = msg.content as string
+
+        // Detect poisoned conversation history — the SDK may emit the API error
+        // as assistant text rather than throwing.
+        if (
+          textContent?.includes('image cannot be empty') ||
+          textContent?.includes('image.source.base64')
+        ) {
+          console.warn('[Chat] Detected poisoned conversation history (empty screenshot base64) in message stream')
+          toast.error('Screenshot issue detected. Starting a fresh session.', { id: 'agent-error' })
+          localAgent.terminate()
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: generateId(),
+              role: 'assistant',
+              content: 'A corrupted screenshot was in the conversation history. I\'ve started a fresh session — please resend your message.',
+              parts: [{ type: 'text', text: 'A corrupted screenshot was in the conversation history. I\'ve started a fresh session — please resend your message.' }],
+              createdAt: new Date().toISOString(),
+            },
+          ])
+          setAgentSessionId(null)
+          setIsStreaming(false)
+          return
+        }
+
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1]
           if (lastMsg && lastMsg.role === 'assistant') {
@@ -754,7 +913,7 @@ export function Chat({
               ...prev.slice(0, -1),
               {
                 ...lastMsg,
-                parts: [...existingParts, { type: 'text' as const, text: reasoningContent || '' }],
+                parts: [...existingParts, { type: 'reasoning' as const, text: reasoningContent || '' }],
               },
             ]
           } else {
@@ -765,7 +924,7 @@ export function Chat({
                 id: generateId(),
                 role: 'assistant',
                 content: reasoningContent || '',
-                parts: [{ type: 'text', text: reasoningContent || '' }],
+                parts: [{ type: 'reasoning', text: reasoningContent || '' }],
                 createdAt: new Date().toISOString(),
               },
             ]
@@ -783,6 +942,32 @@ export function Chat({
     },
     onError: (err) => {
       console.error('[Chat] Local agent error:', err)
+
+      // Detect poisoned conversation history (empty screenshot base64).
+      // Once this enters the history, every subsequent API call fails because
+      // the full history is resent. Recover by terminating the session.
+      if (
+        err.includes('image cannot be empty') ||
+        err.includes('image.source.base64')
+      ) {
+        console.warn('[Chat] Detected poisoned conversation history — terminating session')
+        toast.error('Screenshot data corrupted the conversation. Starting a fresh session.', { id: 'agent-error' })
+        localAgent.terminate()
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: generateId(),
+            role: 'assistant',
+            content: 'The previous session had a corrupted screenshot in its history. I\'ve started a fresh session — please resend your message.',
+            parts: [{ type: 'text', text: 'The previous session had a corrupted screenshot in its history. I\'ve started a fresh session — please resend your message.' }],
+            createdAt: new Date().toISOString(),
+          },
+        ])
+        setAgentSessionId(null)
+        setIsStreaming(false)
+        return
+      }
+
       setError(err)
       setIsStreaming(false)
       toast.error(err, { id: 'agent-error' })
@@ -823,7 +1008,7 @@ export function Chat({
       return
     }
 
-    if (messages.length === 1 && messages[0].role === 'user' && projectPath) {
+    if (messages.length === 1 && messages[0].role === 'user' && usableProjectPath) {
       // Get message content - prefer content field, fallback to parts[0].text
       const initialMessage = messages[0]
       const messageContent =
@@ -837,7 +1022,7 @@ export function Chat({
         hasContent: !!initialMessage.content,
         parts: initialMessage.parts,
         extractedContent: messageContent,
-        projectPath,
+        projectPath: usableProjectPath,
       })
 
       if (!messageContent) {
@@ -852,7 +1037,7 @@ export function Chat({
       const startInitialStream = async () => {
         console.log('[Chat] Starting initial stream for new project:', {
           message: messageContent.substring(0, 100),
-          projectPath,
+          projectPath: usableProjectPath,
           hasInitialImages: !!initialImages?.length,
         })
         setIsStreaming(true)
@@ -900,16 +1085,19 @@ export function Chat({
             })
           }
 
-          if (attachmentPaths.length > 0 && projectPath) {
+          if (attachmentPaths.length > 0 && usableProjectPath) {
             const attachmentText =
-              '\n\n[Attachments: ' + attachmentPaths.map((p) => p.replace(projectPath, '.')).join(', ') + ']'
+              '\n\n[Attachments: ' + attachmentPaths.map((p) => p.replace(usableProjectPath, '.')).join(', ') + ']'
             fullPrompt = messageContent + attachmentText
             console.log('[Chat] Full prompt with attachments:', fullPrompt.substring(0, 200))
           }
         }
 
         try {
-          await localAgent.sendPrompt(fullPrompt)
+          const promptToSend = shouldForceFrontendDesignForCurrentSession()
+            ? withFrontendDesignSkillPrompt(fullPrompt)
+            : fullPrompt
+          await localAgent.sendPrompt(promptToSend)
         } catch (err) {
           console.error('[Chat] Failed to start initial stream:', err)
           const errorMsg = err instanceof Error ? err.message : 'Failed to start stream'
@@ -920,7 +1108,14 @@ export function Chat({
       }
       startInitialStream()
     }
-  }, [autoStart, messages.length, projectPath, initialImages, localAgent.sendPrompt]) // Include sendPrompt to avoid stale closure
+  }, [
+    autoStart,
+    messages.length,
+    usableProjectPath,
+    initialImages,
+    localAgent.sendPrompt,
+    shouldForceFrontendDesignForCurrentSession,
+  ]) // Include sendPrompt to avoid stale closure
 
   // Sync isStreaming with localAgent.isRunning (for background session reconnection)
   useEffect(() => {
@@ -949,7 +1144,7 @@ export function Chat({
       }
 
       // Ensure we have a valid project path before sending prompts
-      if (!projectPath) {
+      if (!usableProjectPath) {
         console.error('[Chat] Cannot send prompt: project path not set')
         setError('Project not ready. Please wait for the project to sync.')
         return
@@ -996,7 +1191,7 @@ export function Chat({
 
         if (attachmentPaths.length > 0) {
           attachmentText =
-            '\n\n[Attachments: ' + attachmentPaths.map((p) => p.replace(projectPath, '.')).join(', ') + ']'
+            '\n\n[Attachments: ' + attachmentPaths.map((p) => p.replace(usableProjectPath, '.')).join(', ') + ']'
           console.log('[DEBUG-IMG] Attachment text to append:', attachmentText)
         }
       }
@@ -1009,7 +1204,7 @@ export function Chat({
         fullPrompt.substring(0, 200) + (fullPrompt.length > 200 ? '...' : '')
       )
 
-      console.log('[Chat] LOCAL MODE - Using provider:', provider, 'CWD:', projectPath)
+      console.log('[Chat] LOCAL MODE - Using provider:', provider, 'CWD:', usableProjectPath)
       console.log('[Chat] Calling localAgent.sendPrompt...')
 
       // Build message parts: text + any image attachments
@@ -1039,7 +1234,13 @@ export function Chat({
       }
 
       // Intercept Firebase-related prompts when Firebase is not provisioned and secrets are not configured
-      if (/\bfirebase\b/i.test(text) && !projectHasFirebase && !firebaseProvisioned && !hasIntegrationSecrets.firebase) {
+      if (
+        /\bfirebase\b/i.test(text) &&
+        !projectHasFirebase &&
+        !firebaseProvisioned &&
+        !hasIntegrationSecrets.firebase &&
+        !/\/firebase-setup\b/i.test(text)
+      ) {
         const guidanceMessage: ChatMessage = {
           id: generateId(),
           role: 'assistant',
@@ -1052,24 +1253,96 @@ export function Chat({
         return
       }
 
+      // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
+      if (
+        /\bconvex\b/i.test(text) &&
+        convexStage === 'disconnected' &&
+        !/\/convex-setup\b/i.test(text)
+      ) {
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          parts: [{ type: 'convex-setup-prompt' } as MessagePart],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
+      // Intercept Stripe-related prompts when Stripe is not provisioned and secrets are not configured
+      if (/\bstripe\b/i.test(text) && !projectHasStripe && !hasIntegrationSecrets.stripe && !/\/add-stripe\b/i.test(text)) {
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          parts: [{ type: 'stripe-setup-prompt' } as MessagePart],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
+      // Intercept RevenueCat-related prompts when RevenueCat is not provisioned and secrets are not configured
+      if (
+        /\brevenue\s*cat\b/i.test(text) &&
+        !projectHasRevenuecat &&
+        !revenuecatProvisioned &&
+        !hasIntegrationSecrets.revenuecat &&
+        !/\/add-revenuecat\b/i.test(text)
+      ) {
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          parts: [{ type: 'revenuecat-setup-prompt' } as MessagePart],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
       setMessages((prev) => [...prev, userMessage])
       setIsStreaming(true)
 
       try {
         console.log('[Chat] About to call localAgent.sendPrompt')
-        await localAgent.sendPrompt(fullPrompt)
+        const promptToSend = shouldForceFrontendDesignForCurrentSession()
+          ? withFrontendDesignSkillPrompt(fullPrompt)
+          : fullPrompt
+        await localAgent.sendPrompt(promptToSend)
         console.log('[Chat] localAgent.sendPrompt completed')
       } catch (err) {
         console.error('[Chat] Local agent error:', err)
         const errorMsg = err instanceof Error ? err.message : 'Local agent error'
         setError(errorMsg)
         setIsStreaming(false)
+        setIsRevenueCatSettingUp(false)
         toast.error(errorMsg, { id: 'agent-error' })
       }
 
       setInput('')
     },
-    [isStreaming, provider, localAgent, scrollToBottom, projectPath, projectHasConvex, convexProvisioned, projectHasFirebase, firebaseProvisioned, projectHasStripe, hasIntegrationSecrets]
+    [
+      isStreaming,
+      provider,
+      localAgent,
+      scrollToBottom,
+      usableProjectPath,
+      convexStage,
+      projectHasFirebase,
+      firebaseProvisioned,
+      hasIntegrationSecrets.firebase,
+      projectHasStripe,
+      hasIntegrationSecrets.stripe,
+      projectHasRevenuecat,
+      revenuecatProvisioned,
+      hasIntegrationSecrets.revenuecat,
+      shouldForceFrontendDesignForCurrentSession,
+    ]
   )
 
   // Keep submitRef in sync so handleIntegrationUse can auto-submit
@@ -1084,7 +1357,7 @@ export function Chat({
   // Handle session switching - load a different session from CLI storage
   const handleSelectSession = useCallback(
     async (session: { sessionId: string; lastModified: number; name?: string; provider?: 'claude' | 'codex' }) => {
-      if (!projectPath || session.sessionId === agentSessionId) return
+      if (!usableProjectPath || session.sessionId === agentSessionId) return
 
       console.log('[Chat] Switching to session:', session.sessionId)
 
@@ -1113,7 +1386,7 @@ export function Chat({
       setIsLoadingSession(true)
       try {
         const sessionProvider = session.provider || provider
-        const result = await aiAgent.readSession(session.sessionId, sessionProvider, projectPath)
+        const result = await aiAgent.readSession(session.sessionId, sessionProvider, usableProjectPath)
         if (result.success && result.session?.messages) {
           console.log('[Chat] Loaded session messages:', result.session.messages.length)
           const loadedMessages = result.session.messages.map(convertSessionMessage)
@@ -1136,7 +1409,7 @@ export function Chat({
         setIsStreaming(true)
       }
     },
-    [projectPath, agentSessionId, provider, localAgent, convertSessionMessage, updateSessionMutation]
+    [usableProjectPath, agentSessionId, provider, localAgent, convertSessionMessage, updateSessionMutation]
   )
 
   // Handle session deletion - remove from projects.json
@@ -1216,26 +1489,113 @@ export function Chat({
   }, [])
 
   // Watch for pending prompts from external components (e.g., deployment)
-  const pendingPrompt = useStore(workbenchStore.pendingPrompt)
+  const pendingPromptRequest = useStore(workbenchStore.pendingPrompt)
   useEffect(() => {
+    const pendingPrompt = pendingPromptRequest?.prompt
     console.log('[Chat] pendingPrompt effect fired', {
       hasPendingPrompt: !!pendingPrompt,
       isStreaming,
-      hasProjectPath: !!projectPath,
+      hasProjectPath: !!usableProjectPath,
       pendingPrompt: pendingPrompt?.substring(0, 100),
     })
-    if (pendingPrompt && !isStreaming && projectPath) {
-      console.log('[Chat] Sending pending prompt:', pendingPrompt)
-      handleSubmit(pendingPrompt)
-      workbenchStore.clearPendingPrompt()
-    } else {
+
+    if (!pendingPromptRequest || !pendingPrompt || isStreaming || !usableProjectPath) {
       console.log('[Chat] Not sending pending prompt, conditions:', {
         hasPrompt: !!pendingPrompt,
         isStreaming,
-        hasProjectPath: !!projectPath,
+        hasProjectPath: !!usableProjectPath,
       })
+      return
     }
-  }, [pendingPrompt, isStreaming, projectPath, handleSubmit])
+
+    const requestId = pendingPromptRequest.id
+    if (activePendingPromptIdRef.current === requestId) {
+      return
+    }
+    activePendingPromptIdRef.current = requestId
+
+    const run = async () => {
+      console.log('[Chat] Sending pending prompt:', pendingPrompt)
+      const isRevenueCatPrompt =
+        pendingPromptRequest.integrationId === 'revenuecat' || /\/add-revenuecat\b/i.test(pendingPrompt)
+
+      if (isRevenueCatPrompt) {
+        setIsRevenueCatSettingUp(true)
+      }
+
+      try {
+        if (/\/convex-setup\b/i.test(pendingPrompt)) {
+          if (!convexSecretStatus.isConfigured) {
+            workbenchStore.setActiveTab('settings')
+            workbenchStore.setPendingIntegrationConnect({
+              integrationId: 'convex',
+              source: 'chat',
+            })
+            return
+          }
+
+          const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
+          if (Object.keys(pendingEnvVars).length > 0) {
+            workbenchStore.mergePendingEnvVars(pendingEnvVars)
+          }
+          setConvexProvisioned(true)
+        }
+
+        if (
+          pendingPromptRequest.waitForSecrets &&
+          pendingPromptRequest.projectId &&
+          pendingPromptRequest.requiredSecretKeys &&
+          pendingPromptRequest.requiredSecretKeys.length > 0
+        ) {
+          const resolvedSecrets = await waitForRequiredSecrets(
+            pendingPromptRequest.projectId,
+            pendingPromptRequest.requiredSecretKeys,
+            pendingPromptRequest.timeoutMs ?? 8000
+          )
+
+          if (activePendingPromptIdRef.current !== requestId) {
+            return
+          }
+
+          if (!resolvedSecrets) {
+            const requiredKeysText = pendingPromptRequest.requiredSecretKeys.join(', ')
+            toast.error(`Setup paused: required secret(s) not readable in time (${requiredKeysText}).`)
+            return
+          }
+
+          const envFromSecrets: Record<string, string> = {}
+          for (const key of pendingPromptRequest.requiredSecretKeys) {
+            const match = resolvedSecrets.find((secret) => secret.key === key)
+            const value = match?.value?.trim()
+            if (value) {
+              envFromSecrets[key] = value
+            }
+          }
+          if (Object.keys(envFromSecrets).length > 0) {
+            workbenchStore.mergePendingEnvVars(envFromSecrets)
+          }
+        }
+
+        if (activePendingPromptIdRef.current !== requestId) {
+          return
+        }
+
+        await handleSubmit(pendingPrompt)
+      } catch (err) {
+        console.error('[Chat] Failed to handle pending prompt:', err)
+      } finally {
+        if (activePendingPromptIdRef.current === requestId) {
+          workbenchStore.clearPendingPrompt()
+          activePendingPromptIdRef.current = null
+        }
+        if (isRevenueCatPrompt) {
+          setIsRevenueCatSettingUp(false)
+        }
+      }
+    }
+
+    run()
+  }, [pendingPromptRequest, isStreaming, usableProjectPath, handleSubmit, convexSecretStatus, waitForRequiredSecrets])
 
   // Extract todos from messages (find most recent TodoWrite)
   const todos = useMemo(() => {
@@ -1361,26 +1721,15 @@ export function Chat({
             onIntegrationUse={handleIntegrationUse}
             onClaudeReconnect={handleClaudeReconnect}
             onClaudeAuthError={handleClaudeAuthError}
-            isConvexConnected={integrationStatus.convex}
+            convexStage={convexStage}
+            convexMissingKey={convexSecretStatus.missingKey}
             isFirebaseConnected={integrationStatus.firebase}
             isStripeConnected={integrationStatus.stripe}
+            isStripeSettingUp={isStripeSettingUp}
+            isRevenueCatConnected={integrationStatus.revenuecat}
+            isRevenueCatSettingUp={isRevenueCatSettingUp}
             isClaudeAuthenticated={providerAuthStatus.claude}
           />
-        )}
-        {showFirebaseReconnect && (
-          <div style={{ padding: '0 16px', marginBottom: '8px' }}>
-            <div style={{ marginBottom: '8px', fontSize: '13px', color: 'var(--bfloat-text-secondary, #a0a0b8)' }}>
-              Your Google connection has expired. Please reconnect to continue with Firebase setup.
-            </div>
-            <FirebaseSetupBanner
-              isConnected={false}
-              onConnect={() => {
-                setShowFirebaseReconnect(false)
-                handleIntegrationConnect('firebase')
-              }}
-              onUse={() => {}}
-            />
-          </div>
         )}
         {/* Preview/Runtime Error with Fix button */}
         {promptError && !isStreaming && (
@@ -1423,7 +1772,7 @@ export function Chat({
               const pid = p as ProviderId
               setProvider(pid)
               // Reset model to the provider's default to avoid passing e.g. a Claude model to Codex
-              const defaults: Record<ProviderId, string> = { claude: 'claude-sonnet-4-20250514', codex: 'o4-mini' }
+              const defaults: Record<ProviderId, string> = { claude: 'claude-sonnet-4-20250514', codex: 'gpt-5.3-codex' }
               setSelectedModel(defaults[pid] || '')
             },
             onModelChange: (modelId) => setSelectedModel(modelId),

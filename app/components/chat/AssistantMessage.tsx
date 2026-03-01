@@ -20,8 +20,11 @@ import { ToolAccordion } from './ToolAccordion'
 import { AskUserQuestion, type AskUserQuestionInput } from './AskUserQuestion'
 import { ConvexSetupBanner } from './ConvexSetupBanner'
 import { FirebaseSetupBanner } from './FirebaseSetupBanner'
-import { ClaudeAuthBanner, isClaudeAuthError } from './ClaudeAuthBanner'
+import { StripeSetupBanner } from './StripeSetupBanner'
+import { RevenueCatSetupBanner } from './RevenueCatSetupBanner'
+import { isClaudeAuthError } from './ClaudeAuthBanner'
 import type { MessagePart } from '@/app/types/project'
+import type { ConvexIntegrationStage } from '@/app/lib/integrations/convex'
 import type { ToolAction } from './types'
 import { convertToolPartToAction } from './types'
 
@@ -51,12 +54,34 @@ interface FirebaseSetupSection {
   type: 'firebase_setup'
 }
 
+interface StripeSetupSection {
+  type: 'stripe_setup'
+}
+
+interface RevenueCatSetupSection {
+  type: 'revenuecat_setup'
+}
+
 interface ClaudeAuthSection {
   type: 'claude_auth'
 }
 
+interface ReasoningSection {
+  type: 'reasoning'
+  content: string
+}
+
 // All section types
-type Section = TextSection | ToolGroupSection | AskUserSection | ConvexSetupSection | FirebaseSetupSection | ClaudeAuthSection
+type Section =
+  | TextSection
+  | ToolGroupSection
+  | AskUserSection
+  | ConvexSetupSection
+  | FirebaseSetupSection
+  | StripeSetupSection
+  | RevenueCatSetupSection
+  | ClaudeAuthSection
+  | ReasoningSection
 
 interface AssistantMessageProps {
   parts: MessagePart[]
@@ -66,8 +91,13 @@ interface AssistantMessageProps {
   onIntegrationUse?: (id: string) => void
   onClaudeReconnect?: () => void
   onClaudeAuthError?: () => void
-  isConvexConnected?: boolean
+  convexStage?: ConvexIntegrationStage
+  convexMissingKey?: 'url' | 'deploy_key' | null
   isFirebaseConnected?: boolean
+  isStripeConnected?: boolean
+  isStripeSettingUp?: boolean
+  isRevenueCatConnected?: boolean
+  isRevenueCatSettingUp?: boolean
   isClaudeAuthenticated?: boolean
 }
 
@@ -104,6 +134,20 @@ function parseIntoSections(parts: MessagePart[]): Section[] {
     if (part.type === 'firebase-setup-prompt') {
       flushToolGroup()
       rawSections.push({ type: 'firebase_setup' })
+      continue
+    }
+
+    // Handle stripe setup prompt
+    if (part.type === 'stripe-setup-prompt') {
+      flushToolGroup()
+      rawSections.push({ type: 'stripe_setup' })
+      continue
+    }
+
+    // Handle revenuecat setup prompt
+    if (part.type === 'revenuecat-setup-prompt') {
+      flushToolGroup()
+      rawSections.push({ type: 'revenuecat_setup' })
       continue
     }
 
@@ -156,6 +200,9 @@ function parseIntoSections(parts: MessagePart[]): Section[] {
       if (action) {
         currentToolGroup.push(action)
       }
+    } else if (part.type === 'reasoning' && 'text' in part && part.text) {
+      flushToolGroup()
+      rawSections.push({ type: 'reasoning', content: part.text })
     } else if (part.type === 'text' && 'text' in part && part.text) {
       // Strip <suggestions> tags (complete or partial during streaming)
       const text = part.text.replace(/<suggestions[\s\S]*$/, '').trim()
@@ -190,8 +237,13 @@ export const AssistantMessage = memo(function AssistantMessage({
   onIntegrationUse,
   onClaudeReconnect,
   onClaudeAuthError,
-  isConvexConnected,
+  convexStage = 'disconnected',
+  convexMissingKey,
   isFirebaseConnected,
+  isStripeConnected,
+  isStripeSettingUp,
+  isRevenueCatConnected,
+  isRevenueCatSettingUp,
   isClaudeAuthenticated,
 }: AssistantMessageProps) {
   // Track submitting state for AskUserQuestion
@@ -246,6 +298,14 @@ export const AssistantMessage = memo(function AssistantMessage({
           )
         }
 
+        if (section.type === 'reasoning') {
+          return (
+            <div key={index} className="assistant-reasoning">
+              {section.content}
+            </div>
+          )
+        }
+
         if (section.type === 'tool_group') {
           const isLastSection = index === sections.length - 1
           return (
@@ -261,7 +321,8 @@ export const AssistantMessage = memo(function AssistantMessage({
           return (
             <ConvexSetupBanner
               key={`convex-setup-${index}`}
-              isConnected={!!isConvexConnected}
+              stage={convexStage}
+              missingKey={convexMissingKey}
               onConnect={() => onIntegrationConnect?.('convex')}
               onUse={() => onIntegrationUse?.('convex')}
             />
@@ -287,6 +348,30 @@ export const AssistantMessage = memo(function AssistantMessage({
               onSubmit={(answers) => handleAskUserSubmit(section.toolCallId, answers)}
               isSubmitting={submittingId === section.toolCallId}
               isAnswered={section.isAnswered}
+            />
+          )
+        }
+
+        if (section.type === 'stripe_setup') {
+          return (
+            <StripeSetupBanner
+              key={`stripe-setup-${index}`}
+              isConnected={!!isStripeConnected}
+              isSettingUp={!!isStripeSettingUp}
+              onConnect={() => onIntegrationConnect?.('stripe')}
+              onUse={() => onIntegrationUse?.('stripe')}
+            />
+          )
+        }
+
+        if (section.type === 'revenuecat_setup') {
+          return (
+            <RevenueCatSetupBanner
+              key={`revenuecat-setup-${index}`}
+              isConnected={!!isRevenueCatConnected}
+              isSettingUp={!!isRevenueCatSettingUp}
+              onConnect={() => onIntegrationConnect?.('revenuecat')}
+              onUse={() => onIntegrationUse?.('revenuecat')}
             />
           )
         }

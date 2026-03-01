@@ -1,5 +1,48 @@
 import { useState } from "react";
 import Purchases, { PurchasesPackage } from "react-native-purchases";
+import { Platform } from "react-native";
+
+const apiKey = process.env.EXPO_PUBLIC_REVENUECAT_API_KEY;
+let configurePromise: Promise<void> | null = null;
+
+function isUninitializedPurchasesError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /no singleton instance|configure purchases/i.test(message);
+}
+
+async function ensurePurchasesConfigured(): Promise<void> {
+  if (Platform.OS !== "ios" && Platform.OS !== "android") {
+    return;
+  }
+
+  if (!apiKey) {
+    throw new Error("EXPO_PUBLIC_REVENUECAT_API_KEY is not set.");
+  }
+
+  if (!configurePromise) {
+    configurePromise = (async () => {
+      await Purchases.configure({ apiKey });
+    })().catch((error) => {
+      configurePromise = null;
+      throw error;
+    });
+  }
+
+  await configurePromise;
+}
+
+async function withConfiguredPurchases<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isUninitializedPurchasesError(error)) {
+      throw error;
+    }
+
+    await ensurePurchasesConfigured();
+    return operation();
+  }
+}
 
 interface UsePurchasesResult {
   purchasePackage: (pkg: PurchasesPackage) => Promise<boolean>;
@@ -37,7 +80,7 @@ export function usePurchases(): UsePurchasesResult {
       setIsProcessing(true);
       setError(null);
 
-      const { customerInfo } = await Purchases.purchasePackage(pkg);
+      const { customerInfo } = await withConfiguredPurchases(() => Purchases.purchasePackage(pkg));
 
       // Check if any entitlements are now active
       const hasActiveEntitlement = Object.keys(customerInfo.entitlements.active).length > 0;
@@ -61,7 +104,7 @@ export function usePurchases(): UsePurchasesResult {
       setIsProcessing(true);
       setError(null);
 
-      const customerInfo = await Purchases.restorePurchases();
+      const customerInfo = await withConfiguredPurchases(() => Purchases.restorePurchases());
 
       // Check if any entitlements are now active
       const hasActiveEntitlement = Object.keys(customerInfo.entitlements.active).length > 0;
