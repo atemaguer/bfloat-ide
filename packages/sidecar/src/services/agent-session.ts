@@ -741,6 +741,7 @@ interface BackgroundSession {
 }
 
 const MAX_BUFFERED_FRAMES = 500;
+const REVENUECAT_MCP_URL = "https://mcp.revenuecat.ai/mcp";
 
 /** projectId → BackgroundSession */
 const backgroundSessions = new Map<string, BackgroundSession>();
@@ -849,6 +850,83 @@ export function getBackgroundMessages(
   return { success: true, messages: frames };
 }
 
+function parseEnvContent(content: string): Record<string, string> {
+  const parsed: Record<string, string> = {};
+
+  for (const rawLine of content.split("\n")) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) {
+      line = line.slice("export ".length).trim();
+    }
+
+    const equalsIndex = line.indexOf("=");
+    if (equalsIndex <= 0) continue;
+
+    const key = line.slice(0, equalsIndex).trim();
+    if (!key) continue;
+
+    let value = line.slice(equalsIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    parsed[key] = value;
+  }
+
+  return parsed;
+}
+
+function loadProjectEnv(cwd: string): Record<string, string> {
+  const envLocalPath = path.join(cwd, ".env.local");
+  const envPath = path.join(cwd, ".env");
+  const candidatePath = fs.existsSync(envLocalPath)
+    ? envLocalPath
+    : fs.existsSync(envPath)
+      ? envPath
+      : null;
+
+  if (!candidatePath) return {};
+
+  try {
+    const content = fs.readFileSync(candidatePath, "utf-8");
+    return parseEnvContent(content);
+  } catch (error) {
+    console.warn("[AgentSession] Failed to load project env for MCP config:", error);
+    return {};
+  }
+}
+
+function buildAutoMcpServers(
+  cwd: string,
+  sessionEnv?: Record<string, string>
+): Record<string, unknown> {
+  const projectEnv = loadProjectEnv(cwd);
+  const mergedEnv = { ...projectEnv, ...(sessionEnv ?? {}) };
+  const autoServers: Record<string, unknown> = {};
+
+  const revenueCatKey =
+    mergedEnv.REVENUECAT_API_KEY?.trim() ||
+    mergedEnv.EXPO_PUBLIC_REVENUECAT_API_KEY?.trim() ||
+    "";
+
+  if (revenueCatKey) {
+    autoServers.revenuecat = {
+      type: "http",
+      url: REVENUECAT_MCP_URL,
+      headers: {
+        Authorization: `Bearer ${revenueCatKey}`,
+      },
+    };
+    console.log("[AgentSession] Auto-configured RevenueCat MCP server from project/session env");
+  }
+
+  return autoServers;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -867,15 +945,24 @@ export function createSession(
 
   const sessionId = randomUUID();
   const now = Date.now();
+  const autoMcpServers = buildAutoMcpServers(options.cwd, options.env);
+  const mergedMcpServers = {
+    ...autoMcpServers,
+    ...(options.mcpServers ?? {}),
+  };
+  const normalizedOptions: SessionCreateOptions =
+    Object.keys(mergedMcpServers).length > 0
+      ? { ...options, mcpServers: mergedMcpServers }
+      : { ...options };
 
   const state: AgentSessionState = {
     id: sessionId,
     provider: providerId,
     status: "idle",
-    model: options.model ?? "default",
-    cwd: options.cwd,
-    projectId: options.projectId,
-    realSessionId: options.resumeSessionId,
+    model: normalizedOptions.model ?? "default",
+    cwd: normalizedOptions.cwd,
+    projectId: normalizedOptions.projectId,
+    realSessionId: normalizedOptions.resumeSessionId,
     conversation: [],
     totalTokens: 0,
     totalCostUsd: 0,
@@ -885,15 +972,15 @@ export function createSession(
 
   sessions.set(sessionId, {
     state,
-    options,
+    options: normalizedOptions,
     abortController: null,
     subscribers: new Set(),
     seq: 0,
   });
 
   // Register as background session so the renderer can reconnect on re-mount
-  if (options.projectId) {
-    registerBackgroundSession(sessionId, options.projectId, providerId, options.cwd);
+  if (normalizedOptions.projectId) {
+    registerBackgroundSession(sessionId, normalizedOptions.projectId, providerId, normalizedOptions.cwd);
   }
 
   console.log(`[AgentSession] Created session ${sessionId} (provider=${providerId})`);
