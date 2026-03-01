@@ -1027,11 +1027,17 @@ export const aiAgentBridge = {
             | undefined
           const toolNameRaw = resultPayload?.name
           const toolName = typeof toolNameRaw === "string" ? toolNameRaw.toLowerCase() : ""
+          const normalizedToolName = toolName
+            .replace(/[^a-z0-9]+/g, "_")
+            .replace(/^_+|_+$/g, "")
           const isError = resultPayload?.isError === true
+          const isRestartAlias =
+            normalizedToolName === "restart_app" ||
+            normalizedToolName.endsWith("_restart_app")
+          const isWorkbenchScoped = normalizedToolName.includes("workbench")
           const isWorkbenchRestartTool =
-            toolName === "restart_app" ||
-            toolName === "workbench:restart_app" ||
-            toolName === "workbench_restart_app"
+            normalizedToolName === "restart_app" ||
+            (isWorkbenchScoped && isRestartAlias)
 
           if (isWorkbenchRestartTool && !isError) {
             for (const listener of _restartDevServerListeners) {
