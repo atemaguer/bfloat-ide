@@ -420,6 +420,14 @@ export function Chat({
         }
         setRevenuecatProvisioned(true)
         setIsRevenueCatSettingUp(true)
+
+        const revenuecatPrompt = prompts.revenuecat
+        if (revenuecatPrompt) {
+          workbenchStore.triggerChatPrompt(revenuecatPrompt, {
+            integrationId: 'revenuecat',
+          })
+        }
+        return
       }
       if (id === 'stripe') {
         setIsStripeSettingUp(true)
@@ -1501,6 +1509,9 @@ export function Chat({
     }
 
     const requestId = pendingPromptRequest.id
+    if (activePendingPromptIdRef.current === requestId) {
+      return
+    }
     activePendingPromptIdRef.current = requestId
 
     const run = async () => {
