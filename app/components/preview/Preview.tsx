@@ -524,25 +524,6 @@ export function Preview(props: PreviewProps) {
     }
   }, [props.expoUrl])
 
-  const handleScreenshot = useCallback(async () => {
-    const url = currentUrl || props.previewUrl
-    if (!url || isCapturing || !props.onScreenshot) return
-
-    setIsCapturing(true)
-    try {
-      const result = await screenshot.capture({ url })
-      if (result.success && result.dataUrl) {
-        props.onScreenshot(result.dataUrl)
-      } else {
-        console.error('[Preview] Screenshot failed:', result.error)
-      }
-    } catch (err) {
-      console.error('[Preview] Screenshot error:', err)
-    } finally {
-      setIsCapturing(false)
-    }
-  }, [currentUrl, props, isCapturing])
-
   // Mobile app preview sizing (calculated on all renders so hooks remain unconditional).
   const isCompactMobilePreview = mobileLayoutWidth > 0 && mobileLayoutWidth < COMPACT_PANE_PX
   const isTightMobilePreview = mobileLayoutWidth > 0 && mobileLayoutWidth < TIGHT_PANE_PX
@@ -582,6 +563,35 @@ export function Preview(props: PreviewProps) {
   const phoneHeight = Math.round(phoneWidth * aspect)
   const isSimulatorExpanded = !isCompactMobilePreview || expandedSection === 'simulator'
   const isQrExpanded = !isCompactMobilePreview || expandedSection === 'qr'
+
+  const handleScreenshot = useCallback(async () => {
+    const url = currentUrl || props.previewUrl
+    if (!url || isCapturing || !props.onScreenshot) return
+
+    const mobileCapture = !isWebApp
+    const width = mobileCapture ? Math.max(1, Math.round(phoneWidth || 390)) : 1280
+    const height = mobileCapture ? Math.max(1, Math.round(phoneHeight || 844)) : 800
+
+    setIsCapturing(true)
+    try {
+      const result = await screenshot.capture({
+        url,
+        width,
+        height,
+        mobile: mobileCapture,
+        deviceScaleFactor: mobileCapture ? 2 : 1,
+      })
+      if (result.success && result.dataUrl) {
+        props.onScreenshot(result.dataUrl)
+      } else {
+        console.error('[Preview] Screenshot failed:', result.error)
+      }
+    } catch (err) {
+      console.error('[Preview] Screenshot error:', err)
+    } finally {
+      setIsCapturing(false)
+    }
+  }, [currentUrl, props, isCapturing, isWebApp, phoneWidth, phoneHeight])
 
   useEffect(() => {
     if (!isCompactMobilePreview) {

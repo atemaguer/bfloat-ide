@@ -8,6 +8,7 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { captureScreenshot, getPreviewUrl } from "./screenshot.ts";
+import { getRuntimeState } from "./workbench-runtime.ts";
 
 const LOG_PREFIX = "[Screenshot MCP]";
 
@@ -57,7 +58,15 @@ export function createScreenshotMcpServer(options: ScreenshotMcpOptions) {
 
           console.log(`${LOG_PREFIX} Capturing preview at: ${targetUrl}`);
 
-          const result = await captureScreenshot({ url: targetUrl });
+          const runtime = getRuntimeState(options.cwd);
+          const isMobileRuntime = runtime?.appType === "mobile";
+          const result = await captureScreenshot({
+            url: targetUrl,
+            mobile: isMobileRuntime,
+            width: isMobileRuntime ? 390 : undefined,
+            height: isMobileRuntime ? 844 : undefined,
+            deviceScaleFactor: isMobileRuntime ? 2 : undefined,
+          });
 
           if (!result.success || !result.dataUrl) {
             return {
