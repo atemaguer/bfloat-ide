@@ -1420,9 +1420,14 @@ export const projectFilesBridge = {
     if (!pid) return ""
     try {
       const filePath = `.bfloat-ide/attachments/${name}`
+      const base64Content = data.replace(/^data:[^;]+;base64,/, "")
       await getSidecarApiSync().http.post<void>(
         `/api/project-files/write/${pid}`,
-        { path: filePath, content: data },
+        {
+          path: filePath,
+          content: base64Content,
+          encoding: "base64",
+        },
       )
       return filePath
     } catch (err) {
