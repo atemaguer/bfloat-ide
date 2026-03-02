@@ -742,6 +742,7 @@ interface BackgroundSession {
 
 const MAX_BUFFERED_FRAMES = 500;
 const REVENUECAT_MCP_URL = "https://mcp.revenuecat.ai/mcp";
+const STRIPE_MCP_URL = "https://mcp.stripe.com";
 
 /** projectId → BackgroundSession */
 const backgroundSessions = new Map<string, BackgroundSession>();
@@ -947,6 +948,18 @@ function buildAutoMcpServers(
       },
     };
     console.log("[AgentSession] Auto-configured RevenueCat MCP server from project/session env");
+  }
+
+  const stripeKey = mergedEnv.STRIPE_SECRET_KEY?.trim() || "";
+  if (stripeKey) {
+    autoServers.stripe = {
+      type: "http",
+      url: STRIPE_MCP_URL,
+      headers: {
+        Authorization: `Bearer ${stripeKey}`,
+      },
+    };
+    console.log("[AgentSession] Auto-configured Stripe MCP server from project/session env");
   }
 
   return autoServers;

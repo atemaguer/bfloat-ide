@@ -85,3 +85,101 @@
 ### Verification
 - `pnpm eslint app/hooks/useLocalAgent.ts` (or nearest available lint command).
 - `git diff` review to confirm only session recovery/resume logic changed.
+
+# Task 2026-03-02_007_stripe-connect-error
+
+## Phase 2 Plan
+
+### Files to modify
+- `app/components/project/ProjectSettings.tsx`
+- `app/components/chat/Chat.tsx`
+
+### Order of operations and why
+1. Add Stripe post-save auto-trigger logic in `ProjectSettings` (matching the existing RevenueCat pattern) so saving Stripe credentials immediately queues setup in chat.
+2. Reuse required-key validation/wait behavior for Stripe to avoid race conditions where chat starts before secrets are readable.
+3. Update `Chat` pending-prompt handling to treat Stripe prompts as a setup flow state (same resilience pattern as RevenueCat) so UI state is consistent during auto-triggered setup.
+4. Run targeted verification on touched files.
+5. Self-review diff, stage only this task's hunks, and commit with required task ID format.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: extend the existing integration auto-setup pipeline (already used by RevenueCat) for Stripe, rather than inventing a parallel flow.
+- Rejected: adding a one-off direct `submitRef` call from settings, because it duplicates chat dispatch logic and is less robust than centralized pending-prompt handling.
+
+### ASSUMPTIONS
+1. The primary regression is missing Stripe auto-prompt dispatch after secrets are saved, not a backend Stripe MCP token issue.
+2. Waiting for required secrets to be readable before sending `/add-stripe` reduces timing-related failures similarly to RevenueCat.
+3. The reported RSC payload warning is incidental to navigation and does not change the integration-trigger fix scope.
+→ Proceeding with these.
+
+### Risk areas
+- Triggering Stripe setup too aggressively could fire prompts on non-setup secret edits if guards are wrong.
+- Required key detection must respect app type (`web` vs `mobile`) to avoid false negatives.
+
+### Verification
+- `pnpm eslint app/components/project/ProjectSettings.tsx app/components/chat/Chat.tsx`
+- `git diff` review to ensure only Stripe integration prompt flow changes are included.
+
+# Task 2026-03-02_007_stripe-connect-error (dev completion follow-up)
+
+## Phase 2 Plan
+
+### Files to modify
+- `app/lib/integrations/credentials.ts`
+- `app/components/project/ProjectSettings.tsx`
+
+### Order of operations and why
+1. Expand Stripe credential spec to require both publishable key and `STRIPE_SECRET_KEY` so Stripe "connected" state in dev reflects what setup actually needs.
+2. Update single-secret save flow in `ProjectSettings` to trigger Stripe setup when either required Stripe key is saved and the full required Stripe key set is now present.
+3. Keep Stripe webhook/account-ID (prod-related) out of required dev connect gating for now.
+4. Run focused lint/check on touched files.
+5. Self-review and commit with task ID format.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: use existing `getRequiredSecretKeys/hasRequiredSecrets` pipeline so connect modal, status detection, and setup trigger behavior stay consistent.
+- Rejected: adding Stripe-specific ad-hoc checks in chat/status code, because that duplicates requirement logic and risks drift.
+
+### ASSUMPTIONS
+1. For current dev flow (without OAuth), "fully connected" means both publishable key and `STRIPE_SECRET_KEY` are present before auto-running `/add-stripe`.
+2. `STRIPE_WEBHOOK_SECRET` is generated/handled during setup flow and should not block initial Stripe connect in this task.
+3. Prod account-ID requirements (`STRIPE_ACCOUNT_ID` / `NEXT_PUBLIC_STRIPE_ACCOUNT_ID`) remain out of scope for this follow-up.
+→ Proceeding with these.
+
+### Risk areas
+- Tightening Stripe required keys can change "connected" badges where projects previously had only publishable key.
+
+### Verification
+- `pnpm eslint app/lib/integrations/credentials.ts app/components/project/ProjectSettings.tsx`
+- `git diff` review for scope.
+
+# Task 2026-03-02_007_stripe-connect-error (Stripe MCP auto wiring)
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/services/agent-session.ts`
+- `packages/sidecar/src/services/agent-session.test.ts`
+
+### Order of operations and why
+1. Add Stripe MCP URL constant next to existing RevenueCat MCP constant for consistency.
+2. Extend `buildAutoMcpServers()` to auto-configure Stripe MCP when `STRIPE_SECRET_KEY` is present in merged env (cwd/project/session env).
+3. Keep merge precedence unchanged so explicit caller `mcpServers` overrides auto-generated Stripe config.
+4. Add targeted unit tests for Stripe auto MCP injection and override behavior, plus parity checks with RevenueCat.
+5. Run focused sidecar tests and self-review diff.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: mirror RevenueCat auto MCP pattern in sidecar session creation for Stripe.
+- Rejected: wiring Stripe only in frontend/workbench because MCP server injection happens in sidecar session options.
+
+### ASSUMPTIONS
+1. Dev no-OAuth Stripe MCP should authenticate via `Authorization: Bearer ${STRIPE_SECRET_KEY}`.
+2. Stripe MCP base URL is `https://mcp.stripe.com` for sidecar HTTP server config.
+3. Prod Stripe account-ID behavior is out of scope for this change.
+→ Proceeding with these.
+
+### Risk areas
+- Incorrect Stripe MCP URL/path would prevent tool calls.
+- Test fragility if session registry state leaks between test cases.
+
+### Verification
+- `bun test packages/sidecar/src/services/agent-session.test.ts`
+- `git diff` review for scope and secret-safe logging.

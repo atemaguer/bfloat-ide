@@ -1516,9 +1516,13 @@ export function Chat({
 
     const run = async () => {
       console.log('[Chat] Sending pending prompt:', pendingPrompt)
+      const isStripePrompt = pendingPromptRequest.integrationId === 'stripe' || /\/add-stripe\b/i.test(pendingPrompt)
       const isRevenueCatPrompt =
         pendingPromptRequest.integrationId === 'revenuecat' || /\/add-revenuecat\b/i.test(pendingPrompt)
 
+      if (isStripePrompt) {
+        setIsStripeSettingUp(true)
+      }
       if (isRevenueCatPrompt) {
         setIsRevenueCatSettingUp(true)
       }
@@ -1590,6 +1594,9 @@ export function Chat({
         }
         if (isRevenueCatPrompt) {
           setIsRevenueCatSettingUp(false)
+        }
+        if (isStripePrompt) {
+          setIsStripeSettingUp(false)
         }
       }
     }

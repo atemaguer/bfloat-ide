@@ -133,6 +133,39 @@ class DeprecatedPackageInstallProvider implements AgentProvider {
   }
 }
 
+class CaptureMcpServersProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Capture MCP Servers Provider";
+  readonly seenMcpServers: Array<Record<string, unknown> | undefined> = [];
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    this.seenMcpServers.push(options.mcpServers as Record<string, unknown> | undefined);
+
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-mcp-capture",
+      model: "stub-model",
+      availableTools: [],
+    };
+
+    yield {
+      kind: "done",
+      interrupted: false,
+    };
+  }
+}
+
 async function waitForSessionStatus(
   sessionId: string,
   targetStatus: "completed" | "error",
@@ -230,5 +263,136 @@ describe("agent-session resume persistence", () => {
     const errorFrame = replay.messages.find((f) => f.type === "error");
     const payload = (errorFrame?.payload ?? {}) as { code?: string };
     expect(payload.code).toBe("deprecated_package_blocked");
+  });
+});
+
+describe("agent-session auto MCP server wiring", () => {
+  it("auto-configures RevenueCat MCP from env", async () => {
+    const provider = new CaptureMcpServersProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      env: {
+        REVENUECAT_API_KEY: "rc_test_123",
+      },
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "test");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "completed");
+
+    expect(provider.seenMcpServers).toHaveLength(1);
+    const mcpServers = provider.seenMcpServers[0] || {};
+    const revenuecat = mcpServers.revenuecat as { type?: string; url?: string; headers?: { Authorization?: string } };
+    expect(revenuecat?.type).toBe("http");
+    expect(revenuecat?.url).toBe("https://mcp.revenuecat.ai/mcp");
+    expect(revenuecat?.headers?.Authorization).toBe("Bearer rc_test_123");
+  });
+
+  it("auto-configures Stripe MCP from STRIPE_SECRET_KEY", async () => {
+    const provider = new CaptureMcpServersProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      env: {
+        STRIPE_SECRET_KEY: "sk_test_123",
+      },
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "test");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "completed");
+
+    expect(provider.seenMcpServers).toHaveLength(1);
+    const mcpServers = provider.seenMcpServers[0] || {};
+    const stripe = mcpServers.stripe as { type?: string; url?: string; headers?: { Authorization?: string } };
+    expect(stripe?.type).toBe("http");
+    expect(stripe?.url).toBe("https://mcp.stripe.com");
+    expect(stripe?.headers?.Authorization).toBe("Bearer sk_test_123");
+  });
+
+  it("does not auto-configure Stripe MCP when STRIPE_SECRET_KEY is blank", async () => {
+    const provider = new CaptureMcpServersProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      env: {
+        STRIPE_SECRET_KEY: "   ",
+      },
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "test");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "completed");
+
+    expect(provider.seenMcpServers).toHaveLength(1);
+    const mcpServers = provider.seenMcpServers[0] || {};
+    expect(mcpServers.stripe).toBeUndefined();
+  });
+
+  it("lets explicit stripe mcp config override auto stripe config", async () => {
+    const provider = new CaptureMcpServersProvider();
+    registerProvider(provider);
+
+    const customStripe = {
+      type: "http",
+      url: "https://example.com/custom-stripe",
+      headers: {
+        Authorization: "Bearer custom_token",
+      },
+    };
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      env: {
+        STRIPE_SECRET_KEY: "sk_test_123",
+      },
+      mcpServers: {
+        stripe: customStripe,
+      },
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "test");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "completed");
+
+    expect(provider.seenMcpServers).toHaveLength(1);
+    const mcpServers = provider.seenMcpServers[0] || {};
+    expect(mcpServers.stripe).toEqual(customStripe);
+  });
+
+  it("auto-configures both Stripe and RevenueCat MCP when both secrets exist", async () => {
+    const provider = new CaptureMcpServersProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      env: {
+        STRIPE_SECRET_KEY: "sk_test_123",
+        REVENUECAT_API_KEY: "rc_test_123",
+      },
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "test");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "completed");
+
+    expect(provider.seenMcpServers).toHaveLength(1);
+    const mcpServers = provider.seenMcpServers[0] || {};
+    expect(mcpServers.stripe).toBeDefined();
+    expect(mcpServers.revenuecat).toBeDefined();
   });
 });

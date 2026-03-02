@@ -68,15 +68,22 @@ export function getIntegrationCredentialSpec(
       }
     }
     case 'stripe': {
-      const key = appType === 'web' ? 'NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY' : 'EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY'
+      const publishableKey = appType === 'web' ? 'NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY' : 'EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY'
       return {
         title: 'Connect Stripe',
-        description: 'Add the publishable key required to initialize Stripe in this app.',
+        description: 'Add publishable and secret keys required to initialize Stripe in this app.',
         fields: [
           {
-            key,
+            key: publishableKey,
             label: 'Stripe Publishable Key',
             placeholder: 'pk_live_...',
+            required: true,
+            sensitive: true,
+          },
+          {
+            key: 'STRIPE_SECRET_KEY',
+            label: 'Stripe Secret Key',
+            placeholder: 'sk_live_...',
             required: true,
             sensitive: true,
           },

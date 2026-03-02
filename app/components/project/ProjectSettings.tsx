@@ -21,7 +21,7 @@ import {
 import { secrets as secretsApi, projectFiles } from '@/app/api/sidecar'
 import { isConvexSecretKey } from '@/app/lib/integrations/secrets'
 import { detectConvexBootstrap, getConvexSecretStatusFromSecrets } from '@/app/lib/integrations/convex'
-import { hasRequiredSecrets, type ConnectIntegrationId } from '@/app/lib/integrations/credentials'
+import { getRequiredSecretKeys, hasRequiredSecrets, type ConnectIntegrationId } from '@/app/lib/integrations/credentials'
 import './styles.css'
 
 interface ProjectSettingsProps {
@@ -30,6 +30,8 @@ interface ProjectSettingsProps {
 }
 
 const REVENUECAT_API_KEY = 'REVENUECAT_API_KEY'
+const STRIPE_SETUP_PROMPT = 'Use the /add-stripe skill to set up Stripe payments integration for this project'
+const REVENUECAT_SETUP_PROMPT = 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project'
 
 export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsProps) {
   const [isSaving, setIsSaving] = useState(false)
@@ -72,6 +74,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     project.appType === 'nextjs' || project.appType === 'vite' || project.appType === 'node' || project.appType === 'web'
       ? 'web'
       : 'mobile'
+  const requiredStripeKeys = getRequiredSecretKeys('stripe', normalizedAppType)
 
   const validateSecretWriteTarget = (
     result: { projectId?: string; writePath?: string },
@@ -204,7 +207,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     }
 
     if (key === REVENUECAT_API_KEY && isChanged && nextValue) {
-      workbenchStore.triggerChatPrompt('Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project', {
+      workbenchStore.triggerChatPrompt(REVENUECAT_SETUP_PROMPT, {
         integrationId: 'revenuecat',
         projectId: project.id,
         requiredSecretKeys: [REVENUECAT_API_KEY],
@@ -212,6 +215,23 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         timeoutMs: 8000,
       })
       toast.success('RevenueCat key saved. Starting RevenueCat setup in chat...')
+    }
+
+    if (requiredStripeKeys.includes(key) && isChanged && nextValue) {
+      const nextSecretKeys = new Set(secrets.map((secret) => secret.key))
+      nextSecretKeys.add(key)
+      const hasStripeKeys = hasRequiredSecrets([...nextSecretKeys], 'stripe', normalizedAppType)
+
+      if (hasStripeKeys) {
+        workbenchStore.triggerChatPrompt(STRIPE_SETUP_PROMPT, {
+          integrationId: 'stripe',
+          projectId: project.id,
+          requiredSecretKeys: requiredStripeKeys,
+          waitForSecrets: true,
+          timeoutMs: 8000,
+        })
+        toast.success('Stripe credentials saved. Starting Stripe setup in chat...')
+      }
     }
   }
 
@@ -287,7 +307,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       const hasRevenuecatKey = hasRequiredSecrets(secretKeys, 'revenuecat', normalizedAppType)
 
       if (hasRevenuecatKey) {
-        workbenchStore.triggerChatPrompt('Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project', {
+        workbenchStore.triggerChatPrompt(REVENUECAT_SETUP_PROMPT, {
           integrationId: 'revenuecat',
           projectId: project.id,
           requiredSecretKeys: [REVENUECAT_API_KEY],
@@ -298,7 +318,24 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       }
     }
 
-    if (successes.length > 0 && activeIntegrationId !== 'convex' && activeIntegrationId !== 'revenuecat') {
+    if (activeIntegrationId === 'stripe' && successes.length > 0) {
+      const result = await secretsApi.readSecrets(project.id)
+      const secretKeys = (result.secrets || []).map((secret) => secret.key)
+      const hasStripeKeys = hasRequiredSecrets(secretKeys, 'stripe', normalizedAppType)
+
+      if (hasStripeKeys) {
+        workbenchStore.triggerChatPrompt(STRIPE_SETUP_PROMPT, {
+          integrationId: 'stripe',
+          projectId: project.id,
+          requiredSecretKeys: requiredStripeKeys,
+          waitForSecrets: true,
+          timeoutMs: 8000,
+        })
+        toast.success('Stripe credentials saved. Starting Stripe setup in chat...')
+      }
+    }
+
+    if (successes.length > 0 && activeIntegrationId !== 'convex' && activeIntegrationId !== 'revenuecat' && activeIntegrationId !== 'stripe') {
       toast.success('Integration credentials saved.')
     }
 
