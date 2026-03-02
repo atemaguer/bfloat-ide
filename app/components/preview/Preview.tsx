@@ -256,15 +256,14 @@ export function Preview(props: PreviewProps) {
     setIsLoading(false)
 
     if (!isTauri) return
-    const iframePath =
-      webIframeRef.current?.contentWindow?.location?.pathname &&
-      webIframeRef.current?.contentWindow?.location
-        ? `${webIframeRef.current.contentWindow.location.pathname}${webIframeRef.current.contentWindow.location.search}${webIframeRef.current.contentWindow.location.hash}`
+    try {
+      const location = webIframeRef.current?.contentWindow?.location
+      const iframePath = location
+        ? `${location.pathname}${location.search}${location.hash}`
         : ''
 
-    if (!iframePath) return
+      if (!iframePath) return
 
-    try {
       const base = new URL(currentUrl || props.previewUrl || window.location.href)
       setUrlInput(`${base.origin}${iframePath.startsWith('/') ? iframePath : `/${iframePath}`}`)
     } catch {
