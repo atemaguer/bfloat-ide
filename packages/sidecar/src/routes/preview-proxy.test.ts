@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildPreviewUpstreamUrl, parsePreviewTargetUrl } from "./preview-proxy.ts";
+import { buildPreviewUpstreamUrl, createPreviewProxyFetchInit, parsePreviewTargetUrl } from "./preview-proxy.ts";
 
 describe("preview-proxy target hardening", () => {
   it("accepts localhost http targets", () => {
@@ -38,5 +38,45 @@ describe("preview-proxy upstream url building", () => {
     const upstream = buildPreviewUpstreamUrl(reqUrl, targetBase);
 
     expect(upstream.toString()).toBe("http://localhost:9000/_next/data/build/pricing.json?x=1");
+  });
+});
+
+describe("preview-proxy request forwarding", () => {
+  it("forwards JSON body and body headers for POST", () => {
+    const body = new ReadableStream();
+    const init = createPreviewProxyFetchInit({
+      method: "POST",
+      acceptHeader: "application/json",
+      contentTypeHeader: "application/json",
+      contentLengthHeader: "42",
+      body,
+    });
+    const headers = init.headers as Record<string, string>;
+
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(body);
+    expect(headers.Accept).toBe("application/json");
+    expect(headers["Accept-Encoding"]).toBe("identity");
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["Content-Length"]).toBe("42");
+  });
+
+  it("does not forward body for GET", () => {
+    const body = new ReadableStream();
+    const init = createPreviewProxyFetchInit({
+      method: "GET",
+      acceptHeader: "application/json",
+      contentTypeHeader: "application/json",
+      contentLengthHeader: "42",
+      body,
+    });
+    const headers = init.headers as Record<string, string>;
+
+    expect(init.method).toBe("GET");
+    expect(init.body).toBeUndefined();
+    expect(headers.Accept).toBe("application/json");
+    expect(headers["Accept-Encoding"]).toBe("identity");
+    expect(headers["Content-Type"]).toBeUndefined();
+    expect(headers["Content-Length"]).toBeUndefined();
   });
 });

@@ -226,7 +226,18 @@ export function Preview(props: PreviewProps) {
     const handler = (event: MessageEvent) => {
       const expectedSource = isWebApp ? webIframeRef.current?.contentWindow : iframeRef.current?.contentWindow
       if (!expectedSource || event.source !== expectedSource) return
-      if (event.origin !== window.location.origin) return
+
+      const iframeSrc = isWebApp ? webIframeRef.current?.src : iframeRef.current?.src
+      if (!iframeSrc) return
+
+      let expectedOrigin: string
+      try {
+        expectedOrigin = new URL(iframeSrc, window.location.href).origin
+      } catch {
+        return
+      }
+
+      if (event.origin !== expectedOrigin) return
 
       if (event.data?.type === 'bfloat-preview-route') {
         if (!isWebApp) return
@@ -247,6 +258,24 @@ export function Preview(props: PreviewProps) {
         const { message, stack } = event.data
         const errorText = stack ? `${message}\n${stack}` : message
         props.onError(errorText)
+        return
+      }
+
+      if (event.data?.type === 'bfloat-preview-open-external') {
+        const url = typeof event.data?.url === 'string' ? event.data.url.trim() : ''
+        if (!url) return
+        if (!/^https?:\/\//i.test(url)) return
+
+        const bridgeOpen = (window as any).conveyor?.window?.webOpenUrl as ((target: string) => Promise<void>) | undefined
+        if (bridgeOpen) {
+          bridgeOpen(url).catch((err: unknown) => {
+            console.warn('[Preview] Failed to open external URL via bridge:', err)
+            window.open(url, '_blank', 'noopener,noreferrer')
+          })
+          return
+        }
+
+        window.open(url, '_blank', 'noopener,noreferrer')
       }
     }
     window.addEventListener('message', handler)

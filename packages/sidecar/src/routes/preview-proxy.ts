@@ -83,6 +83,69 @@ export function buildPreviewUpstreamUrl(reqUrl: URL, targetBaseUrl: URL): URL {
   return targetUrl;
 }
 
+function methodSupportsRequestBody(method: string): boolean {
+  const normalizedMethod = method.toUpperCase();
+  return normalizedMethod !== "GET" && normalizedMethod !== "HEAD";
+}
+
+export function createPreviewProxyFetchInit(options: {
+  method: string;
+  acceptHeader?: string | null;
+  contentTypeHeader?: string | null;
+  contentLengthHeader?: string | null;
+  body?: BodyInit;
+}): RequestInit {
+  const { method, acceptHeader, contentTypeHeader, contentLengthHeader, body } = options;
+  const shouldForwardBody = methodSupportsRequestBody(method);
+
+  const headers: Record<string, string> = {
+    Accept: acceptHeader || "*/*",
+    "Accept-Encoding": "identity",
+  };
+
+  if (shouldForwardBody && contentTypeHeader) {
+    headers["Content-Type"] = contentTypeHeader;
+  }
+  if (shouldForwardBody && contentLengthHeader) {
+    headers["Content-Length"] = contentLengthHeader;
+  }
+
+  const requestInit: RequestInit = {
+    method,
+    headers,
+    redirect: "follow",
+  };
+
+  if (shouldForwardBody && body !== undefined) {
+    requestInit.body = body;
+  }
+
+  return requestInit;
+}
+
+async function buildPreviewProxyFetchInit(c: Context): Promise<RequestInit> {
+  let body: Uint8Array | undefined;
+  let contentLengthHeader = c.req.header("content-length");
+
+  if (methodSupportsRequestBody(c.req.method)) {
+    const rawBody = await c.req.raw.arrayBuffer();
+    if (rawBody.byteLength > 0) {
+      body = new Uint8Array(rawBody);
+      contentLengthHeader = String(rawBody.byteLength);
+    } else {
+      contentLengthHeader = undefined;
+    }
+  }
+
+  return createPreviewProxyFetchInit({
+    method: c.req.method,
+    acceptHeader: c.req.header("accept"),
+    contentTypeHeader: c.req.header("content-type"),
+    contentLengthHeader,
+    body,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Injected error-capture script
 // ---------------------------------------------------------------------------
@@ -177,15 +240,7 @@ async function handlePreviewProxyRequest(c: Context) {
   // Forward the request to the target.
   let upstream: Response;
   try {
-    upstream = await fetch(targetUrl.toString(), {
-      method: c.req.method,
-      headers: {
-        // Forward a minimal set of headers.  Don't forward auth or host.
-        "Accept": c.req.header("accept") || "*/*",
-        "Accept-Encoding": "identity", // avoid compressed responses we'd have to re-compress
-      },
-      redirect: "follow",
-    });
+    upstream = await fetch(targetUrl.toString(), await buildPreviewProxyFetchInit(c));
   } catch (err) {
     return c.json(
       { error: `Failed to reach target: ${err instanceof Error ? err.message : String(err)}` },
@@ -284,14 +339,7 @@ export async function previewProxyFallback(c: Context, next: Next) {
 
   let upstream: Response;
   try {
-    upstream = await fetch(upstreamUrl.toString(), {
-      method: c.req.method,
-      headers: {
-        Accept: c.req.header("accept") || "*/*",
-        "Accept-Encoding": "identity",
-      },
-      redirect: "follow",
-    });
+    upstream = await fetch(upstreamUrl.toString(), await buildPreviewProxyFetchInit(c));
   } catch {
     // Upstream unreachable — fall through to normal 404.
     await next();
