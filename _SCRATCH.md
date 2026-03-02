@@ -150,3 +150,36 @@
 ### Verification
 - `pnpm eslint app/lib/integrations/credentials.ts app/components/project/ProjectSettings.tsx`
 - `git diff` review for scope.
+
+# Task 2026-03-02_007_stripe-connect-error (Stripe MCP auto wiring)
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/services/agent-session.ts`
+- `packages/sidecar/src/services/agent-session.test.ts`
+
+### Order of operations and why
+1. Add Stripe MCP URL constant next to existing RevenueCat MCP constant for consistency.
+2. Extend `buildAutoMcpServers()` to auto-configure Stripe MCP when `STRIPE_SECRET_KEY` is present in merged env (cwd/project/session env).
+3. Keep merge precedence unchanged so explicit caller `mcpServers` overrides auto-generated Stripe config.
+4. Add targeted unit tests for Stripe auto MCP injection and override behavior, plus parity checks with RevenueCat.
+5. Run focused sidecar tests and self-review diff.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: mirror RevenueCat auto MCP pattern in sidecar session creation for Stripe.
+- Rejected: wiring Stripe only in frontend/workbench because MCP server injection happens in sidecar session options.
+
+### ASSUMPTIONS
+1. Dev no-OAuth Stripe MCP should authenticate via `Authorization: Bearer ${STRIPE_SECRET_KEY}`.
+2. Stripe MCP base URL is `https://mcp.stripe.com` for sidecar HTTP server config.
+3. Prod Stripe account-ID behavior is out of scope for this change.
+→ Proceeding with these.
+
+### Risk areas
+- Incorrect Stripe MCP URL/path would prevent tool calls.
+- Test fragility if session registry state leaks between test cases.
+
+### Verification
+- `bun test packages/sidecar/src/services/agent-session.test.ts`
+- `git diff` review for scope and secret-safe logging.
