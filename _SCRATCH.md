@@ -280,6 +280,10 @@
 - `pnpm eslint app/components/preview/Preview.tsx`
 - Manual Stripe checkout trigger in IDE preview should open external checkout URL.
 
+## Follow-up adjustment
+- Fixed message-origin validation in `Preview.tsx` to compare `event.origin` against the active iframe `src` origin (sidecar), not `window.location.origin` (IDE shell).
+- Reason: preview iframe is intentionally cross-origin (`http://127.0.0.1:<sidecar-port>`), so prior check dropped all legitimate iframe messages including external checkout open requests.
+
 ### Files to modify
 - `packages/sidecar/src/routes/preview-proxy.ts`
 - `app/components/preview/Preview.tsx`

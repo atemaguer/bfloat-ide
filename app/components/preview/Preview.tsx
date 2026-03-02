@@ -226,7 +226,18 @@ export function Preview(props: PreviewProps) {
     const handler = (event: MessageEvent) => {
       const expectedSource = isWebApp ? webIframeRef.current?.contentWindow : iframeRef.current?.contentWindow
       if (!expectedSource || event.source !== expectedSource) return
-      if (event.origin !== window.location.origin) return
+
+      const iframeSrc = isWebApp ? webIframeRef.current?.src : iframeRef.current?.src
+      if (!iframeSrc) return
+
+      let expectedOrigin: string
+      try {
+        expectedOrigin = new URL(iframeSrc, window.location.href).origin
+      } catch {
+        return
+      }
+
+      if (event.origin !== expectedOrigin) return
 
       if (event.data?.type === 'bfloat-preview-route') {
         if (!isWebApp) return
