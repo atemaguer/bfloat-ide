@@ -76,7 +76,7 @@ const ERROR_CAPTURE_SCRIPT = `<script>
 // Route handler
 // ---------------------------------------------------------------------------
 
-previewProxyRouter.all("/*", async (c) => {
+async function handlePreviewProxyRequest(c: Context) {
   const targetBase = c.req.query("target");
   if (!targetBase) {
     return c.json({ error: "Missing ?target= query parameter" }, 400);
@@ -183,7 +183,12 @@ previewProxyRouter.all("/*", async (c) => {
     status: upstream.status,
     headers: responseHeaders,
   });
-});
+}
+
+// Match both mounted root (/preview-proxy) and nested paths
+// (/preview-proxy/*) so requests don't leak into the fallback proxy.
+previewProxyRouter.all("/", handlePreviewProxyRequest);
+previewProxyRouter.all("/*", handlePreviewProxyRequest);
 
 // ---------------------------------------------------------------------------
 // Catch-all fallback middleware
