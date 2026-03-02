@@ -251,6 +251,35 @@
 - `pnpm --filter @bfloat/sidecar test`
 - Manual IDE preview checkout smoke test (`POST /api/checkout` should parse JSON and return success/expected Stripe response).
 
+# Task 2026-03-02_011_web-navigation-problem (checkout redirect follow-up)
+
+## Phase 2 Plan
+
+### Files to modify
+- `app/components/preview/Preview.tsx`
+
+### Order of operations and why
+1. Add a secure preview `postMessage` handler for external URL open requests from the sandboxed iframe.
+2. Open external links through the existing desktop bridge (`window.conveyor.window.webOpenUrl`) with browser fallback.
+3. Keep origin/source checks strict so only the active preview iframe can trigger the behavior.
+4. Run targeted lint for touched file.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: explicit `postMessage` bridge for external URLs because Stripe checkout pages cannot be embedded in iframes reliably.
+- Rejected: forcing top-navigation from iframe, because that risks navigating the IDE shell itself away from the app UI.
+
+### ASSUMPTIONS
+1. Checkout session creation is successful and the remaining failure is iframe-hosted redirect behavior.
+2. Opening checkout in the system browser is the safest UX in desktop IDE context.
+→ Proceeding with these.
+
+### Risk areas
+- Message handling can be abused if origin/source checks are weak (kept strict in implementation).
+
+### Verification
+- `pnpm eslint app/components/preview/Preview.tsx`
+- Manual Stripe checkout trigger in IDE preview should open external checkout URL.
+
 ### Files to modify
 - `packages/sidecar/src/routes/preview-proxy.ts`
 - `app/components/preview/Preview.tsx`

@@ -247,6 +247,24 @@ export function Preview(props: PreviewProps) {
         const { message, stack } = event.data
         const errorText = stack ? `${message}\n${stack}` : message
         props.onError(errorText)
+        return
+      }
+
+      if (event.data?.type === 'bfloat-preview-open-external') {
+        const url = typeof event.data?.url === 'string' ? event.data.url.trim() : ''
+        if (!url) return
+        if (!/^https?:\/\//i.test(url)) return
+
+        const bridgeOpen = (window as any).conveyor?.window?.webOpenUrl as ((target: string) => Promise<void>) | undefined
+        if (bridgeOpen) {
+          bridgeOpen(url).catch((err: unknown) => {
+            console.warn('[Preview] Failed to open external URL via bridge:', err)
+            window.open(url, '_blank', 'noopener,noreferrer')
+          })
+          return
+        }
+
+        window.open(url, '_blank', 'noopener,noreferrer')
       }
     }
     window.addEventListener('message', handler)
