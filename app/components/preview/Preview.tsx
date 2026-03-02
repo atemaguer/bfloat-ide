@@ -121,6 +121,7 @@ export function Preview(props: PreviewProps) {
   const [mobileLayoutWidth, setMobileLayoutWidth] = useState(0)
   const [mobileLayoutHeight, setMobileLayoutHeight] = useState(0)
   const [expandedSection, setExpandedSection] = useState<'simulator' | 'qr' | null>(null)
+  const isWebApp = useIsWebApp()
 
   // Update URL when auto-detected from terminal or set programmatically
   // Only depends on props.previewUrl to avoid missing updates
@@ -352,9 +353,6 @@ export function Preview(props: PreviewProps) {
       setIsDevToolsOpen(true)
     }
   }, [])
-
-  // Determine if this is a web app or mobile app using the context hook
-  const isWebApp = useIsWebApp()
 
   // Adapt mobile preview layout to container dimensions (not viewport size).
   useEffect(() => {
