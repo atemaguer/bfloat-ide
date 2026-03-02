@@ -85,11 +85,12 @@ previewProxyRouter.all("/*", async (c) => {
   // Validate target is a localhost URL to prevent open-proxy abuse.
   let targetUrl: URL;
   try {
-    // The path after the proxy mount point becomes the sub-resource path.
-    // e.g. /api/preview-proxy/assets/main.js?target=http://localhost:8081
-    //   → fetch http://localhost:8081/assets/main.js
-    const proxyPath = c.req.path.replace(/^\//, ""); // strip leading slash
-    targetUrl = new URL(proxyPath || "/", targetBase);
+    // Strip the preview-proxy mount prefix before forwarding upstream.
+    // e.g. /preview-proxy/_next/static/... -> /_next/static/...
+    const requestPath = new URL(c.req.url).pathname;
+    const proxyPath = requestPath.replace(/^\/preview-proxy(?:\/|$)/, "/");
+    const upstreamPath = proxyPath.startsWith("/") ? proxyPath : `/${proxyPath}`;
+    targetUrl = new URL(upstreamPath || "/", targetBase);
     // Preserve query params from the original request (except "target")
     const reqUrl = new URL(c.req.url);
     reqUrl.searchParams.forEach((value, key) => {
