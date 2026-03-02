@@ -118,3 +118,35 @@
 ### Verification
 - `pnpm eslint app/components/project/ProjectSettings.tsx app/components/chat/Chat.tsx`
 - `git diff` review to ensure only Stripe integration prompt flow changes are included.
+
+# Task 2026-03-02_007_stripe-connect-error (dev completion follow-up)
+
+## Phase 2 Plan
+
+### Files to modify
+- `app/lib/integrations/credentials.ts`
+- `app/components/project/ProjectSettings.tsx`
+
+### Order of operations and why
+1. Expand Stripe credential spec to require both publishable key and `STRIPE_SECRET_KEY` so Stripe "connected" state in dev reflects what setup actually needs.
+2. Update single-secret save flow in `ProjectSettings` to trigger Stripe setup when either required Stripe key is saved and the full required Stripe key set is now present.
+3. Keep Stripe webhook/account-ID (prod-related) out of required dev connect gating for now.
+4. Run focused lint/check on touched files.
+5. Self-review and commit with task ID format.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: use existing `getRequiredSecretKeys/hasRequiredSecrets` pipeline so connect modal, status detection, and setup trigger behavior stay consistent.
+- Rejected: adding Stripe-specific ad-hoc checks in chat/status code, because that duplicates requirement logic and risks drift.
+
+### ASSUMPTIONS
+1. For current dev flow (without OAuth), "fully connected" means both publishable key and `STRIPE_SECRET_KEY` are present before auto-running `/add-stripe`.
+2. `STRIPE_WEBHOOK_SECRET` is generated/handled during setup flow and should not block initial Stripe connect in this task.
+3. Prod account-ID requirements (`STRIPE_ACCOUNT_ID` / `NEXT_PUBLIC_STRIPE_ACCOUNT_ID`) remain out of scope for this follow-up.
+→ Proceeding with these.
+
+### Risk areas
+- Tightening Stripe required keys can change "connected" badges where projects previously had only publishable key.
+
+### Verification
+- `pnpm eslint app/lib/integrations/credentials.ts app/components/project/ProjectSettings.tsx`
+- `git diff` review for scope.

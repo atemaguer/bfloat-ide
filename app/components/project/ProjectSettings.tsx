@@ -75,7 +75,6 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       ? 'web'
       : 'mobile'
   const requiredStripeKeys = getRequiredSecretKeys('stripe', normalizedAppType)
-  const stripePublishableKey = requiredStripeKeys[0]
 
   const validateSecretWriteTarget = (
     result: { projectId?: string; writePath?: string },
@@ -218,15 +217,21 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       toast.success('RevenueCat key saved. Starting RevenueCat setup in chat...')
     }
 
-    if (key === stripePublishableKey && isChanged && nextValue) {
-      workbenchStore.triggerChatPrompt(STRIPE_SETUP_PROMPT, {
-        integrationId: 'stripe',
-        projectId: project.id,
-        requiredSecretKeys: requiredStripeKeys,
-        waitForSecrets: true,
-        timeoutMs: 8000,
-      })
-      toast.success('Stripe key saved. Starting Stripe setup in chat...')
+    if (requiredStripeKeys.includes(key) && isChanged && nextValue) {
+      const nextSecretKeys = new Set(secrets.map((secret) => secret.key))
+      nextSecretKeys.add(key)
+      const hasStripeKeys = hasRequiredSecrets([...nextSecretKeys], 'stripe', normalizedAppType)
+
+      if (hasStripeKeys) {
+        workbenchStore.triggerChatPrompt(STRIPE_SETUP_PROMPT, {
+          integrationId: 'stripe',
+          projectId: project.id,
+          requiredSecretKeys: requiredStripeKeys,
+          waitForSecrets: true,
+          timeoutMs: 8000,
+        })
+        toast.success('Stripe credentials saved. Starting Stripe setup in chat...')
+      }
     }
   }
 
