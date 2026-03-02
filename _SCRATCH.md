@@ -213,3 +213,37 @@
 ### Verification
 - `pnpm --filter bfloat-sidecar build`
 - `git diff` review for scope and behavior-only changes.
+
+# Task 2026-03-02_011_web-navigation-problem (follow-up)
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/routes/preview-proxy.ts`
+- `app/components/preview/Preview.tsx`
+
+### Order of operations and why
+1. Adjust preview-proxy upstream URL resolution so mounted-root requests (`/preview-proxy` or `/preview-proxy/`) preserve target pathname/query from `?target=...` instead of always fetching `/`.
+2. Extend injected preview script to emit route-change postMessage events (`bfloat-preview-route`) on load/history changes so host UI can track in-app navigation.
+3. Update Tauri preview message handling in `Preview.tsx` to consume route-change events and update URL bar display without forcing iframe reloads.
+4. Run targeted lint/build checks for touched files.
+5. Self-review diff and commit.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: keep existing proxy architecture and add route-preserving + route-observability behavior.
+- Rejected: forcing iframe remount or rewriting app links, because that is more invasive and risks regressions in SPA navigation state.
+
+### ASSUMPTIONS
+1. The generated app navigation bug is IDE preview/proxy behavior, not app route code (`href="/pricing"` is already correct).
+2. Updating URL display state should not mutate `currentUrl` for Tauri web preview, to avoid unnecessary proxy reload loops.
+3. Preserving target path for proxy-root requests closes a mismatch where upstream root HTML could be served while URL is normalized to nested paths.
+→ Proceeding with these.
+
+### Risk areas
+- Route postMessage handling must remain backward-compatible with existing preview error messages.
+- Path/query merge logic must not break asset/subrequest proxying.
+
+### Verification
+- `pnpm eslint app/components/preview/Preview.tsx packages/sidecar/src/routes/preview-proxy.ts`
+- `pnpm --filter bfloat-sidecar build`
+- `git diff` review for scoped changes.

@@ -223,6 +223,20 @@ export function Preview(props: PreviewProps) {
   useEffect(() => {
     if (!isTauri) return
     const handler = (event: MessageEvent) => {
+      if (event.data?.type === 'bfloat-preview-route') {
+        const nextPath = typeof event.data?.path === 'string' ? event.data.path : ''
+        if (!nextPath) return
+
+        try {
+          const base = new URL(currentUrl || props.previewUrl || window.location.href)
+          const normalizedPath = nextPath.startsWith('/') ? nextPath : `/${nextPath}`
+          setUrlInput(`${base.origin}${normalizedPath}`)
+        } catch {
+          // Ignore malformed route payloads
+        }
+        return
+      }
+
       if (event.data?.type === 'bfloat-preview-error' && props.onError) {
         const { message, stack, level } = event.data
         const errorText = stack ? `${message}\n${stack}` : message
@@ -231,7 +245,27 @@ export function Preview(props: PreviewProps) {
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [props.onError])
+  }, [currentUrl, props.previewUrl, props.onError])
+
+  const handleWebIframeLoad = useCallback(() => {
+    setIsLoading(false)
+
+    if (!isTauri) return
+    const iframePath =
+      webIframeRef.current?.contentWindow?.location?.pathname &&
+      webIframeRef.current?.contentWindow?.location
+        ? `${webIframeRef.current.contentWindow.location.pathname}${webIframeRef.current.contentWindow.location.search}${webIframeRef.current.contentWindow.location.hash}`
+        : ''
+
+    if (!iframePath) return
+
+    try {
+      const base = new URL(currentUrl || props.previewUrl || window.location.href)
+      setUrlInput(`${base.origin}${iframePath.startsWith('/') ? iframePath : `/${iframePath}`}`)
+    } catch {
+      // Ignore cross-origin or malformed URL failures
+    }
+  }, [currentUrl, props.previewUrl])
 
   // Navigate to a URL (normalize it first)
   const navigateToUrl = useCallback((url: string) => {
@@ -710,7 +744,7 @@ export function Preview(props: PreviewProps) {
                   sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-top-navigation"
                   loading="eager"
                   title="Web Preview"
-                  onLoad={() => setIsLoading(false)}
+                  onLoad={handleWebIframeLoad}
                   onError={() => {
                     setIsLoading(false)
                     if (props.onError) props.onError('Failed to load preview')

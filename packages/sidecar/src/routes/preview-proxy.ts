@@ -42,6 +42,15 @@ export function getActiveProxyTarget(): string | null {
 
 const ERROR_CAPTURE_SCRIPT = `<script>
 (function() {
+  function emitRouteChange() {
+    try {
+      window.parent.postMessage({
+        type: 'bfloat-preview-route',
+        path: window.location.pathname + window.location.search + window.location.hash
+      }, '*');
+    } catch(e) {}
+  }
+
   var normalizedPath = null;
   try {
     var targetParam = new URLSearchParams(window.location.search).get('target');
@@ -53,6 +62,20 @@ const ERROR_CAPTURE_SCRIPT = `<script>
   if (normalizedPath && normalizedPath !== (window.location.pathname + window.location.search + window.location.hash)) {
     history.replaceState(null, '', normalizedPath);
   }
+  emitRouteChange();
+
+  var originalPushState = history.pushState;
+  history.pushState = function() {
+    originalPushState.apply(history, arguments);
+    emitRouteChange();
+  };
+  var originalReplaceState = history.replaceState;
+  history.replaceState = function() {
+    originalReplaceState.apply(history, arguments);
+    emitRouteChange();
+  };
+  window.addEventListener('popstate', emitRouteChange);
+
   var origError = console.error;
   console.error = function() {
     origError.apply(console, arguments);
@@ -95,14 +118,25 @@ async function handlePreviewProxyRequest(c: Context) {
   // Validate target is a localhost URL to prevent open-proxy abuse.
   let targetUrl: URL;
   try {
+    const targetBaseUrl = new URL(targetBase);
     // Strip the preview-proxy mount prefix before forwarding upstream.
     // e.g. /preview-proxy/_next/static/... -> /_next/static/...
-    const requestPath = new URL(c.req.url).pathname;
-    const proxyPath = requestPath.replace(/^\/preview-proxy(?:\/|$)/, "/");
-    const upstreamPath = proxyPath.startsWith("/") ? proxyPath : `/${proxyPath}`;
-    targetUrl = new URL(upstreamPath || "/", targetBase);
-    // Preserve query params from the original request (except "target")
     const reqUrl = new URL(c.req.url);
+    const requestPath = reqUrl.pathname;
+    const proxyPath = requestPath.replace(/^\/preview-proxy(?:\/|$)/, "/");
+    const normalizedProxyPath = proxyPath.startsWith("/") ? proxyPath : `/${proxyPath}`;
+    const isProxyRootRequest = normalizedProxyPath === "/";
+    const upstreamPath = isProxyRootRequest
+      ? targetBaseUrl.pathname || "/"
+      : normalizedProxyPath;
+
+    // Always resolve against the target origin.
+    targetUrl = new URL(upstreamPath, targetBaseUrl.origin);
+    // For root preview-proxy requests, preserve target query as upstream baseline.
+    if (isProxyRootRequest) {
+      targetUrl.search = targetBaseUrl.search;
+    }
+    // Preserve query params from the original request (except "target"), overriding baseline values.
     reqUrl.searchParams.forEach((value, key) => {
       if (key !== "target") {
         targetUrl.searchParams.set(key, value);
