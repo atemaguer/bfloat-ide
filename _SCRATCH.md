@@ -250,3 +250,30 @@
 - `pnpm eslint app/components/preview/Preview.tsx packages/sidecar/src/routes/preview-proxy.ts`
 - `pnpm --filter bfloat-sidecar build`
 - `git diff` review for scoped changes.
+
+# Task 2026-03-02_011_web-navigation-problem (hardening pass)
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/routes/preview-proxy.ts`
+- `packages/sidecar/src/routes/preview-proxy.test.ts`
+- `packages/sidecar/src/server.ts`
+- `app/components/preview/Preview.tsx`
+
+### Order of operations and why
+1. Centralize and harden preview target validation (localhost + protocol) in preview-proxy route helpers so HTTP and WS target handling use the same guard.
+2. Add unit tests for target parsing and upstream URL construction to prevent regressions in route normalization and query propagation.
+3. Apply shared preview target validation to `/preview-proxy/ws` upgrade path and reject invalid remote/non-http targets early.
+4. Harden iframe message handling in preview UI by validating source window and origin, and scope route-sync handling to web preview only.
+5. Run focused sidecar route tests plus sidecar build verification.
+
+### ASSUMPTIONS
+1. Route/error events should only be accepted from the active preview iframe and sidecar origin.
+2. Preview proxy target URL should remain limited to localhost over http/https for both HTTP and WS routing.
+→ Proceeding with these.
+
+### Verification
+- `bun test packages/sidecar/src/routes/preview-proxy.test.ts`
+- `pnpm --filter ./packages/sidecar build`
+- `git diff` review for hardening scope.

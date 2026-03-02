@@ -22,7 +22,7 @@ import { localProjectsRouter } from "./routes/local-projects.ts";
 import { templateRouter } from "./routes/template.ts";
 import { screenshotRouter } from "./routes/screenshot.ts";
 import { workbenchRouter } from "./routes/workbench.ts";
-import { previewProxyRouter, previewProxyFallback, getActiveProxyTarget } from "./routes/preview-proxy.ts";
+import { previewProxyRouter, previewProxyFallback, getActiveProxyTarget, parsePreviewTargetUrl } from "./routes/preview-proxy.ts";
 import { shutdownBrowser } from "./services/screenshot.ts";
 
 // ---------------------------------------------------------------------------
@@ -270,7 +270,12 @@ const server = Bun.serve<WSData>({
         sessionId = url.pathname.replace("/api/terminal/ws/", "");
       } else if (url.pathname.startsWith("/preview-proxy/ws")) {
         type = "preview-proxy";
-        proxyTarget = url.searchParams.get("target") ?? undefined;
+        const rawTarget = url.searchParams.get("target") ?? "";
+        const parsedTarget = parsePreviewTargetUrl(rawTarget);
+        if (!parsedTarget) {
+          return new Response("Invalid preview proxy target", { status: 400 });
+        }
+        proxyTarget = parsedTarget.origin;
         sessionId = "preview-proxy";
       } else if (url.pathname.startsWith("/api/agent/ws/")) {
         type = "agent";

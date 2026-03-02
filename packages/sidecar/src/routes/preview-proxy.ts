@@ -22,6 +22,7 @@ import { Hono } from "hono";
 import type { Context, Next } from "hono";
 
 export const previewProxyRouter = new Hono();
+const LOCAL_PREVIEW_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 // ---------------------------------------------------------------------------
 // Stored proxy target
@@ -34,6 +35,52 @@ let activeProxyTarget: string | null = null;
 
 export function getActiveProxyTarget(): string | null {
   return activeProxyTarget;
+}
+
+export function parsePreviewTargetUrl(rawTarget: string): URL | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawTarget);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+
+  if (!LOCAL_PREVIEW_HOSTS.has(parsed.hostname)) {
+    return null;
+  }
+
+  return parsed;
+}
+
+export function buildPreviewUpstreamUrl(reqUrl: URL, targetBaseUrl: URL): URL {
+  // Strip the preview-proxy mount prefix before forwarding upstream.
+  // e.g. /preview-proxy/_next/static/... -> /_next/static/...
+  const requestPath = reqUrl.pathname;
+  const proxyPath = requestPath.replace(/^\/preview-proxy(?:\/|$)/, "/");
+  const normalizedProxyPath = proxyPath.startsWith("/") ? proxyPath : `/${proxyPath}`;
+  const isProxyRootRequest = normalizedProxyPath === "/";
+  const upstreamPath = isProxyRootRequest
+    ? targetBaseUrl.pathname || "/"
+    : normalizedProxyPath;
+
+  // Always resolve against the target origin.
+  const targetUrl = new URL(upstreamPath, targetBaseUrl.origin);
+  // For root preview-proxy requests, preserve target query as upstream baseline.
+  if (isProxyRootRequest) {
+    targetUrl.search = targetBaseUrl.search;
+  }
+  // Preserve query params from the original request (except "target"), overriding baseline values.
+  reqUrl.searchParams.forEach((value, key) => {
+    if (key !== "target") {
+      targetUrl.searchParams.set(key, value);
+    }
+  });
+
+  return targetUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,39 +164,12 @@ async function handlePreviewProxyRequest(c: Context) {
 
   // Validate target is a localhost URL to prevent open-proxy abuse.
   let targetUrl: URL;
-  try {
-    const targetBaseUrl = new URL(targetBase);
-    // Strip the preview-proxy mount prefix before forwarding upstream.
-    // e.g. /preview-proxy/_next/static/... -> /_next/static/...
-    const reqUrl = new URL(c.req.url);
-    const requestPath = reqUrl.pathname;
-    const proxyPath = requestPath.replace(/^\/preview-proxy(?:\/|$)/, "/");
-    const normalizedProxyPath = proxyPath.startsWith("/") ? proxyPath : `/${proxyPath}`;
-    const isProxyRootRequest = normalizedProxyPath === "/";
-    const upstreamPath = isProxyRootRequest
-      ? targetBaseUrl.pathname || "/"
-      : normalizedProxyPath;
-
-    // Always resolve against the target origin.
-    targetUrl = new URL(upstreamPath, targetBaseUrl.origin);
-    // For root preview-proxy requests, preserve target query as upstream baseline.
-    if (isProxyRootRequest) {
-      targetUrl.search = targetBaseUrl.search;
-    }
-    // Preserve query params from the original request (except "target"), overriding baseline values.
-    reqUrl.searchParams.forEach((value, key) => {
-      if (key !== "target") {
-        targetUrl.searchParams.set(key, value);
-      }
-    });
-  } catch {
+  const targetBaseUrl = parsePreviewTargetUrl(targetBase);
+  if (!targetBaseUrl) {
     return c.json({ error: "Invalid target URL" }, 400);
   }
-
-  const hostname = targetUrl.hostname;
-  if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1") {
-    return c.json({ error: "Proxy target must be localhost" }, 403);
-  }
+  const reqUrl = new URL(c.req.url);
+  targetUrl = buildPreviewUpstreamUrl(reqUrl, targetBaseUrl);
 
   // Store the target origin so the catch-all fallback can proxy sub-resources.
   activeProxyTarget = targetUrl.origin;

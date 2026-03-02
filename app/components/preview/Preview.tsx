@@ -223,7 +223,12 @@ export function Preview(props: PreviewProps) {
   useEffect(() => {
     if (!isTauri) return
     const handler = (event: MessageEvent) => {
+      const expectedSource = isWebApp ? webIframeRef.current?.contentWindow : iframeRef.current?.contentWindow
+      if (!expectedSource || event.source !== expectedSource) return
+      if (event.origin !== window.location.origin) return
+
       if (event.data?.type === 'bfloat-preview-route') {
+        if (!isWebApp) return
         const nextPath = typeof event.data?.path === 'string' ? event.data.path : ''
         if (!nextPath) return
 
@@ -238,14 +243,14 @@ export function Preview(props: PreviewProps) {
       }
 
       if (event.data?.type === 'bfloat-preview-error' && props.onError) {
-        const { message, stack, level } = event.data
+        const { message, stack } = event.data
         const errorText = stack ? `${message}\n${stack}` : message
         props.onError(errorText)
       }
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [currentUrl, props.previewUrl, props.onError])
+  }, [isWebApp, currentUrl, props.previewUrl, props.onError])
 
   const handleWebIframeLoad = useCallback(() => {
     setIsLoading(false)
