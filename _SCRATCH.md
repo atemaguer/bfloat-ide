@@ -85,3 +85,36 @@
 ### Verification
 - `pnpm eslint app/hooks/useLocalAgent.ts` (or nearest available lint command).
 - `git diff` review to confirm only session recovery/resume logic changed.
+
+# Task 2026-03-02_007_stripe-connect-error
+
+## Phase 2 Plan
+
+### Files to modify
+- `app/components/project/ProjectSettings.tsx`
+- `app/components/chat/Chat.tsx`
+
+### Order of operations and why
+1. Add Stripe post-save auto-trigger logic in `ProjectSettings` (matching the existing RevenueCat pattern) so saving Stripe credentials immediately queues setup in chat.
+2. Reuse required-key validation/wait behavior for Stripe to avoid race conditions where chat starts before secrets are readable.
+3. Update `Chat` pending-prompt handling to treat Stripe prompts as a setup flow state (same resilience pattern as RevenueCat) so UI state is consistent during auto-triggered setup.
+4. Run targeted verification on touched files.
+5. Self-review diff, stage only this task's hunks, and commit with required task ID format.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: extend the existing integration auto-setup pipeline (already used by RevenueCat) for Stripe, rather than inventing a parallel flow.
+- Rejected: adding a one-off direct `submitRef` call from settings, because it duplicates chat dispatch logic and is less robust than centralized pending-prompt handling.
+
+### ASSUMPTIONS
+1. The primary regression is missing Stripe auto-prompt dispatch after secrets are saved, not a backend Stripe MCP token issue.
+2. Waiting for required secrets to be readable before sending `/add-stripe` reduces timing-related failures similarly to RevenueCat.
+3. The reported RSC payload warning is incidental to navigation and does not change the integration-trigger fix scope.
+→ Proceeding with these.
+
+### Risk areas
+- Triggering Stripe setup too aggressively could fire prompts on non-setup secret edits if guards are wrong.
+- Required key detection must respect app type (`web` vs `mobile`) to avoid false negatives.
+
+### Verification
+- `pnpm eslint app/components/project/ProjectSettings.tsx app/components/chat/Chat.tsx`
+- `git diff` review to ensure only Stripe integration prompt flow changes are included.
