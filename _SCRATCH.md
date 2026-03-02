@@ -183,3 +183,97 @@
 ### Verification
 - `bun test packages/sidecar/src/services/agent-session.test.ts`
 - `git diff` review for scope and secret-safe logging.
+
+# Task 2026-03-02_011_web-navigation-problem
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/routes/preview-proxy.ts`
+
+### Order of operations and why
+1. Replace the unconditional injected `history.replaceState('/', ...)` with path-preserving logic derived from the proxied `target` URL query parameter.
+2. Keep error-capture behavior unchanged (console/error/unhandled-rejection postMessage) so existing preview error reporting still works.
+3. Ensure fallback behavior leaves non-targeted requests untouched and does not mutate route when no `target` is present.
+4. Run focused verification on the sidecar package to catch syntax/type regressions.
+5. Self-review diff, stage only this task, and commit with the required task ID format.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: preserve the real upstream path in injected script (`/pricing`, etc.) instead of forcing `/`, so Next.js router state stays consistent in IDE preview.
+- Rejected: removing the URL normalization entirely, because Expo Router compatibility from prior tasks may rely on controlled history updates.
+
+### ASSUMPTIONS
+1. The persistent `/` route display and intermittent `/pricing/pricing` behavior in IDE preview are caused by the injected history rewrite, not by the app project's own router code.
+2. Preserving the proxied target pathname is compatible with both Next.js and existing Expo preview usage.
+→ Proceeding with these.
+
+### Risk areas
+- If some Expo flows depended specifically on forcing `/`, they may behave differently and need a follow-up conditional path strategy.
+
+### Verification
+- `pnpm --filter bfloat-sidecar build`
+- `git diff` review for scope and behavior-only changes.
+
+# Task 2026-03-02_011_web-navigation-problem (follow-up)
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/routes/preview-proxy.ts`
+- `app/components/preview/Preview.tsx`
+- `packages/sidecar/src/server.ts`
+
+### Order of operations and why
+1. Adjust preview-proxy upstream URL resolution so mounted-root requests (`/preview-proxy` or `/preview-proxy/`) preserve target pathname/query from `?target=...` instead of always fetching `/`.
+2. Extend injected preview script to emit route-change postMessage events (`bfloat-preview-route`) on load/history changes so host UI can track in-app navigation.
+3. Update Tauri preview message handling in `Preview.tsx` to consume route-change events and update URL bar display without forcing iframe reloads.
+4. Add a pre-auth `/api/*` proxy bypass in sidecar server for unknown app API routes while preview proxy is active, so proxied web apps can call `/api/*` endpoints without sidecar auth interception.
+5. Run targeted lint/build checks for touched files.
+6. Self-review diff and commit.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: keep existing proxy architecture and add route-preserving + route-observability behavior.
+- Rejected: forcing iframe remount or rewriting app links, because that is more invasive and risks regressions in SPA navigation state.
+
+### ASSUMPTIONS
+1. The generated app navigation bug is IDE preview/proxy behavior, not app route code (`href="/pricing"` is already correct).
+2. Updating URL display state should not mutate `currentUrl` for Tauri web preview, to avoid unnecessary proxy reload loops.
+3. Preserving target path for proxy-root requests closes a mismatch where upstream root HTML could be served while URL is normalized to nested paths.
+→ Proceeding with these.
+
+### Risk areas
+- Route postMessage handling must remain backward-compatible with existing preview error messages.
+- Path/query merge logic must not break asset/subrequest proxying.
+- API bypass logic must avoid hijacking sidecar-owned `/api/*` routes.
+
+### Verification
+- `pnpm eslint app/components/preview/Preview.tsx packages/sidecar/src/routes/preview-proxy.ts`
+- `pnpm --filter bfloat-sidecar build`
+- `git diff` review for scoped changes.
+
+# Task 2026-03-02_011_web-navigation-problem (hardening pass)
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/routes/preview-proxy.ts`
+- `packages/sidecar/src/routes/preview-proxy.test.ts`
+- `packages/sidecar/src/server.ts`
+- `app/components/preview/Preview.tsx`
+
+### Order of operations and why
+1. Centralize and harden preview target validation (localhost + protocol) in preview-proxy route helpers so HTTP and WS target handling use the same guard.
+2. Add unit tests for target parsing and upstream URL construction to prevent regressions in route normalization and query propagation.
+3. Apply shared preview target validation to `/preview-proxy/ws` upgrade path and reject invalid remote/non-http targets early.
+4. Harden iframe message handling in preview UI by validating source window and origin, and scope route-sync handling to web preview only.
+5. Run focused sidecar route tests plus sidecar build verification.
+
+### ASSUMPTIONS
+1. Route/error events should only be accepted from the active preview iframe and sidecar origin.
+2. Preview proxy target URL should remain limited to localhost over http/https for both HTTP and WS routing.
+→ Proceeding with these.
+
+### Verification
+- `bun test packages/sidecar/src/routes/preview-proxy.test.ts`
+- `pnpm --filter ./packages/sidecar build`
+- `git diff` review for hardening scope.
