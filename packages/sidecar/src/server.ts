@@ -115,6 +115,35 @@ app.use(
 // cannot send auth headers.  Target is restricted to localhost in the route.
 app.route("/preview-proxy", previewProxyRouter);
 
+// When preview proxy is active, allow unknown app-level /api/* requests
+// (e.g. /api/plans in Next.js projects) to pass through to the preview target
+// before sidecar auth middleware. Sidecar-owned API routes remain protected.
+const SIDECAR_API_PREFIXES = [
+  "/api/terminal",
+  "/api/agent",
+  "/api/fs",
+  "/api/project-files",
+  "/api/project-sync",
+  "/api/deploy",
+  "/api/secrets",
+  "/api/provider",
+  "/api/local-projects",
+  "/api/template",
+  "/api/screenshot",
+  "/api/workbench",
+] as const;
+
+app.use("/api/*", async (c, next) => {
+  const requestPath = c.req.path;
+  const isSidecarApi = SIDECAR_API_PREFIXES.some((prefix) => requestPath === prefix || requestPath.startsWith(`${prefix}/`));
+
+  if (!isSidecarApi && getActiveProxyTarget()) {
+    return previewProxyFallback(c, next);
+  }
+
+  await next();
+});
+
 // Auth middleware applies to all routes except health (checked inside health route)
 app.use("/api/*", authMiddleware(password));
 

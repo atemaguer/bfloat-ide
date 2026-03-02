@@ -221,13 +221,15 @@
 ### Files to modify
 - `packages/sidecar/src/routes/preview-proxy.ts`
 - `app/components/preview/Preview.tsx`
+- `packages/sidecar/src/server.ts`
 
 ### Order of operations and why
 1. Adjust preview-proxy upstream URL resolution so mounted-root requests (`/preview-proxy` or `/preview-proxy/`) preserve target pathname/query from `?target=...` instead of always fetching `/`.
 2. Extend injected preview script to emit route-change postMessage events (`bfloat-preview-route`) on load/history changes so host UI can track in-app navigation.
 3. Update Tauri preview message handling in `Preview.tsx` to consume route-change events and update URL bar display without forcing iframe reloads.
-4. Run targeted lint/build checks for touched files.
-5. Self-review diff and commit.
+4. Add a pre-auth `/api/*` proxy bypass in sidecar server for unknown app API routes while preview proxy is active, so proxied web apps can call `/api/*` endpoints without sidecar auth interception.
+5. Run targeted lint/build checks for touched files.
+6. Self-review diff and commit.
 
 ### Approach chosen (and alternatives rejected)
 - Chosen: keep existing proxy architecture and add route-preserving + route-observability behavior.
@@ -242,6 +244,7 @@
 ### Risk areas
 - Route postMessage handling must remain backward-compatible with existing preview error messages.
 - Path/query merge logic must not break asset/subrequest proxying.
+- API bypass logic must avoid hijacking sidecar-owned `/api/*` routes.
 
 ### Verification
 - `pnpm eslint app/components/preview/Preview.tsx packages/sidecar/src/routes/preview-proxy.ts`
