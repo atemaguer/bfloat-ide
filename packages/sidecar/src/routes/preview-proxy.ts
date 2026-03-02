@@ -42,7 +42,17 @@ export function getActiveProxyTarget(): string | null {
 
 const ERROR_CAPTURE_SCRIPT = `<script>
 (function() {
-  history.replaceState(null, '', '/');
+  var normalizedPath = null;
+  try {
+    var targetParam = new URLSearchParams(window.location.search).get('target');
+    if (targetParam) {
+      var targetUrl = new URL(targetParam, window.location.origin);
+      normalizedPath = (targetUrl.pathname || '/') + targetUrl.search + targetUrl.hash;
+    }
+  } catch(e) {}
+  if (normalizedPath && normalizedPath !== (window.location.pathname + window.location.search + window.location.hash)) {
+    history.replaceState(null, '', normalizedPath);
+  }
   var origError = console.error;
   console.error = function() {
     origError.apply(console, arguments);

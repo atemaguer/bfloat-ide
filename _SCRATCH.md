@@ -183,3 +183,33 @@
 ### Verification
 - `bun test packages/sidecar/src/services/agent-session.test.ts`
 - `git diff` review for scope and secret-safe logging.
+
+# Task 2026-03-02_011_web-navigation-problem
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/routes/preview-proxy.ts`
+
+### Order of operations and why
+1. Replace the unconditional injected `history.replaceState('/', ...)` with path-preserving logic derived from the proxied `target` URL query parameter.
+2. Keep error-capture behavior unchanged (console/error/unhandled-rejection postMessage) so existing preview error reporting still works.
+3. Ensure fallback behavior leaves non-targeted requests untouched and does not mutate route when no `target` is present.
+4. Run focused verification on the sidecar package to catch syntax/type regressions.
+5. Self-review diff, stage only this task, and commit with the required task ID format.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: preserve the real upstream path in injected script (`/pricing`, etc.) instead of forcing `/`, so Next.js router state stays consistent in IDE preview.
+- Rejected: removing the URL normalization entirely, because Expo Router compatibility from prior tasks may rely on controlled history updates.
+
+### ASSUMPTIONS
+1. The persistent `/` route display and intermittent `/pricing/pricing` behavior in IDE preview are caused by the injected history rewrite, not by the app project's own router code.
+2. Preserving the proxied target pathname is compatible with both Next.js and existing Expo preview usage.
+→ Proceeding with these.
+
+### Risk areas
+- If some Expo flows depended specifically on forcing `/`, they may behave differently and need a follow-up conditional path strategy.
+
+### Verification
+- `pnpm --filter bfloat-sidecar build`
+- `git diff` review for scope and behavior-only changes.
