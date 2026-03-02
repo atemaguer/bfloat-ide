@@ -121,6 +121,7 @@ export function Preview(props: PreviewProps) {
   const [mobileLayoutWidth, setMobileLayoutWidth] = useState(0)
   const [mobileLayoutHeight, setMobileLayoutHeight] = useState(0)
   const [expandedSection, setExpandedSection] = useState<'simulator' | 'qr' | null>(null)
+  const isWebApp = useIsWebApp()
 
   // Update URL when auto-detected from terminal or set programmatically
   // Only depends on props.previewUrl to avoid missing updates
@@ -223,15 +224,53 @@ export function Preview(props: PreviewProps) {
   useEffect(() => {
     if (!isTauri) return
     const handler = (event: MessageEvent) => {
+      const expectedSource = isWebApp ? webIframeRef.current?.contentWindow : iframeRef.current?.contentWindow
+      if (!expectedSource || event.source !== expectedSource) return
+      if (event.origin !== window.location.origin) return
+
+      if (event.data?.type === 'bfloat-preview-route') {
+        if (!isWebApp) return
+        const nextPath = typeof event.data?.path === 'string' ? event.data.path : ''
+        if (!nextPath) return
+
+        try {
+          const base = new URL(currentUrl || props.previewUrl || window.location.href)
+          const normalizedPath = nextPath.startsWith('/') ? nextPath : `/${nextPath}`
+          setUrlInput(`${base.origin}${normalizedPath}`)
+        } catch {
+          // Ignore malformed route payloads
+        }
+        return
+      }
+
       if (event.data?.type === 'bfloat-preview-error' && props.onError) {
-        const { message, stack, level } = event.data
+        const { message, stack } = event.data
         const errorText = stack ? `${message}\n${stack}` : message
         props.onError(errorText)
       }
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [props.onError])
+  }, [isWebApp, currentUrl, props.previewUrl, props.onError])
+
+  const handleWebIframeLoad = useCallback(() => {
+    setIsLoading(false)
+
+    if (!isTauri) return
+    try {
+      const location = webIframeRef.current?.contentWindow?.location
+      const iframePath = location
+        ? `${location.pathname}${location.search}${location.hash}`
+        : ''
+
+      if (!iframePath) return
+
+      const base = new URL(currentUrl || props.previewUrl || window.location.href)
+      setUrlInput(`${base.origin}${iframePath.startsWith('/') ? iframePath : `/${iframePath}`}`)
+    } catch {
+      // Ignore cross-origin or malformed URL failures
+    }
+  }, [currentUrl, props.previewUrl])
 
   // Navigate to a URL (normalize it first)
   const navigateToUrl = useCallback((url: string) => {
@@ -314,9 +353,6 @@ export function Preview(props: PreviewProps) {
       setIsDevToolsOpen(true)
     }
   }, [])
-
-  // Determine if this is a web app or mobile app using the context hook
-  const isWebApp = useIsWebApp()
 
   // Adapt mobile preview layout to container dimensions (not viewport size).
   useEffect(() => {
@@ -710,7 +746,7 @@ export function Preview(props: PreviewProps) {
                   sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-top-navigation"
                   loading="eager"
                   title="Web Preview"
-                  onLoad={() => setIsLoading(false)}
+                  onLoad={handleWebIframeLoad}
                   onError={() => {
                     setIsLoading(false)
                     if (props.onError) props.onError('Failed to load preview')
