@@ -218,6 +218,39 @@
 
 ## Phase 2 Plan
 
+# Task 2026-03-02_011_web-navigation-problem (checkout POST body follow-up)
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/routes/preview-proxy.ts`
+- `packages/sidecar/src/routes/preview-proxy.test.ts`
+
+### Order of operations and why
+1. Add a shared request-forwarding helper in preview proxy so both the mounted proxy route and fallback proxy route use identical forwarding semantics.
+2. Forward request bodies for non-`GET`/`HEAD` methods and include required request headers (`Content-Type`, `Content-Length`) so JSON API posts survive IDE proxying.
+3. Keep existing target hardening and auth-bypass boundaries unchanged.
+4. Add regression tests that assert body forwarding behavior by method.
+5. Run sidecar tests and review diff scope.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: centralize proxy `fetch` init construction via a small helper to prevent drift between `handlePreviewProxyRequest` and `previewProxyFallback`.
+- Rejected: patch only one callsite, because `/api/*` checkout flows can route through fallback and would still fail.
+
+### ASSUMPTIONS
+1. The checkout parse failure is caused by dropped POST body in sidecar proxy (browser direct path works, IDE preview path fails).
+2. Forwarding body only for non-`GET`/`HEAD` methods is the safest default and preserves HTTP semantics.
+3. No changes are needed in generated app checkout API route for this task.
+→ Proceeding with these.
+
+### Risk areas
+- Request body streams are single-use; helper must only attach stream once per forwarded request.
+- Over-forwarding headers could leak auth/host details; keep explicit minimal header allowlist.
+
+### Verification
+- `pnpm --filter @bfloat/sidecar test`
+- Manual IDE preview checkout smoke test (`POST /api/checkout` should parse JSON and return success/expected Stripe response).
+
 ### Files to modify
 - `packages/sidecar/src/routes/preview-proxy.ts`
 - `app/components/preview/Preview.tsx`
