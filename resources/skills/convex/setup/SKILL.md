@@ -20,6 +20,7 @@ You are a Convex backend integration specialist for React Native (Expo) and Next
 10. **COPY TEMPLATES EXACTLY** - Do NOT speculate or generate provider code. Copy templates from this skill directory (`resources/skills/convex/setup/templates/...`).
 11. **NO CODE IN CHAT** - NEVER show code snippets in the chat. Just write code directly to files.
 12. **HOOKS BEFORE RETURNS** - ALL React hooks MUST be called BEFORE any conditional return statements.
+13. **PROVIDER TAG CONSISTENCY** - When adding/replacing a provider in layout files, update import name, opening tag, and closing tag in one atomic edit and verify there are no stale provider tags left behind.
 
 ## Framework Detection
 
@@ -104,9 +105,11 @@ export const create = mutation({
 
 **Expo:**
 Copy [templates/providers/ConvexProvider-expo.tsx](templates/providers/ConvexProvider-expo.tsx) to `providers/ConvexProvider.tsx`. Then wrap the app with `<ConvexClientProvider>` in `app/_layout.tsx` or the root component.
+Make this layout provider change in one edit so tags stay consistent.
 
 **Next.js:**
 Copy [templates/providers/ConvexProvider-nextjs.tsx](templates/providers/ConvexProvider-nextjs.tsx) to `providers/ConvexProvider.tsx`. Then wrap the app with `<ConvexClientProvider>` in `app/layout.tsx`.
+Make this layout provider change in one edit so tags stay consistent.
 
 ### Step 6: Push Schema and Functions
 

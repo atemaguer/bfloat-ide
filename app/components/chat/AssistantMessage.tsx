@@ -19,6 +19,7 @@ import { Markdown } from './Markdown'
 import { ToolAccordion } from './ToolAccordion'
 import { AskUserQuestion, type AskUserQuestionInput } from './AskUserQuestion'
 import { ConvexSetupBanner } from './ConvexSetupBanner'
+import { ConvexIntentBanner, type ConvexIntentMode } from './ConvexIntentBanner'
 import { FirebaseSetupBanner } from './FirebaseSetupBanner'
 import { StripeSetupBanner } from './StripeSetupBanner'
 import { RevenueCatSetupBanner } from './RevenueCatSetupBanner'
@@ -50,6 +51,10 @@ interface ConvexSetupSection {
   type: 'convex_setup'
 }
 
+interface ConvexIntentSection {
+  type: 'convex_intent'
+}
+
 interface FirebaseSetupSection {
   type: 'firebase_setup'
 }
@@ -77,6 +82,7 @@ type Section =
   | ToolGroupSection
   | AskUserSection
   | ConvexSetupSection
+  | ConvexIntentSection
   | FirebaseSetupSection
   | StripeSetupSection
   | RevenueCatSetupSection
@@ -89,6 +95,7 @@ interface AssistantMessageProps {
   onAskUserSubmit?: (toolCallId: string, answers: Record<string, string>) => void
   onIntegrationConnect?: (id: string) => void
   onIntegrationUse?: (id: string) => void
+  onConvexIntentSelect?: (mode: ConvexIntentMode) => void
   onClaudeReconnect?: () => void
   onClaudeAuthError?: () => void
   convexStage?: ConvexIntegrationStage
@@ -127,6 +134,12 @@ function parseIntoSections(parts: MessagePart[]): Section[] {
     if (part.type === 'convex-setup-prompt') {
       flushToolGroup()
       rawSections.push({ type: 'convex_setup' })
+      continue
+    }
+
+    if (part.type === 'convex-intent-prompt') {
+      flushToolGroup()
+      rawSections.push({ type: 'convex_intent' })
       continue
     }
 
@@ -235,6 +248,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   onAskUserSubmit,
   onIntegrationConnect,
   onIntegrationUse,
+  onConvexIntentSelect,
   onClaudeReconnect,
   onClaudeAuthError,
   convexStage = 'disconnected',
@@ -325,6 +339,15 @@ export const AssistantMessage = memo(function AssistantMessage({
               missingKey={convexMissingKey}
               onConnect={() => onIntegrationConnect?.('convex')}
               onUse={() => onIntegrationUse?.('convex')}
+            />
+          )
+        }
+
+        if (section.type === 'convex_intent') {
+          return (
+            <ConvexIntentBanner
+              key={`convex-intent-${index}`}
+              onSelect={(mode) => onConvexIntentSelect?.(mode)}
             />
           )
         }

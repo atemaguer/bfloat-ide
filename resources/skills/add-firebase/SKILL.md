@@ -20,6 +20,9 @@ You are a Firebase integration specialist for React Native (Expo) and Next.js ap
 10. **AUTH MEANS SCREENS** - When adding authentication, ALWAYS create sign-up and sign-in screens. Auth is not complete without user-facing screens.
 11. **REPLACE LOCAL STORAGE WITH FIREBASE** - Find and replace any AsyncStorage, localStorage, or other local storage usage with Firestore. Data should be stored in Firebase, not locally.
 12. **HOOKS BEFORE RETURNS** - ALL React hooks (useState, useEffect, useCallback, useMemo, useAuth, useRouter, etc.) MUST be called BEFORE any conditional return statements. Never place hooks after `if (...) return`. This causes "Rendered fewer hooks than expected" errors.
+13. **EXPO NAVIGATION SAFETY** - In Expo auth screens, do NOT use `<Link asChild>` around `TouchableOpacity`, `Pressable`, or `Text`. Use `router.push()`/`router.replace()` in `onPress` handlers.
+14. **EXPO ROUTE GROUP SAFETY** - Do NOT add `<Stack.Screen name="(auth)" ... />` in `app/_layout.tsx` unless `app/(auth)/_layout.tsx` exists.
+15. **PROVIDER TAG CONSISTENCY** - When adding/replacing providers in layout files, update import name, opening tag, and closing tag in one atomic edit and verify no stale provider tags remain.
 
 ## Platform Detection
 
@@ -65,6 +68,7 @@ Copy [templates/types/firebase.ts](templates/types/firebase.ts) to `types/fireba
 Copy [templates/expo/providers/AuthProvider.tsx](templates/expo/providers/AuthProvider.tsx) to `providers/AuthProvider.tsx`.
 
 Then wrap the app with `<AuthProvider>` in `app/_layout.tsx` or the root component.
+Make this provider wrap in one edit so opening/closing tags and imports remain consistent.
 
 ### Step 6: Create Firestore Service
 
@@ -77,11 +81,19 @@ Copy [templates/expo/hooks/useDocument.ts](templates/expo/hooks/useDocument.ts) 
 
 ### Step 8: Create Auth Screens (REQUIRED)
 
-Create sign-in and sign-up screens at `app/(auth)/sign-in.tsx` and `app/(auth)/sign-up.tsx`. Use the AuthProvider's `signIn` and `signUp` methods. After successful auth, use `router.replace("/")` to navigate.
+Create sign-in and sign-up screens at `app/(auth)/sign-in.tsx` and `app/(auth)/sign-up.tsx`. Use the AuthProvider's `signIn` and `signUp` methods. After successful auth, use `router.replace("/")` to navigate. For Expo screen-to-screen auth navigation, use `onPress={() => router.push("/(auth)/...")}` and avoid `Link asChild`.
 
 ### Step 9: Replace Local Storage with Firestore
 
 Search for any usage of `AsyncStorage`, `@react-native-async-storage/async-storage`, or similar local storage. Replace with Firestore using the `createFirestoreService` pattern. User data should be stored in Firestore under a user-specific path (e.g., `users/{userId}/...`).
+
+### Step 10: Validate Expo Auth Integration (REQUIRED)
+
+Before finishing Expo Firebase auth setup, verify:
+
+1. `app/_layout.tsx` has matching provider tags.
+2. No `<Link asChild>` wrappers are used for auth navigation in `app/index.tsx`, `app/(auth)/sign-in.tsx`, and `app/(auth)/sign-up.tsx`.
+3. `app/_layout.tsx` does not include `<Stack.Screen name="(auth)" ... />` unless `app/(auth)/_layout.tsx` exists.
 
 ---
 

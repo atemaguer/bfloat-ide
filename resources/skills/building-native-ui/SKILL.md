@@ -122,16 +122,16 @@ Use CSS `boxShadow` style prop. NEVER use legacy React Native shadow or elevatio
 Use `<Link href="/path" />` from 'expo-router' for navigation between routes.
 
 ```tsx
-import { Link } from 'expo-router';
+import { Link, router } from "expo-router";
 
 // Basic link
 <Link href="/path" />
 
-// Wrapping custom components
-<Link href="/path" asChild>
-  <Pressable>...</Pressable>
-</Link>
+// Interactive button navigation (preferred)
+<Pressable onPress={() => router.push("/path")}>...</Pressable>
 ```
+
+Avoid `<Link asChild>` around interactive wrappers (`TouchableOpacity`, `Pressable`, `Text`) in generated app screens. Prefer `router.push()`/`router.replace()` in `onPress`.
 
 Whenever possible, include a `<Link.Preview>` to follow iOS conventions. Add context menus and previews frequently to enhance navigation.
 
@@ -155,7 +155,7 @@ Add long press context menus to Link components:
 ```tsx
 import { Link } from "expo-router";
 
-<Link href="/settings" asChild>
+<Link href="/settings">
   <Link.Trigger>
     <Pressable>
       <Card />

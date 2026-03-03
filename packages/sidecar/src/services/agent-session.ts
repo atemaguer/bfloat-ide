@@ -1389,13 +1389,37 @@ async function runStream(sessionId: string, message: string): Promise<void> {
           if (isShellTool && command) {
             const deprecatedInstall = getDeprecatedPackageInstall(command);
             if (deprecatedInstall) {
-              liveSession.state.status = "error";
+              const blockedMessage =
+                `Blocked deprecated package install (${deprecatedInstall.pkg}). ` +
+                `Use ${deprecatedInstall.replacement} instead.`;
+
+              // Surface the attempted command as a tool call, then mark it failed
+              // so the UI can resolve the running tool state without killing the session.
+              const blockedToolCallFrame = buildFrame(liveSession, "tool_call", {
+                callId: event.callId,
+                name: event.name,
+                input: event.input,
+                status: "running",
+              } satisfies ToolCallPayload);
+              broadcastToSession(liveSession, blockedToolCallFrame);
+
+              const blockedToolResultFrame = buildFrame(liveSession, "tool_result", {
+                callId: event.callId,
+                name: event.name,
+                output: blockedMessage,
+                isError: true,
+              } satisfies ToolResultPayload);
+              broadcastToSession(liveSession, blockedToolResultFrame);
+
+              liveSession.state.status = "completed";
               liveSession.state.endTime = Date.now();
-              frame = buildFrame(liveSession, "error", {
-                code: "deprecated_package_blocked",
-                message: `Blocked deprecated package install (${deprecatedInstall.pkg}). Use ${deprecatedInstall.replacement} instead.`,
-                recoverable: true,
-              } satisfies ErrorPayload);
+
+              frame = buildFrame(liveSession, "done", {
+                result: blockedMessage,
+                interrupted: false,
+                totalTokens: liveSession.state.totalTokens,
+                totalCostUsd: liveSession.state.totalCostUsd,
+              } satisfies DonePayload);
               broadcastToSession(liveSession, frame);
               broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
               return;

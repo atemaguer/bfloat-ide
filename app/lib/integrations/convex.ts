@@ -38,7 +38,7 @@ function getConvexValuesFromMap(
   appType: ConvexAppType
 ): ConvexSecretStatus {
   const urlKey = getConvexUrlKey(appType)
-  const url = normalizeSecretValue(values[urlKey]) || normalizeSecretValue(values.CONVEX_URL)
+  const url = normalizeSecretValue(values[urlKey])
   const deployKey = normalizeSecretValue(values.CONVEX_DEPLOY_KEY)
   const hasUrl = !!url
   const hasDeployKey = !!deployKey
@@ -102,10 +102,7 @@ export function getConvexEnvVarsForSession(status: ConvexSecretStatus): Record<s
   }
 }
 
-export function detectConvexBootstrap(files: FileMap | null | undefined): boolean {
-  if (!files) return false
-
-  const paths = Object.keys(files)
+function detectConvexBootstrapFromPaths(paths: string[]): boolean {
   const hasSchema = paths.includes('convex/schema.ts')
   const hasGeneratedApi = paths.some((path) => /^convex\/_generated\/api\.(ts|js)$/.test(path))
   const hasGeneratedServer = paths.some((path) => /^convex\/_generated\/server\.(ts|js)$/.test(path))
@@ -117,4 +114,17 @@ export function detectConvexBootstrap(files: FileMap | null | undefined): boolea
   })
 
   return hasSchema && hasGeneratedApi && hasGeneratedServer && hasFunctionFile
+}
+
+export function detectConvexBootstrap(files: FileMap | null | undefined): boolean {
+  if (!files) return false
+  return detectConvexBootstrapFromPaths(Object.keys(files))
+}
+
+export function detectConvexBootstrapInTree(
+  fileTree: Array<{ path: string; type: 'file' | 'directory' }> | null | undefined
+): boolean {
+  if (!fileTree) return false
+  const filePaths = fileTree.filter((node) => node.type === 'file').map((node) => node.path)
+  return detectConvexBootstrapFromPaths(filePaths)
 }

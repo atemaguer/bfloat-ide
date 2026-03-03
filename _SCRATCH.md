@@ -343,3 +343,72 @@
 - `bun test packages/sidecar/src/routes/preview-proxy.test.ts`
 - `pnpm --filter ./packages/sidecar build`
 - `git diff` review for hardening scope.
+
+# Task 2026-03-03_007_blocked-package-installs
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/services/agent-session.ts`
+- `packages/sidecar/src/services/agent-session.test.ts`
+
+### Order of operations and why
+1. Update deprecated-package block handling in `runStream` so it does not emit a session-level fatal `error` frame.
+2. Emit a synthetic failed tool result (for the blocked Bash tool call) and end the turn cleanly with `done` + `stream_end`.
+3. Keep scaffold and dev-server guards unchanged (they are unrelated to this task scope).
+4. Update tests to assert non-fatal behavior for deprecated package blocks.
+5. Run targeted sidecar tests for `agent-session` and self-review diff.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: treat deprecated package blocking as a tool-level failure, not a session failure.
+- Rejected: removing the block entirely, which would allow banned packages to install.
+- Rejected: broad refactor of guard architecture, which is outside this task scope.
+
+### ASSUMPTIONS
+1. Ending the current turn as completed/interrupted (instead of error) satisfies "not a death sentence" for agent sessions.
+2. A synthetic `tool_result` with `isError: true` will let the chat UI resolve the running tool state instead of appearing abruptly terminated.
+3. It is acceptable for this blocked command to end the current turn while still allowing the next user turn.
+→ Proceeding with these.
+
+### Risk areas
+- If consumers rely specifically on `error` frames for blocked installs, behavior will change.
+- If provider emits additional events after the synthetic blocked result path, early return remains intentional to preserve blocking.
+
+### Verification
+- `bun test packages/sidecar/src/services/agent-session.test.ts`
+- `git diff` review for scoped changes only.
+
+## TASK PLAN: 2026-03-03_009_convex-auth
+
+ASSUMPTIONS:
+1. The intended Convex + Auth flow should auto-trigger `/convex-auth` only after Convex bootstrap artifacts exist.
+2. `projectFiles.onFileChange` is currently not reliable (bridge stub), so detection cannot depend only on `workbenchStore.files` being live-updated.
+3. A bounded polling fallback (refreshing project tree for a short window) is acceptable to unblock this flow without implementing full realtime subscriptions in this task.
+→ Proceeding with these.
+
+Files to modify:
+- `app/lib/integrations/convex.ts`
+- `app/components/chat/Chat.tsx`
+
+Order of operations:
+1. Extend Convex bootstrap detection utilities so bootstrap can be detected from file paths/tree, not only loaded file contents.
+2. Update chat Convex state/flow to use the stronger bootstrap signal (files + file tree).
+3. Add a bounded fallback loop for pending Convex+Auth: when setup stream ends, force tree refresh checks until bootstrap is detected, then queue `/convex-auth`.
+4. Verify formatting/type-safety with lint and focused checks.
+
+Approach chosen:
+- Keep existing UX/state machine and add robust detection + refresh fallback in-place.
+
+Alternatives rejected:
+- Implementing full `projectFiles.onFileChange` SSE subscriptions in this task (larger scope and sidecar/bridge protocol work).
+- Triggering `/convex-auth` unconditionally after setup (could run auth before Convex is actually wired).
+
+Risk areas:
+- Duplicate auto-trigger of `/convex-auth`.
+- Polling loop leaking after unmount or state change.
+- Regressing existing `convex_only`/`auth_only` flows.
+
+Verification:
+- Run ESLint on changed files.
+- Validate TypeScript compile (`tsc --noEmit`) for impacted code.
+- Inspect diff to ensure only scoped changes.

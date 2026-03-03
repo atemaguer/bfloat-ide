@@ -13,6 +13,13 @@ export interface PendingIntegrationConnectRequest {
   source?: 'chat' | 'workbench'
 }
 
+export interface PendingIntegrationChoiceRequest {
+  id: string
+  integrationId: PendingIntegrationId
+  source?: 'chat' | 'settings' | 'workbench'
+  createdAt: number
+}
+
 export interface PendingPromptRequest {
   id: string
   prompt: string
@@ -86,6 +93,8 @@ export class WorkbenchStore {
 
   // Pending integration connect request - consumed by ProjectSettings
   pendingIntegrationConnect = createStore<PendingIntegrationConnectRequest | null>(() => null)
+  // Pending integration choice request - consumed by Chat
+  pendingIntegrationChoice = createStore<PendingIntegrationChoiceRequest | null>(() => null)
 
   // Invalidation counter for secret mutations (settings -> chat status refresh)
   secretsVersion = createStore<number>(() => 0)
@@ -258,6 +267,27 @@ export class WorkbenchStore {
    */
   clearPendingIntegrationConnect(): void {
     this.pendingIntegrationConnect.setState(null, true)
+  }
+
+  /**
+   * Set a pending integration choice request.
+   * Chat consumes this to render intent-selection cards.
+   */
+  setPendingIntegrationChoice(request: Omit<PendingIntegrationChoiceRequest, 'id' | 'createdAt'>): void {
+    const choiceRequest: PendingIntegrationChoiceRequest = {
+      id: `choice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: Date.now(),
+      ...request,
+    }
+    this.pendingIntegrationChoice.setState(choiceRequest, true)
+    this.isChatCollapsed.setState(false, true)
+  }
+
+  /**
+   * Clear pending integration choice request
+   */
+  clearPendingIntegrationChoice(): void {
+    this.pendingIntegrationChoice.setState(null, true)
   }
 
   /**
@@ -683,6 +713,7 @@ export class WorkbenchStore {
     this.pendingPrompt.setState(null, true)
     this.pendingScreenshot.setState(null, true)
     this.pendingIntegrationConnect.setState(null, true)
+    this.pendingIntegrationChoice.setState(null, true)
     this.secretsVersion.setState(0, true)
 
     // Reset view state to defaults

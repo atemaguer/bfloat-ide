@@ -16,10 +16,12 @@ import { useSessions, useSaveSession, useDeleteSession, useUpdateSession } from 
 import { getSystemPrompt } from '@/lib/launch/system-prompt'
 import { aiAgent, projectFiles, secrets } from '@/app/api/sidecar'
 import type { ProviderId, SessionMessageData } from '@/lib/conveyor/schemas/ai-agent-schema'
+import { projectStore } from '@/app/stores/project-store'
 import { Messages } from './Messages'
 import { ChatInput, type ImageAttachment } from './ChatInput'
 import { ErrorMessage } from './ErrorMessage'
 import { isClaudeAuthError } from './ClaudeAuthBanner'
+import type { ConvexIntentMode } from './ConvexIntentBanner'
 import { ProviderAuthModal } from '@/app/components/integrations/ProviderAuthModal'
 import { TaskProgress, type TodoItem } from './TaskProgress'
 import { SuggestionChips } from './SuggestionChips'
@@ -36,6 +38,7 @@ import {
 } from '@/app/lib/integrations/secrets'
 import {
   detectConvexBootstrap,
+  detectConvexBootstrapInTree,
   getConvexEnvVarsForSession,
   getConvexSecretStatusFromSecrets,
   type ConvexIntegrationStage,
@@ -46,6 +49,8 @@ import './styles.css'
 
 const FRONTEND_DESIGN_SKILL_PREFIX =
   'Use the /frontend-design skill for this request. If the project has an established design system, preserve it and adapt within it.'
+const CONVEX_SETUP_PROMPT = 'Use the /convex-setup skill to set up Convex backend integration for this project'
+const CONVEX_AUTH_PROMPT = 'Use the /convex-auth skill to set up Convex Better Auth (email/password) for this project'
 
 function withFrontendDesignSkillPrompt(prompt: string): string {
   if (/\b\/frontend-design\b/i.test(prompt)) {
@@ -145,6 +150,7 @@ export function Chat({
   const [revenuecatProvisioned, setRevenuecatProvisioned] = useState(false)
   const [isStripeSettingUp, setIsStripeSettingUp] = useState(false)
   const [isRevenueCatSettingUp, setIsRevenueCatSettingUp] = useState(false)
+  const [pendingConvexAuthAfterSetup, setPendingConvexAuthAfterSetup] = useState(false)
   const hasStartedInitialStream = useRef(false)
   const hasLoadedSession = useRef(false)
   // Capture the initial session ID at mount time - only this one should be loaded
@@ -166,25 +172,29 @@ export function Chat({
   const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
   const activePendingPromptIdRef = useRef<string | null>(null)
   const files = useStore(workbenchStore.files)
+  const projectFileTree = useStore(projectStore.fileTreeArray)
   const convexSecretStatus = useMemo(
     () => getConvexSecretStatusFromSecrets(projectSecrets, normalizedAppType),
     [projectSecrets, normalizedAppType]
   )
+  const convexBootstrapDetected = useMemo(
+    () => detectConvexBootstrap(files) || detectConvexBootstrapInTree(projectFileTree),
+    [files, projectFileTree]
+  )
 
   const convexStage: ConvexIntegrationStage = useMemo(() => {
-    const convexBootstrapped = detectConvexBootstrap(files)
     if (!convexSecretStatus.isConfigured) return 'disconnected'
-    if (convexBootstrapped) return 'ready'
+    if (convexBootstrapDetected) return 'ready'
     if (convexProvisioned) return 'setting_up'
     return 'connected'
-  }, [convexSecretStatus.isConfigured, files, convexProvisioned])
+  }, [convexSecretStatus.isConfigured, convexBootstrapDetected, convexProvisioned])
 
   // Clear in-progress flag once Convex bootstrap artifacts are present.
   useEffect(() => {
-    if (convexProvisioned && detectConvexBootstrap(files)) {
+    if (convexProvisioned && convexBootstrapDetected) {
       setConvexProvisioned(false)
     }
-  }, [convexProvisioned, files])
+  }, [convexProvisioned, convexBootstrapDetected])
 
   const integrationStatus = useMemo(
     () => ({
@@ -221,6 +231,7 @@ export function Chat({
   const { sessions: allSessions, refresh: refreshSessions } = useSessions(projectId)
   const activeTab = useStore(workbenchStore.activeTab)
   const secretsVersion = useStore(workbenchStore.secretsVersion)
+  const pendingIntegrationChoice = useStore(workbenchStore.pendingIntegrationChoice)
 
   // Debug: Log sessions when they change
   useEffect(() => {
@@ -382,7 +393,7 @@ export function Chat({
     async (id: string) => {
       const prompts: Record<string, string> = {
         stripe: 'Use the /add-stripe skill to set up Stripe payments integration for this project',
-        convex: 'Use the /convex-setup skill to set up Convex backend integration for this project',
+        convex: CONVEX_AUTH_PROMPT,
         revenuecat: 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project',
       }
 
@@ -391,6 +402,12 @@ export function Chat({
       }
       if (id === 'convex') {
         if (!convexSecretStatus.isConfigured) {
+          const requiredConvexKeys = [convexSecretStatus.urlKey, 'CONVEX_DEPLOY_KEY']
+          const secretKeySet = new Set(projectSecrets.map((secret) => secret.key))
+          const missingConvexKeys = requiredConvexKeys.filter((key) => !secretKeySet.has(key))
+          toast.error(
+            `Convex Better Auth setup requires ${requiredConvexKeys.join(' + ')}. Missing: ${missingConvexKeys.join(', ')}`
+          )
           workbenchStore.setActiveTab('settings')
           workbenchStore.setPendingIntegrationConnect({
             integrationId: 'convex',
@@ -403,7 +420,26 @@ export function Chat({
         if (Object.keys(pendingEnvVars).length > 0) {
           workbenchStore.mergePendingEnvVars(pendingEnvVars)
         }
-        setConvexProvisioned(true)
+        setMessages((prev) => {
+          const lastMessage = prev[prev.length - 1]
+          const isDuplicatePrompt =
+            lastMessage?.role === 'assistant' && !!lastMessage.parts?.some((part) => part?.type === 'convex-intent-prompt')
+
+          if (isDuplicatePrompt) {
+            return prev
+          }
+
+          const guidanceMessage: ChatMessage = {
+            id: generateId(),
+            role: 'assistant',
+            content: '',
+            parts: [{ type: 'convex-intent-prompt' } as MessagePart],
+            createdAt: new Date().toISOString(),
+          }
+
+          return [...prev, guidanceMessage]
+        })
+        return
       }
       if (id === 'revenuecat') {
         const revenuecatApiKey = projectSecrets.find((secret) => secret.key === 'REVENUECAT_API_KEY')?.value
@@ -458,6 +494,63 @@ export function Chat({
       }
     },
     [convexSecretStatus, projectSecrets]
+  )
+
+  const enqueuePrompt = useCallback((prompt: string) => {
+    setInput(prompt)
+    setTimeout(() => {
+      submitRef.current?.(prompt)
+    }, 100)
+  }, [])
+
+  const handleConvexIntentSelect = useCallback(
+    (mode: ConvexIntentMode) => {
+      if (!convexSecretStatus.isConfigured) {
+        const requiredConvexKeys = [convexSecretStatus.urlKey, 'CONVEX_DEPLOY_KEY']
+        const secretKeySet = new Set(projectSecrets.map((secret) => secret.key))
+        const missingConvexKeys = requiredConvexKeys.filter((key) => !secretKeySet.has(key))
+        toast.error(
+          `Convex setup requires ${requiredConvexKeys.join(' + ')}. Missing: ${missingConvexKeys.join(', ')}`
+        )
+        workbenchStore.setActiveTab('settings')
+        workbenchStore.setPendingIntegrationConnect({
+          integrationId: 'convex',
+          source: 'chat',
+        })
+        return
+      }
+
+      const pendingEnvVars = getConvexEnvVarsForSession(convexSecretStatus)
+      if (Object.keys(pendingEnvVars).length > 0) {
+        workbenchStore.mergePendingEnvVars(pendingEnvVars)
+      }
+
+      if (mode === 'convex_only') {
+        setPendingConvexAuthAfterSetup(false)
+        setConvexProvisioned(true)
+        enqueuePrompt(CONVEX_SETUP_PROMPT)
+        return
+      }
+
+      if (mode === 'auth_only') {
+        setPendingConvexAuthAfterSetup(false)
+        setConvexProvisioned(true)
+        enqueuePrompt(CONVEX_AUTH_PROMPT)
+        return
+      }
+
+      if (convexBootstrapDetected) {
+        setPendingConvexAuthAfterSetup(false)
+        setConvexProvisioned(true)
+        enqueuePrompt(CONVEX_AUTH_PROMPT)
+        return
+      }
+
+      setPendingConvexAuthAfterSetup(true)
+      setConvexProvisioned(true)
+      enqueuePrompt(CONVEX_SETUP_PROMPT)
+    },
+    [convexSecretStatus, projectSecrets, enqueuePrompt, convexBootstrapDetected]
   )
 
   const waitForRequiredSecrets = useCallback(
@@ -1253,11 +1346,28 @@ export function Chat({
         return
       }
 
+      if (text.includes('/convex-auth') && !convexSecretStatus.isConfigured) {
+        const requiredConvexKeys = [convexSecretStatus.urlKey, 'CONVEX_DEPLOY_KEY']
+        const guidanceText =
+          `Convex Better Auth setup requires ${requiredConvexKeys.join(' + ')} ` +
+          'in Project Settings -> Development Variables.'
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: guidanceText,
+          parts: [{ type: 'text', text: guidanceText }],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
       // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
       if (
         /\bconvex\b/i.test(text) &&
         convexStage === 'disconnected' &&
-        !/\/convex-setup\b/i.test(text)
+        !/\/convex-auth\b/i.test(text)
       ) {
         const guidanceMessage: ChatMessage = {
           id: generateId(),
@@ -1333,6 +1443,7 @@ export function Chat({
       scrollToBottom,
       usableProjectPath,
       convexStage,
+      convexSecretStatus,
       projectHasFirebase,
       firebaseProvisioned,
       hasIntegrationSecrets.firebase,
@@ -1491,6 +1602,84 @@ export function Chat({
   // Watch for pending prompts from external components (e.g., deployment)
   const pendingPromptRequest = useStore(workbenchStore.pendingPrompt)
   useEffect(() => {
+    if (!pendingIntegrationChoice || pendingIntegrationChoice.integrationId !== 'convex') {
+      return
+    }
+
+    setMessages((prev) => {
+      const lastMessage = prev[prev.length - 1]
+      const isDuplicatePrompt =
+        lastMessage?.role === 'assistant' && !!lastMessage.parts?.some((part) => part?.type === 'convex-intent-prompt')
+
+      if (isDuplicatePrompt) {
+        return prev
+      }
+
+      const guidanceMessage: ChatMessage = {
+        id: generateId(),
+        role: 'assistant',
+        content: '',
+        parts: [{ type: 'convex-intent-prompt' } as MessagePart],
+        createdAt: new Date().toISOString(),
+      }
+
+      return [...prev, guidanceMessage]
+    })
+    workbenchStore.clearPendingIntegrationChoice()
+  }, [pendingIntegrationChoice])
+
+  useEffect(() => {
+    if (!pendingConvexAuthAfterSetup) return
+    if (isStreaming) return
+    let cancelled = false
+
+    const triggerConvexAuth = () => {
+      if (cancelled) return
+      setPendingConvexAuthAfterSetup(false)
+      toast.success('Convex setup complete. Starting auth setup...')
+      workbenchStore.triggerChatPrompt(CONVEX_AUTH_PROMPT, { integrationId: 'convex' })
+    }
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+    const waitForConvexBootstrap = async () => {
+      if (convexBootstrapDetected) {
+        triggerConvexAuth()
+        return
+      }
+
+      const deadline = Date.now() + 120_000
+      while (!cancelled && Date.now() < deadline) {
+        try {
+          await projectStore.refreshFileTree()
+        } catch (error) {
+          console.warn('[Chat] Convex bootstrap refresh failed:', error)
+        }
+
+        if (cancelled) return
+
+        const latestFiles = workbenchStore.files.getState()
+        const latestTree = projectStore.fileTreeArray.getState()
+        if (detectConvexBootstrap(latestFiles) || detectConvexBootstrapInTree(latestTree)) {
+          triggerConvexAuth()
+          return
+        }
+
+        await sleep(1000)
+      }
+
+      if (!cancelled) {
+        console.warn('[Chat] Convex bootstrap not detected within fallback window')
+      }
+    }
+
+    waitForConvexBootstrap()
+    return () => {
+      cancelled = true
+    }
+  }, [pendingConvexAuthAfterSetup, isStreaming, convexBootstrapDetected])
+
+  useEffect(() => {
     const pendingPrompt = pendingPromptRequest?.prompt
     console.log('[Chat] pendingPrompt effect fired', {
       hasPendingPrompt: !!pendingPrompt,
@@ -1528,7 +1717,7 @@ export function Chat({
       }
 
       try {
-        if (/\/convex-setup\b/i.test(pendingPrompt)) {
+        if (/\/convex-auth\b/i.test(pendingPrompt) || /\/convex-setup\b/i.test(pendingPrompt)) {
           if (!convexSecretStatus.isConfigured) {
             workbenchStore.setActiveTab('settings')
             workbenchStore.setPendingIntegrationConnect({
@@ -1726,6 +1915,7 @@ export function Chat({
             onAskUserSubmit={handleAskUserSubmit}
             onIntegrationConnect={handleIntegrationConnect}
             onIntegrationUse={handleIntegrationUse}
+            onConvexIntentSelect={handleConvexIntentSelect}
             onClaudeReconnect={handleClaudeReconnect}
             onClaudeAuthError={handleClaudeAuthError}
             convexStage={convexStage}

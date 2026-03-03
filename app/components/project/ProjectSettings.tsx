@@ -164,6 +164,29 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     workbenchStore.clearPendingIntegrationConnect()
   }, [pendingIntegrationConnect, isLoadingSecrets])
 
+  const promptConvexIntentChoice = (convexSecrets: ReturnType<typeof getConvexSecretStatusFromSecrets>) => {
+    if (!convexSecrets.hasUrl) {
+      toast('Add your Convex URL first before running setup.', { icon: 'ℹ️' })
+      return
+    }
+
+    if (!convexSecrets.hasDeployKey) {
+      toast('Convex URL saved. Add CONVEX_DEPLOY_KEY to run setup.', { icon: 'ℹ️' })
+      return
+    }
+
+    if (!detectConvexBootstrap(files)) {
+      workbenchStore.setPendingIntegrationChoice({
+        integrationId: 'convex',
+        source: 'settings',
+      })
+      toast.success('Convex credentials saved. Choose Convex setup mode in chat...')
+      return
+    }
+
+    toast.success('Convex credentials updated.')
+  }
+
   const handleSaveSecret = async (key: string, value: string) => {
     if (!project.id) return
 
@@ -194,16 +217,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       }
 
       const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
-      if (!convexSecrets.hasUrl) {
-        toast('Add your Convex URL first before running setup.', { icon: 'ℹ️' })
-      } else if (!convexSecrets.hasDeployKey) {
-        toast('Convex URL saved. Add CONVEX_DEPLOY_KEY to run setup.', { icon: 'ℹ️' })
-      } else if (!detectConvexBootstrap(files)) {
-        workbenchStore.triggerChatPrompt('Use the /convex-setup skill to set up Convex backend integration for this project')
-        toast.success('Convex credentials saved. Starting Convex setup in chat...')
-      } else {
-        toast.success('Convex credentials updated.')
-      }
+      promptConvexIntentChoice(convexSecrets)
     }
 
     if (key === REVENUECAT_API_KEY && isChanged && nextValue) {
@@ -289,16 +303,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       const nextSecrets = result.secrets || []
       const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
 
-      if (!convexSecrets.hasUrl) {
-        toast('Add your Convex URL first before running setup.', { icon: 'ℹ️' })
-      } else if (!convexSecrets.hasDeployKey) {
-        toast('Convex URL saved. Add CONVEX_DEPLOY_KEY to run setup.', { icon: 'ℹ️' })
-      } else if (!detectConvexBootstrap(files)) {
-        workbenchStore.triggerChatPrompt('Use the /convex-setup skill to set up Convex backend integration for this project')
-        toast.success('Convex credentials saved. Starting Convex setup in chat...')
-      } else {
-        toast.success('Convex credentials updated.')
-      }
+      promptConvexIntentChoice(convexSecrets)
     }
 
     if (activeIntegrationId === 'revenuecat' && successes.length > 0) {
