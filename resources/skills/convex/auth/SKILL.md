@@ -17,16 +17,18 @@ You are a Convex authentication specialist for React Native (Expo) and Next.js a
 7. **NEVER retry failed commands** - If a command fails, report the error and stop. Do NOT run the same command again.
 8. **Check before installing** - Read package.json first. If a dependency is already installed, skip the install step.
 9. **Detect the framework** - Read package.json to determine if this is an Expo (React Native) or Next.js project. Use the correct env var prefix accordingly.
-10. **COPY TEMPLATES EXACTLY** - Do NOT speculate or generate auth code. Copy templates from this skill directory (`resources/skills/convex/auth/templates/...`).
+10. **COPY TEMPLATES EXACTLY** - Do NOT speculate or generate auth code. Copy the templates provided below.
 11. **NO CODE IN CHAT** - NEVER show code snippets in the chat. Just write code directly to files.
 12. **AUTH MEANS SCREENS** - When adding authentication, ALWAYS create sign-up and sign-in screens. Auth is not complete without user-facing screens.
 13. **HOOKS BEFORE RETURNS** - ALL React hooks MUST be called BEFORE any conditional return statements.
-14. **ICON MAPPING SAFETY** - If auth/tabs screens use `IconSymbol` names on Expo web/android, you MUST either use names already mapped in `components/ui/icon-symbol.tsx` or update that mapping in the same change. Never leave unmapped names.
-15. **NON-OAUTH PREREQUISITE CONTRACT** - This flow must work without Convex account OAuth. Require project secrets only:
+14. **NON-OAUTH PREREQUISITE CONTRACT** - This flow must work without Convex account OAuth. Require project secrets only:
    - Web: `NEXT_PUBLIC_CONVEX_URL`
    - Mobile: `EXPO_PUBLIC_CONVEX_URL`
    - Both: `CONVEX_DEPLOY_KEY`
    If missing, STOP immediately with a clear error listing missing keys. Do not proceed to install, generate, or run Convex commands.
+15. **EXPO NAVIGATION SAFETY** - In Expo auth screens, do NOT use `<Link asChild>` around `TouchableOpacity`, `Pressable`, or `Text`. Use `router.push()`/`router.replace()` inside `onPress` handlers instead.
+16. **EXPO ROUTE GROUP SAFETY** - Do NOT add `<Stack.Screen name="(auth)" ... />` in `app/_layout.tsx` unless an `app/(auth)/_layout.tsx` route exists. For plain `app/(auth)/sign-in.tsx` + `sign-up.tsx`, navigate directly by path and keep root stack entries explicit (`index`, `modal`, etc.).
+17. **PROVIDER TAG CONSISTENCY** - When replacing providers in layouts, update import name, opening tag, and closing tag in one atomic edit and verify there are no leftover tags from the old provider.
 
 ## Framework Detection
 
@@ -48,7 +50,6 @@ npx convex dev --once
 ```
 
 Do NOT pass `--configure`, `--team`, or `--project` flags. Do NOT try to log in interactively. If this fails, report the error and stop.
-NEVER fabricate files in `convex/_generated/`.
 
 Create `convex/schema.ts` with the user's data model if it doesn't exist. Do NOT spread `authTables` — Better Auth manages its own schema via the component. Only define the user's own tables:
 
@@ -74,7 +75,7 @@ Check package.json first. Only install what's missing:
 **Expo:**
 ```bash
 npm install convex@latest @convex-dev/better-auth better-auth@1.4.9 @better-auth/expo@1.4.9 --save-exact
-npx expo install expo-secure-store expo-network
+npx expo install expo-secure-store
 ```
 
 **Next.js:**
@@ -131,12 +132,7 @@ Copy [templates/convex/auth.config.ts](templates/convex/auth.config.ts) to `conv
 
 ## Step 7: Create Auth Functions
 
-Use the framework-specific template:
-
-- **Expo**: Copy [templates/convex/auth.expo.ts](templates/convex/auth.expo.ts) to `convex/auth.ts`.
-- **Next.js**: Copy [templates/convex/auth.next.ts](templates/convex/auth.next.ts) to `convex/auth.ts`.
-
-Do not mix templates across frameworks.
+Copy [templates/convex/auth.ts](templates/convex/auth.ts) to `convex/auth.ts`.
 
 ## Step 8: Create HTTP Router
 
@@ -158,13 +154,12 @@ After pushing, use the `restart_dev_server` tool to restart the dev server so it
 
 Copy [templates/lib/auth-client-expo.ts](templates/lib/auth-client-expo.ts) to `lib/auth-client.ts` (or `src/lib/auth-client.ts` depending on project structure). Update the `scheme` to match the app's URL scheme from `app.json`.
 
-Important: `expoClient` MUST be imported from `@better-auth/expo/client` (not `@better-auth/expo`).
-
 ### Step 11: Set Up the Provider
 
 Copy [templates/providers/ConvexAuthProvider-expo.tsx](templates/providers/ConvexAuthProvider-expo.tsx) to `providers/ConvexAuthProvider.tsx`.
 
 Then wrap the app with `<ConvexProvider>` in `app/_layout.tsx` or the root component. Replace any existing `ConvexProvider` or `ConvexClientProvider`.
+Make this provider replacement in one edit so opening/closing tags and imports stay consistent.
 
 ### Step 12: Create Auth Screens (REQUIRED)
 
@@ -188,7 +183,8 @@ authClient.signOut();
 const { data: session } = authClient.useSession();
 ```
 
-After successful sign-up, the user must be signed in automatically and can navigate with `router.replace("/")`.
+After successful auth, use `router.replace("/")` to navigate.
+For Expo route transitions between auth screens, use `TouchableOpacity`/`Pressable` `onPress={() => router.push("/(auth)/...")}` and avoid `Link asChild`.
 
 ### Step 13: Create Query and Mutation Functions
 
@@ -197,7 +193,14 @@ Create Convex functions in the `convex/` directory. Use `authComponent.getAuthUs
 ### Step 14: Update Existing Components
 
 Replace any local storage usage (AsyncStorage, etc.) with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`. Use `Authenticated`, `Unauthenticated`, and `AuthLoading` from `convex/react` to gate UI on auth state.
-Before finishing, verify there are no unmapped `IconSymbol` names in auth/tabs/modal screens that would crash web/android fallback rendering.
+
+### Step 15: Validate Expo Auth Integration (Required for Expo)
+
+Before finishing Expo auth setup, verify:
+
+1. `app/_layout.tsx` has matching provider tags (no mixed `<ConvexProvider>` with `</ConvexClientProvider>`).
+2. No `<Link asChild>` wrappers are used for auth navigation in `app/index.tsx`, `app/(auth)/sign-in.tsx`, and `app/(auth)/sign-up.tsx`.
+3. `app/_layout.tsx` does not include `<Stack.Screen name="(auth)" ... />` unless `app/(auth)/_layout.tsx` exists.
 
 ---
 
@@ -395,21 +398,17 @@ function ItemList() {
 
 ## Required Secrets
 
-This skill requires existing project secrets before running:
-- Convex URL under the framework key (`EXPO_PUBLIC_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL`)
-- `CONVEX_DEPLOY_KEY`
-
-If either is missing, stop and report that auth setup cannot proceed yet.
+The Convex URL and deploy key are configured automatically by the IDE when the user connects Convex. The URL is stored under the framework-appropriate key (`EXPO_PUBLIC_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL`), and `CONVEX_DEPLOY_KEY` is always available.
 
 The `BETTER_AUTH_SECRET` and `SITE_URL` environment variables are pre-provisioned by the IDE on the Convex deployment when the project is created. They can also be set manually via `npx convex env set` if missing.
 
 For **production** deployments, `BETTER_AUTH_SECRET` and `SITE_URL` are set automatically by the bfloat deployment pipeline via the Convex Deployment API when the user deploys their app. The agent does NOT need to handle production auth env vars.
 
-Do NOT assume those secrets exist in all projects. Validate them before running Convex commands.
+Do NOT tell users to set secrets manually — they are managed through the IDE and Convex CLI.
 
 ## After Integration
 
-Tell the user: "Convex is connected with email/password authentication via Better Auth."
+Tell the user: "Convex is connected with email/password authentication via Better Auth. Your Convex URL and auth keys have been configured automatically."
 
 Do NOT tell users to:
 - Edit `.env` files
@@ -467,9 +466,6 @@ Note: Expo apps run natively and DO need `baseURL` since they connect directly t
 - ✅ Correct: `plugins: [convex({ authConfig })]`
 
 Note: Expo apps DO need `crossDomainClient()` on the client and the corresponding `crossDomain()` server plugin since the app and Convex are on different domains.
-Treat this as a paired requirement:
-- Expo client has `crossDomainClient()` -> Expo server must include `crossDomain({ siteUrl: process.env.SITE_URL! })`
-- Next.js client has no `crossDomainClient()` -> Next.js server must not include `crossDomain(...)`
 
 ### Expo-Specific: Deep Linking
 
@@ -482,11 +478,7 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
     database: authComponent.adapter(ctx),
     emailAndPassword: { enabled: true, requireEmailVerification: false },
     trustedOrigins: ["*"],
-    plugins: [
-      expo(),
-      crossDomain({ siteUrl: process.env.SITE_URL! }),
-      convex({ authConfig }),
-    ],
+    plugins: [convex({ authConfig })],
   });
 };
 ```
