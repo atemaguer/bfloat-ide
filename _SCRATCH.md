@@ -377,3 +377,38 @@
 ### Verification
 - `bun test packages/sidecar/src/services/agent-session.test.ts`
 - `git diff` review for scoped changes only.
+
+## TASK PLAN: 2026-03-03_009_convex-auth
+
+ASSUMPTIONS:
+1. The intended Convex + Auth flow should auto-trigger `/convex-auth` only after Convex bootstrap artifacts exist.
+2. `projectFiles.onFileChange` is currently not reliable (bridge stub), so detection cannot depend only on `workbenchStore.files` being live-updated.
+3. A bounded polling fallback (refreshing project tree for a short window) is acceptable to unblock this flow without implementing full realtime subscriptions in this task.
+→ Proceeding with these.
+
+Files to modify:
+- `app/lib/integrations/convex.ts`
+- `app/components/chat/Chat.tsx`
+
+Order of operations:
+1. Extend Convex bootstrap detection utilities so bootstrap can be detected from file paths/tree, not only loaded file contents.
+2. Update chat Convex state/flow to use the stronger bootstrap signal (files + file tree).
+3. Add a bounded fallback loop for pending Convex+Auth: when setup stream ends, force tree refresh checks until bootstrap is detected, then queue `/convex-auth`.
+4. Verify formatting/type-safety with lint and focused checks.
+
+Approach chosen:
+- Keep existing UX/state machine and add robust detection + refresh fallback in-place.
+
+Alternatives rejected:
+- Implementing full `projectFiles.onFileChange` SSE subscriptions in this task (larger scope and sidecar/bridge protocol work).
+- Triggering `/convex-auth` unconditionally after setup (could run auth before Convex is actually wired).
+
+Risk areas:
+- Duplicate auto-trigger of `/convex-auth`.
+- Polling loop leaking after unmount or state change.
+- Regressing existing `convex_only`/`auth_only` flows.
+
+Verification:
+- Run ESLint on changed files.
+- Validate TypeScript compile (`tsc --noEmit`) for impacted code.
+- Inspect diff to ensure only scoped changes.

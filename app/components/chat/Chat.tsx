@@ -16,6 +16,7 @@ import { useSessions, useSaveSession, useDeleteSession, useUpdateSession } from 
 import { getSystemPrompt } from '@/lib/launch/system-prompt'
 import { aiAgent, projectFiles, secrets } from '@/app/api/sidecar'
 import type { ProviderId, SessionMessageData } from '@/lib/conveyor/schemas/ai-agent-schema'
+import { projectStore } from '@/app/stores/project-store'
 import { Messages } from './Messages'
 import { ChatInput, type ImageAttachment } from './ChatInput'
 import { ErrorMessage } from './ErrorMessage'
@@ -37,6 +38,7 @@ import {
 } from '@/app/lib/integrations/secrets'
 import {
   detectConvexBootstrap,
+  detectConvexBootstrapInTree,
   getConvexEnvVarsForSession,
   getConvexSecretStatusFromSecrets,
   type ConvexIntegrationStage,
@@ -170,25 +172,29 @@ export function Chat({
   const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
   const activePendingPromptIdRef = useRef<string | null>(null)
   const files = useStore(workbenchStore.files)
+  const projectFileTree = useStore(projectStore.fileTreeArray)
   const convexSecretStatus = useMemo(
     () => getConvexSecretStatusFromSecrets(projectSecrets, normalizedAppType),
     [projectSecrets, normalizedAppType]
   )
+  const convexBootstrapDetected = useMemo(
+    () => detectConvexBootstrap(files) || detectConvexBootstrapInTree(projectFileTree),
+    [files, projectFileTree]
+  )
 
   const convexStage: ConvexIntegrationStage = useMemo(() => {
-    const convexBootstrapped = detectConvexBootstrap(files)
     if (!convexSecretStatus.isConfigured) return 'disconnected'
-    if (convexBootstrapped) return 'ready'
+    if (convexBootstrapDetected) return 'ready'
     if (convexProvisioned) return 'setting_up'
     return 'connected'
-  }, [convexSecretStatus.isConfigured, files, convexProvisioned])
+  }, [convexSecretStatus.isConfigured, convexBootstrapDetected, convexProvisioned])
 
   // Clear in-progress flag once Convex bootstrap artifacts are present.
   useEffect(() => {
-    if (convexProvisioned && detectConvexBootstrap(files)) {
+    if (convexProvisioned && convexBootstrapDetected) {
       setConvexProvisioned(false)
     }
-  }, [convexProvisioned, files])
+  }, [convexProvisioned, convexBootstrapDetected])
 
   const integrationStatus = useMemo(
     () => ({
@@ -533,7 +539,7 @@ export function Chat({
         return
       }
 
-      if (detectConvexBootstrap(files)) {
+      if (convexBootstrapDetected) {
         setPendingConvexAuthAfterSetup(false)
         setConvexProvisioned(true)
         enqueuePrompt(CONVEX_AUTH_PROMPT)
@@ -544,7 +550,7 @@ export function Chat({
       setConvexProvisioned(true)
       enqueuePrompt(CONVEX_SETUP_PROMPT)
     },
-    [convexSecretStatus, projectSecrets, enqueuePrompt, files]
+    [convexSecretStatus, projectSecrets, enqueuePrompt, convexBootstrapDetected]
   )
 
   const waitForRequiredSecrets = useCallback(
@@ -1624,13 +1630,54 @@ export function Chat({
 
   useEffect(() => {
     if (!pendingConvexAuthAfterSetup) return
-    if (!detectConvexBootstrap(files)) return
     if (isStreaming) return
+    let cancelled = false
 
-    setPendingConvexAuthAfterSetup(false)
-    toast.success('Convex setup complete. Starting auth setup...')
-    workbenchStore.triggerChatPrompt(CONVEX_AUTH_PROMPT, { integrationId: 'convex' })
-  }, [pendingConvexAuthAfterSetup, files, isStreaming])
+    const triggerConvexAuth = () => {
+      if (cancelled) return
+      setPendingConvexAuthAfterSetup(false)
+      toast.success('Convex setup complete. Starting auth setup...')
+      workbenchStore.triggerChatPrompt(CONVEX_AUTH_PROMPT, { integrationId: 'convex' })
+    }
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+    const waitForConvexBootstrap = async () => {
+      if (convexBootstrapDetected) {
+        triggerConvexAuth()
+        return
+      }
+
+      const deadline = Date.now() + 120_000
+      while (!cancelled && Date.now() < deadline) {
+        try {
+          await projectStore.refreshFileTree()
+        } catch (error) {
+          console.warn('[Chat] Convex bootstrap refresh failed:', error)
+        }
+
+        if (cancelled) return
+
+        const latestFiles = workbenchStore.files.getState()
+        const latestTree = projectStore.fileTreeArray.getState()
+        if (detectConvexBootstrap(latestFiles) || detectConvexBootstrapInTree(latestTree)) {
+          triggerConvexAuth()
+          return
+        }
+
+        await sleep(1000)
+      }
+
+      if (!cancelled) {
+        console.warn('[Chat] Convex bootstrap not detected within fallback window')
+      }
+    }
+
+    waitForConvexBootstrap()
+    return () => {
+      cancelled = true
+    }
+  }, [pendingConvexAuthAfterSetup, isStreaming, convexBootstrapDetected])
 
   useEffect(() => {
     const pendingPrompt = pendingPromptRequest?.prompt
