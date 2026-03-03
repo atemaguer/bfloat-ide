@@ -242,17 +242,32 @@ export async function GET() {
   return Response.json(plans)
 }
 
-// In checkout (e.g., app/api/checkout/route.ts):
+// In checkout (e.g., app/api/checkout/route.ts inside POST(request: NextRequest)):
 import { getStripe, connectAccountOptions } from '@/lib/stripe'
+import { NextRequest } from 'next/server'
 
+function getBaseUrl(request: NextRequest): string {
+  const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim()
+  if (!raw) return new URL(request.url).origin
+  try {
+    const parsed = new URL(raw)
+    return parsed.origin
+  } catch {
+    throw new Error(
+      'NEXT_PUBLIC_SITE_URL must be an absolute URL with scheme (e.g. https://app.example.com)'
+    )
+  }
+}
+
+const baseUrl = getBaseUrl(request)
 const stripe = getStripe()
 const session = await stripe.checkout.sessions.create(
   {
     line_items: [{ price: body.priceId, quantity: 1 }],
     // priceId comes from the client, which got it from getActivePlans()
     mode: 'subscription',
-    success_url: `${process.env.NEXT_PUBLIC_SITE_URL}/success`,
-    cancel_url: `${process.env.NEXT_PUBLIC_SITE_URL}/pricing`,
+    success_url: new URL('/success', baseUrl).toString(),
+    cancel_url: new URL('/pricing', baseUrl).toString(),
   },
   connectAccountOptions(),
 )
