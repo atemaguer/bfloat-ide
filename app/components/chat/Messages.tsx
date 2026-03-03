@@ -14,6 +14,7 @@ import type { ConvexIntegrationStage } from '@/app/lib/integrations/convex'
 import { workbenchStore } from '@/app/stores/workbench'
 import { AssistantMessage } from './AssistantMessage'
 import { UserMessage } from './UserMessage'
+import type { ConvexIntentMode } from './ConvexIntentBanner'
 
 interface MessagesProps {
   messages: ChatMessage[]
@@ -21,6 +22,7 @@ interface MessagesProps {
   onAskUserSubmit?: (toolCallId: string, answers: Record<string, string>) => void
   onIntegrationConnect?: (id: string) => void
   onIntegrationUse?: (id: string) => void
+  onConvexIntentSelect?: (mode: ConvexIntentMode) => void
   onClaudeReconnect?: () => void
   onClaudeAuthError?: () => void
   convexStage?: ConvexIntegrationStage
@@ -59,6 +61,7 @@ export const Messages = memo(function Messages({
   onAskUserSubmit,
   onIntegrationConnect,
   onIntegrationUse,
+  onConvexIntentSelect,
   onClaudeReconnect,
   onClaudeAuthError,
   convexStage,
@@ -200,6 +203,7 @@ export const Messages = memo(function Messages({
                 onAskUserSubmit={onAskUserSubmit}
                 onIntegrationConnect={onIntegrationConnect}
                 onIntegrationUse={onIntegrationUse}
+                onConvexIntentSelect={onConvexIntentSelect}
                   onClaudeReconnect={onClaudeReconnect}
                   onClaudeAuthError={onClaudeAuthError}
                   convexStage={convexStage}
