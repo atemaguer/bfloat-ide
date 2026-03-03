@@ -253,16 +253,22 @@ describe("agent-session resume persistence", () => {
     const sessionId = created.sessionId;
     const send = sendMessage(sessionId, "Install expo-av");
     expect(send.success).toBe(true);
-    await waitForSessionStatus(sessionId, "error");
+    await waitForSessionStatus(sessionId, "completed");
 
     const session = getSession(sessionId);
-    expect(session?.status).toBe("error");
+    expect(session?.status).toBe("completed");
 
     const replay = getBackgroundMessages(sessionId);
     expect(replay.success).toBe(true);
-    const errorFrame = replay.messages.find((f) => f.type === "error");
-    const payload = (errorFrame?.payload ?? {}) as { code?: string };
-    expect(payload.code).toBe("deprecated_package_blocked");
+
+    const toolResultFrame = replay.messages.find((f) => f.type === "tool_result");
+    expect(toolResultFrame).toBeDefined();
+    const toolPayload = (toolResultFrame?.payload ?? {}) as { isError?: boolean; output?: string };
+    expect(toolPayload.isError).toBe(true);
+    expect(toolPayload.output).toContain("Blocked deprecated package install (expo-av)");
+
+    const doneFrame = replay.messages.find((f) => f.type === "done");
+    expect(doneFrame).toBeDefined();
   });
 });
 

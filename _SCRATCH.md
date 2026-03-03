@@ -343,3 +343,37 @@
 - `bun test packages/sidecar/src/routes/preview-proxy.test.ts`
 - `pnpm --filter ./packages/sidecar build`
 - `git diff` review for hardening scope.
+
+# Task 2026-03-03_007_blocked-package-installs
+
+## Phase 2 Plan
+
+### Files to modify
+- `packages/sidecar/src/services/agent-session.ts`
+- `packages/sidecar/src/services/agent-session.test.ts`
+
+### Order of operations and why
+1. Update deprecated-package block handling in `runStream` so it does not emit a session-level fatal `error` frame.
+2. Emit a synthetic failed tool result (for the blocked Bash tool call) and end the turn cleanly with `done` + `stream_end`.
+3. Keep scaffold and dev-server guards unchanged (they are unrelated to this task scope).
+4. Update tests to assert non-fatal behavior for deprecated package blocks.
+5. Run targeted sidecar tests for `agent-session` and self-review diff.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: treat deprecated package blocking as a tool-level failure, not a session failure.
+- Rejected: removing the block entirely, which would allow banned packages to install.
+- Rejected: broad refactor of guard architecture, which is outside this task scope.
+
+### ASSUMPTIONS
+1. Ending the current turn as completed/interrupted (instead of error) satisfies "not a death sentence" for agent sessions.
+2. A synthetic `tool_result` with `isError: true` will let the chat UI resolve the running tool state instead of appearing abruptly terminated.
+3. It is acceptable for this blocked command to end the current turn while still allowing the next user turn.
+→ Proceeding with these.
+
+### Risk areas
+- If consumers rely specifically on `error` frames for blocked installs, behavior will change.
+- If provider emits additional events after the synthetic blocked result path, early return remains intentional to preserve blocking.
+
+### Verification
+- `bun test packages/sidecar/src/services/agent-session.test.ts`
+- `git diff` review for scoped changes only.
