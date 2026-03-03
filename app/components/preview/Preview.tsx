@@ -100,6 +100,15 @@ function isSameOriginWithHost(url?: string): boolean {
   }
 }
 
+function normalizePath(path: string): string {
+  return path.startsWith('/') ? path : `/${path}`
+}
+
+function buildRouteUrl(baseUrl: string, nextPath: string): string {
+  const base = new URL(baseUrl, window.location.href)
+  return `${base.origin}${normalizePath(nextPath)}`
+}
+
 export function Preview(props: PreviewProps) {
   const webviewRef = useRef<WebviewElement | null>(null)
   const webIframeRef = useRef<HTMLIFrameElement | null>(null) // For Tauri web preview (replaces webview)
@@ -127,16 +136,34 @@ export function Preview(props: PreviewProps) {
   // Only depends on props.previewUrl to avoid missing updates
   useEffect(() => {
     if (props.previewUrl) {
-      // Only update if the base URL actually changed (different port/host)
-      if (!currentUrl || props.previewUrl !== currentUrl) {
-        console.log('[Preview] Setting preview URL:', props.previewUrl)
-        setCurrentUrl(props.previewUrl)
-        setUrlInput(props.previewUrl)
+      let nextUrl = props.previewUrl
+      let shouldUpdate = false
+      try {
+        const incoming = new URL(props.previewUrl)
+        const existing = currentUrl ? new URL(currentUrl) : null
+        const hasOriginChanged = !existing || existing.origin !== incoming.origin
+
+        if (hasOriginChanged) {
+          shouldUpdate = true
+        } else if (!existing) {
+          shouldUpdate = true
+        } else {
+          nextUrl = `${incoming.origin}${existing.pathname}${existing.search}${existing.hash}`
+          shouldUpdate = nextUrl !== currentUrl
+        }
+      } catch {
+        shouldUpdate = !currentUrl || props.previewUrl !== currentUrl
+      }
+
+      if (shouldUpdate) {
+        console.log('[Preview] Setting preview URL:', nextUrl)
+        setCurrentUrl(nextUrl)
+        setUrlInput(nextUrl)
 
         // Register the preview URL with the sidecar for screenshot capture
         const cwd = workbenchStore.projectPath.getState() || ''
         if (cwd) {
-          screenshot.registerPreviewUrl?.(cwd, props.previewUrl)?.catch(() => {
+          screenshot.registerPreviewUrl?.(cwd, nextUrl)?.catch(() => {
             // Non-critical — screenshot registration failure shouldn't block preview
           })
         }
@@ -245,9 +272,9 @@ export function Preview(props: PreviewProps) {
         if (!nextPath) return
 
         try {
-          const base = new URL(currentUrl || props.previewUrl || window.location.href)
-          const normalizedPath = nextPath.startsWith('/') ? nextPath : `/${nextPath}`
-          setUrlInput(`${base.origin}${normalizedPath}`)
+          const nextUrl = buildRouteUrl(currentUrl || props.previewUrl || window.location.href, nextPath)
+          setCurrentUrl(nextUrl)
+          setUrlInput(nextUrl)
         } catch {
           // Ignore malformed route payloads
         }
@@ -294,8 +321,9 @@ export function Preview(props: PreviewProps) {
 
       if (!iframePath) return
 
-      const base = new URL(currentUrl || props.previewUrl || window.location.href)
-      setUrlInput(`${base.origin}${iframePath.startsWith('/') ? iframePath : `/${iframePath}`}`)
+      const nextUrl = buildRouteUrl(currentUrl || props.previewUrl || window.location.href, iframePath)
+      setCurrentUrl(nextUrl)
+      setUrlInput(nextUrl)
     } catch {
       // Ignore cross-origin or malformed URL failures
     }
