@@ -8,7 +8,7 @@ export type IntegrationSecretsPresence = {
   revenuecat: boolean
 }
 
-const CONVEX_SECRET_KEYS = ['CONVEX_URL', 'NEXT_PUBLIC_CONVEX_URL', 'EXPO_PUBLIC_CONVEX_URL', 'CONVEX_DEPLOY_KEY'] as const
+const CONVEX_SECRET_KEYS = ['NEXT_PUBLIC_CONVEX_URL', 'EXPO_PUBLIC_CONVEX_URL', 'CONVEX_DEPLOY_KEY'] as const
 
 export function isConvexSecretKey(key: string): boolean {
   return CONVEX_SECRET_KEYS.includes(key as (typeof CONVEX_SECRET_KEYS)[number])

@@ -38,7 +38,7 @@ function getConvexValuesFromMap(
   appType: ConvexAppType
 ): ConvexSecretStatus {
   const urlKey = getConvexUrlKey(appType)
-  const url = normalizeSecretValue(values[urlKey]) || normalizeSecretValue(values.CONVEX_URL)
+  const url = normalizeSecretValue(values[urlKey])
   const deployKey = normalizeSecretValue(values.CONVEX_DEPLOY_KEY)
   const hasUrl = !!url
   const hasDeployKey = !!deployKey

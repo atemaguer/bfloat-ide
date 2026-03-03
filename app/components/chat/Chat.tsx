@@ -382,7 +382,7 @@ export function Chat({
     async (id: string) => {
       const prompts: Record<string, string> = {
         stripe: 'Use the /add-stripe skill to set up Stripe payments integration for this project',
-        convex: 'Use the /convex-setup skill to set up Convex backend integration for this project',
+        convex: 'Use the /convex-auth skill to set up Convex Better Auth (email/password) for this project',
         revenuecat: 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project',
       }
 
@@ -391,6 +391,12 @@ export function Chat({
       }
       if (id === 'convex') {
         if (!convexSecretStatus.isConfigured) {
+          const requiredConvexKeys = [convexSecretStatus.urlKey, 'CONVEX_DEPLOY_KEY']
+          const secretKeySet = new Set(projectSecrets.map((secret) => secret.key))
+          const missingConvexKeys = requiredConvexKeys.filter((key) => !secretKeySet.has(key))
+          toast.error(
+            `Convex Better Auth setup requires ${requiredConvexKeys.join(' + ')}. Missing: ${missingConvexKeys.join(', ')}`
+          )
           workbenchStore.setActiveTab('settings')
           workbenchStore.setPendingIntegrationConnect({
             integrationId: 'convex',
@@ -1253,11 +1259,28 @@ export function Chat({
         return
       }
 
+      if (text.includes('/convex-auth') && !convexSecretStatus.isConfigured) {
+        const requiredConvexKeys = [convexSecretStatus.urlKey, 'CONVEX_DEPLOY_KEY']
+        const guidanceText =
+          `Convex Better Auth setup requires ${requiredConvexKeys.join(' + ')} ` +
+          'in Project Settings -> Development Variables.'
+        const guidanceMessage: ChatMessage = {
+          id: generateId(),
+          role: 'assistant',
+          content: guidanceText,
+          parts: [{ type: 'text', text: guidanceText }],
+          createdAt: new Date().toISOString(),
+        }
+        setMessages((prev) => [...prev, userMessage, guidanceMessage])
+        setInput('')
+        return
+      }
+
       // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
       if (
         /\bconvex\b/i.test(text) &&
         convexStage === 'disconnected' &&
-        !/\/convex-setup\b/i.test(text)
+        !/\/convex-auth\b/i.test(text)
       ) {
         const guidanceMessage: ChatMessage = {
           id: generateId(),
@@ -1333,6 +1356,7 @@ export function Chat({
       scrollToBottom,
       usableProjectPath,
       convexStage,
+      convexSecretStatus,
       projectHasFirebase,
       firebaseProvisioned,
       hasIntegrationSecrets.firebase,
@@ -1528,7 +1552,7 @@ export function Chat({
       }
 
       try {
-        if (/\/convex-setup\b/i.test(pendingPrompt)) {
+        if (/\/convex-auth\b/i.test(pendingPrompt) || /\/convex-setup\b/i.test(pendingPrompt)) {
           if (!convexSecretStatus.isConfigured) {
             workbenchStore.setActiveTab('settings')
             workbenchStore.setPendingIntegrationConnect({
