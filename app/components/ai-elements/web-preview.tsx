@@ -97,42 +97,60 @@ export const WebPreviewNavigation = ({
 
 export type WebPreviewNavigationButtonProps = ComponentProps<typeof Button> & {
   tooltip?: string;
+  dismissSignal?: number;
 };
 
 export const WebPreviewNavigationButton = ({
   onClick,
   disabled,
   tooltip,
+  dismissSignal,
   children,
   className,
   ...props
-}: WebPreviewNavigationButtonProps) => (
-  <TooltipProvider delayDuration={300}>
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          className={cn(
-            "h-7 w-7 p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0 [&>svg]:text-muted-foreground hover:[&>svg]:text-foreground",
-            disabled && "cursor-not-allowed text-muted-foreground/30 hover:bg-transparent hover:text-muted-foreground/30",
-            className
-          )}
-          disabled={disabled}
-          onClick={onClick}
-          size="sm"
-          variant="ghost"
-          {...props}
-        >
-          {children}
-        </Button>
-      </TooltipTrigger>
-      {tooltip && (
-        <TooltipContent side="bottom">
-          <p>{tooltip}</p>
-        </TooltipContent>
-      )}
-    </Tooltip>
-  </TooltipProvider>
-);
+}: WebPreviewNavigationButtonProps) => {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [dismissSignal]);
+
+  const handleClick: NonNullable<ComponentProps<typeof Button>["onClick"]> = (
+    event
+  ) => {
+    setOpen(false);
+    onClick?.(event);
+  };
+
+  return (
+    <TooltipProvider delayDuration={300}>
+      <Tooltip open={open} onOpenChange={setOpen}>
+        <TooltipTrigger asChild>
+          <Button
+            className={cn(
+              "h-7 w-7 p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0 [&>svg]:text-muted-foreground hover:[&>svg]:text-foreground",
+              disabled &&
+                "cursor-not-allowed text-muted-foreground/30 hover:bg-transparent hover:text-muted-foreground/30",
+              className
+            )}
+            disabled={disabled}
+            onClick={handleClick}
+            size="sm"
+            variant="ghost"
+            {...props}
+          >
+            {children}
+          </Button>
+        </TooltipTrigger>
+        {tooltip && (
+          <TooltipContent side="bottom">
+            <p>{tooltip}</p>
+          </TooltipContent>
+        )}
+      </Tooltip>
+    </TooltipProvider>
+  );
+};
 
 export type WebPreviewUrlProps = ComponentProps<typeof Input>;
 
