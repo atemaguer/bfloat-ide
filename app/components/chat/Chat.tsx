@@ -46,6 +46,7 @@ import {
   type SecretEntry,
 } from '@/app/lib/integrations/convex'
 import toast from 'react-hot-toast'
+import { showErrorToast } from '@/app/components/ui/ErrorToast'
 import './styles.css'
 
 const FRONTEND_DESIGN_SKILL_PREFIX =
@@ -441,7 +442,7 @@ export function Chat({
           const requiredConvexKeys = [convexSecretStatus.urlKey, 'CONVEX_DEPLOY_KEY']
           const secretKeySet = new Set(projectSecrets.map((secret) => secret.key))
           const missingConvexKeys = requiredConvexKeys.filter((key) => !secretKeySet.has(key))
-          toast.error(
+          showErrorToast(
             `Convex Better Auth setup requires ${requiredConvexKeys.join(' + ')}. Missing: ${missingConvexKeys.join(', ')}`
           )
           workbenchStore.setActiveTab('settings')
@@ -545,7 +546,7 @@ export function Chat({
         const requiredConvexKeys = [convexSecretStatus.urlKey, 'CONVEX_DEPLOY_KEY']
         const secretKeySet = new Set(projectSecrets.map((secret) => secret.key))
         const missingConvexKeys = requiredConvexKeys.filter((key) => !secretKeySet.has(key))
-        toast.error(
+        showErrorToast(
           `Convex setup requires ${requiredConvexKeys.join(' + ')}. Missing: ${missingConvexKeys.join(', ')}`
         )
         workbenchStore.setActiveTab('settings')
@@ -896,7 +897,7 @@ export function Chat({
           textContent?.includes('image.source.base64')
         ) {
           console.warn('[Chat] Detected poisoned conversation history (empty screenshot base64) in message stream')
-          toast.error('Screenshot issue detected. Starting a fresh session.', { id: 'agent-error' })
+          showErrorToast('Screenshot issue detected. Starting a fresh session.', { id: 'agent-error' })
           localAgent.terminate()
           setMessages((prev) => [
             ...prev,
@@ -1093,7 +1094,7 @@ export function Chat({
         err.includes('image.source.base64')
       ) {
         console.warn('[Chat] Detected poisoned conversation history — terminating session')
-        toast.error('Screenshot data corrupted the conversation. Starting a fresh session.', { id: 'agent-error' })
+        showErrorToast('Screenshot data corrupted the conversation. Starting a fresh session.', { id: 'agent-error' })
         localAgent.terminate()
         setMessages((prev) => [
           ...prev,
@@ -1112,7 +1113,7 @@ export function Chat({
 
       setError(err)
       setIsStreaming(false)
-      toast.error(err, { id: 'agent-error' })
+      showErrorToast(err, { id: 'agent-error' })
 
       // If this is a Claude auth error, mark Claude as not authenticated
       if (isClaudeAuthError(err)) {
@@ -1248,7 +1249,7 @@ export function Chat({
           const errorMsg = err instanceof Error ? err.message : 'Failed to start stream'
           setError(errorMsg)
           setIsStreaming(false)
-          toast.error(errorMsg, { id: 'stream-error' })
+          showErrorToast(errorMsg, { id: 'stream-error' })
         }
       }
       startInitialStream()
@@ -1486,7 +1487,7 @@ export function Chat({
         setError(errorMsg)
         setIsStreaming(false)
         setIsRevenueCatSettingUp(false)
-        toast.error(errorMsg, { id: 'agent-error' })
+        showErrorToast(errorMsg, { id: 'agent-error' })
       }
 
       setInput('')
@@ -1816,7 +1817,7 @@ export function Chat({
 
           if (!resolvedSecrets) {
             const requiredKeysText = pendingPromptRequest.requiredSecretKeys.join(', ')
-            toast.error(`Setup paused: required secret(s) not readable in time (${requiredKeysText}).`)
+            showErrorToast(`Setup paused: required secret(s) not readable in time (${requiredKeysText}).`)
             return
           }
 
