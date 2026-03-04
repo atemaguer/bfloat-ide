@@ -109,6 +109,15 @@ function buildRouteUrl(baseUrl: string, nextPath: string): string {
   return `${base.origin}${normalizePath(nextPath)}`
 }
 
+function isHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export function Preview(props: PreviewProps) {
   const webviewRef = useRef<WebviewElement | null>(null)
   const webIframeRef = useRef<HTMLIFrameElement | null>(null) // For Tauri web preview (replaces webview)
@@ -131,6 +140,22 @@ export function Preview(props: PreviewProps) {
   const [mobileLayoutHeight, setMobileLayoutHeight] = useState(0)
   const [expandedSection, setExpandedSection] = useState<'simulator' | 'qr' | null>(null)
   const isWebApp = useIsWebApp()
+
+  const openExternalUrl = useCallback((targetUrl: string) => {
+    const url = targetUrl.trim()
+    if (!isHttpUrl(url)) return
+
+    const bridgeOpen = (window as any).conveyor?.window?.webOpenUrl as ((target: string) => Promise<void>) | undefined
+    if (bridgeOpen) {
+      bridgeOpen(url).catch((err: unknown) => {
+        console.warn('[Preview] Failed to open external URL via bridge:', err)
+        window.open(url, '_blank', 'noopener,noreferrer')
+      })
+      return
+    }
+
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }, [])
 
   // Update URL when auto-detected from terminal or set programmatically
   // Only depends on props.previewUrl to avoid missing updates
@@ -291,23 +316,12 @@ export function Preview(props: PreviewProps) {
       if (event.data?.type === 'bfloat-preview-open-external') {
         const url = typeof event.data?.url === 'string' ? event.data.url.trim() : ''
         if (!url) return
-        if (!/^https?:\/\//i.test(url)) return
-
-        const bridgeOpen = (window as any).conveyor?.window?.webOpenUrl as ((target: string) => Promise<void>) | undefined
-        if (bridgeOpen) {
-          bridgeOpen(url).catch((err: unknown) => {
-            console.warn('[Preview] Failed to open external URL via bridge:', err)
-            window.open(url, '_blank', 'noopener,noreferrer')
-          })
-          return
-        }
-
-        window.open(url, '_blank', 'noopener,noreferrer')
+        openExternalUrl(url)
       }
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [isWebApp, currentUrl, props.previewUrl, props.onError])
+  }, [isWebApp, currentUrl, openExternalUrl, props.previewUrl, props.onError])
 
   const handleWebIframeLoad = useCallback(() => {
     setIsLoading(false)
@@ -436,9 +450,9 @@ export function Preview(props: PreviewProps) {
 
   const handleOpenExternal = useCallback(() => {
     if (currentUrl) {
-      window.open(currentUrl, '_blank')
+      openExternalUrl(currentUrl)
     }
-  }, [currentUrl])
+  }, [currentUrl, openExternalUrl])
 
   // Iframe handlers for mobile preview
   const cleanupMobilePreviewGuard = useCallback(() => {
