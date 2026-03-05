@@ -1284,9 +1284,16 @@ async function runStream(sessionId: string, message: string): Promise<void> {
           "Preserve existing design system tokens/components and adapt in place.",
         ].join("\n");
 
+    const verificationDirective = [
+      "## Verification Before Completion",
+      "If you changed runtime/app behavior (UI, routes, build/dev-server behavior, integrations, API effects), run workbench.verify_app_state before claiming the task is complete.",
+      "In your final completion message, include verification evidence: checkedAt timestamp, screenshot confirmation, and recent log findings.",
+      "If verification fails, do not claim completion. Report the failure reason and your next corrective action.",
+    ].join("\n");
+
     const mergedSystemPrompt = session.options.systemPrompt
-      ? `${session.options.systemPrompt}\n\n${designModeDirective}`
-      : designModeDirective;
+      ? `${session.options.systemPrompt}\n\n${designModeDirective}\n\n${verificationDirective}`
+      : `${designModeDirective}\n\n${verificationDirective}`;
 
     const streamOptions = {
       ...session.options,

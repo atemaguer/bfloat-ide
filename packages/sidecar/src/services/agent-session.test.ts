@@ -166,6 +166,37 @@ class CaptureMcpServersProvider implements AgentProvider {
   }
 }
 
+class CaptureSystemPromptProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Capture System Prompt Provider";
+  readonly seenSystemPrompts: Array<string | undefined> = [];
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    this.seenSystemPrompts.push(options.systemPrompt);
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-system-prompt",
+      model: "stub-model",
+      availableTools: [],
+    };
+    yield {
+      kind: "done",
+      interrupted: false,
+    };
+  }
+}
+
 async function waitForSessionStatus(
   sessionId: string,
   targetStatus: "completed" | "error",
@@ -400,5 +431,27 @@ describe("agent-session auto MCP server wiring", () => {
     const mcpServers = provider.seenMcpServers[0] || {};
     expect(mcpServers.stripe).toBeDefined();
     expect(mcpServers.revenuecat).toBeDefined();
+  });
+});
+
+describe("agent-session completion verification policy", () => {
+  it("injects verification directive into system prompt", async () => {
+    const provider = new CaptureSystemPromptProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "test");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "completed");
+
+    expect(provider.seenSystemPrompts).toHaveLength(1);
+    const prompt = provider.seenSystemPrompts[0] || "";
+    expect(prompt).toContain("Verification Before Completion");
+    expect(prompt).toContain("workbench.verify_app_state");
   });
 });
