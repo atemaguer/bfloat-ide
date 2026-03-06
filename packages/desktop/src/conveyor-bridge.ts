@@ -844,6 +844,27 @@ export const filesystemBridge = {
 // multiple subscribers.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _agentStreams = new Map<string, { ws: any; callbacks: Set<(msg: any) => void> }>()
+const _agentToolCalls = new Map<string, Map<string, string>>()
+
+function _normalizeToolName(raw: unknown): string {
+  if (typeof raw !== "string") return ""
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+}
+
+function _isWorkbenchRestartToolName(raw: unknown): boolean {
+  const normalizedToolName = _normalizeToolName(raw)
+  if (!normalizedToolName) return false
+
+  const isRestartAlias =
+    normalizedToolName === "restart_app" ||
+    normalizedToolName.endsWith("_restart_app")
+  const isWorkbenchScoped = normalizedToolName.includes("workbench")
+
+  return normalizedToolName === "restart_app" || (isWorkbenchScoped && isRestartAlias)
+}
 
 /**
  * Translate a sidecar AgentFrame into the AgentMessage shape expected by
@@ -1022,25 +1043,37 @@ export const aiAgentBridge = {
         //   { type, content, metadata?: { seq, timestamp, tokens, cost } }
         // Translate here so the rest of the app works unchanged.
         const translated = _translateAgentFrame(msg, sessionId)
+        const translatedType = (translated as { type?: string }).type
+
+        // Track tool_call ids so tool_result frames without name can still be resolved.
+        if (translatedType === "tool_call") {
+          const toolCallPayload = (translated as { content?: unknown }).content as
+            | { id?: unknown; name?: unknown }
+            | undefined
+          const callId = typeof toolCallPayload?.id === "string" ? toolCallPayload.id : ""
+          const toolName = _normalizeToolName(toolCallPayload?.name)
+          if (callId && toolName) {
+            const callMap = _agentToolCalls.get(sessionId) ?? new Map<string, string>()
+            callMap.set(callId, toolName)
+            _agentToolCalls.set(sessionId, callMap)
+          }
+        }
 
         // Bridge successful workbench restart tool results to restart listeners.
-        if ((translated as { type?: string }).type === "tool_result") {
+        if (translatedType === "tool_result") {
           const resultPayload = (translated as { content?: unknown }).content as
-            | { name?: unknown; isError?: unknown }
+            | { callId?: unknown; name?: unknown; isError?: unknown }
             | undefined
-          const toolNameRaw = resultPayload?.name
-          const toolName = typeof toolNameRaw === "string" ? toolNameRaw.toLowerCase() : ""
-          const normalizedToolName = toolName
-            .replace(/[^a-z0-9]+/g, "_")
-            .replace(/^_+|_+$/g, "")
+          const callId = typeof resultPayload?.callId === "string" ? resultPayload.callId : ""
+          const callMap = _agentToolCalls.get(sessionId)
+          const toolNameRaw =
+            typeof resultPayload?.name === "string" && resultPayload.name.length > 0
+              ? resultPayload.name
+              : callId
+                ? callMap?.get(callId)
+                : undefined
           const isError = resultPayload?.isError === true
-          const isRestartAlias =
-            normalizedToolName === "restart_app" ||
-            normalizedToolName.endsWith("_restart_app")
-          const isWorkbenchScoped = normalizedToolName.includes("workbench")
-          const isWorkbenchRestartTool =
-            normalizedToolName === "restart_app" ||
-            (isWorkbenchScoped && isRestartAlias)
+          const isWorkbenchRestartTool = _isWorkbenchRestartToolName(toolNameRaw)
 
           if (isWorkbenchRestartTool && !isError) {
             for (const listener of _restartDevServerListeners) {
@@ -1050,6 +1083,11 @@ export const aiAgentBridge = {
                 console.warn("[conveyor-bridge] restart listener error:", err)
               }
             }
+          }
+
+          if (callId && callMap) {
+            callMap.delete(callId)
+            if (callMap.size === 0) _agentToolCalls.delete(sessionId)
           }
         }
 
@@ -1065,13 +1103,15 @@ export const aiAgentBridge = {
         }
 
         // Clean up when the stream ends
-        if ((translated as { type?: string }).type === "stream_end") {
+        if (translatedType === "stream_end") {
+          _agentToolCalls.delete(sessionId)
           _agentStreams.delete(sessionId)
         }
       })
 
       ws.on("error", (err: unknown) => {
         console.warn(`[conveyor-bridge] agent stream error (${sessionId}):`, err)
+        _agentToolCalls.delete(sessionId)
         _agentStreams.delete(sessionId)
       })
 
@@ -1086,6 +1126,7 @@ export const aiAgentBridge = {
       e.callbacks.delete(callback)
       if (e.callbacks.size === 0) {
         e.ws.close()
+        _agentToolCalls.delete(sessionId)
         _agentStreams.delete(sessionId)
       }
     }
