@@ -73,6 +73,63 @@ export function createWorkbenchMcpServer(options: WorkbenchMcpOptions) {
         }
       ),
       tool(
+        "get_app_logs",
+        "Get recent redacted terminal logs from the active dev-server terminal for this project.",
+        {
+          require_logs: z
+            .boolean()
+            .optional()
+            .default(true)
+            .describe("Fail the tool call if logs cannot be collected."),
+          log_max_chars: z
+            .number()
+            .int()
+            .min(200)
+            .max(20_000)
+            .optional()
+            .default(6_000)
+            .describe("Maximum number of terminal log characters to return."),
+        },
+        async (args) => {
+          const checkedAt = new Date().toISOString();
+          const runtime = getRuntimeState(options.cwd);
+          const logPayload = getRedactedTerminalTail(options.cwd, args.log_max_chars);
+
+          const payload = {
+            cwd: options.cwd,
+            checkedAt,
+            terminalId: logPayload.terminalId ?? null,
+            source: logPayload.source,
+            warning: logPayload.warning ?? null,
+            chars: logPayload.logChars ?? 0,
+            redactionCount: logPayload.redactionCount ?? 0,
+            text: logPayload.logText ?? "",
+            runtime: runtime ?? null,
+          };
+
+          if (args.require_logs && !logPayload.logText) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify(payload, null, 2),
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify(payload, null, 2),
+              },
+            ],
+          };
+        }
+      ),
+      tool(
         "verify_app_state",
         "Capture one-shot app verification evidence: managed runtime status, recent redacted terminal logs, and a fresh preview screenshot.",
         {

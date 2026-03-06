@@ -453,5 +453,6 @@ describe("agent-session completion verification policy", () => {
     const prompt = provider.seenSystemPrompts[0] || "";
     expect(prompt).toContain("Verification Before Completion");
     expect(prompt).toContain("workbench.verify_app_state");
+    expect(prompt).toContain("workbench.get_app_logs");
   });
 });
