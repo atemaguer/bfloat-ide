@@ -197,6 +197,106 @@ class CaptureSystemPromptProvider implements AgentProvider {
   }
 }
 
+class MutatingWithoutVerificationProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Mutating Without Verification Provider";
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-no-verify",
+      model: "stub-model",
+      availableTools: [],
+    };
+
+    yield {
+      kind: "tool_call",
+      callId: "bash-1",
+      name: "Bash",
+      input: { command: "npm install left-pad" },
+      status: "running",
+    };
+
+    yield {
+      kind: "done",
+      interrupted: false,
+    };
+  }
+}
+
+class MutatingWithSuccessfulVerificationProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Mutating With Successful Verification Provider";
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-with-verify",
+      model: "stub-model",
+      availableTools: [],
+    };
+
+    yield {
+      kind: "tool_call",
+      callId: "write-1",
+      name: "Write",
+      input: { file_path: "app.ts", content: "export {};" },
+      status: "running",
+    };
+
+    yield {
+      kind: "tool_call",
+      callId: "verify-1",
+      name: "workbench.verify_app_state",
+      input: { include_logs: true, include_screenshot: true },
+      status: "running",
+    };
+
+    yield {
+      kind: "tool_result",
+      callId: "verify-1",
+      name: "workbench.verify_app_state",
+      output: JSON.stringify({
+        checkedAt: "2026-03-06T10:00:00.000Z",
+        status: "ok",
+        evidence: {
+          logs: { text: "ready", chars: 5 },
+          screenshot: { success: true },
+        },
+        failures: [],
+      }),
+      isError: false,
+    };
+
+    yield {
+      kind: "done",
+      interrupted: false,
+    };
+  }
+}
+
 async function waitForSessionStatus(
   sessionId: string,
   targetStatus: "completed" | "error",
@@ -453,7 +553,56 @@ describe("agent-session completion verification policy", () => {
     const prompt = provider.seenSystemPrompts[0] || "";
     expect(prompt).toContain("Verification Before Completion");
     expect(prompt).toContain("workbench.verify_app_state");
+    expect(prompt).toContain("completion gate");
     expect(prompt).toContain("workbench.get_app_logs");
     expect(prompt).toContain("workbench.get_terminal_output");
+  });
+
+  it("blocks completion when mutating actions lack successful verification evidence", async () => {
+    const provider = new MutatingWithoutVerificationProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      projectId: "test-project-gate-block",
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "Make changes");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "error");
+
+    const replay = getBackgroundMessages(created.sessionId);
+    expect(replay.success).toBe(true);
+    const errorFrame = replay.messages.find((f) => f.type === "error");
+    const payload = (errorFrame?.payload ?? {}) as { code?: string; recoverable?: boolean };
+    expect(payload.code).toBe("completion_verification_required");
+    expect(payload.recoverable).toBe(true);
+    const doneFrame = replay.messages.find((f) => f.type === "done");
+    expect(doneFrame).toBeUndefined();
+  });
+
+  it("allows completion when verify_app_state succeeds after mutating actions", async () => {
+    const provider = new MutatingWithSuccessfulVerificationProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      projectId: "test-project-gate-pass",
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "Make changes");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "completed");
+
+    const replay = getBackgroundMessages(created.sessionId);
+    expect(replay.success).toBe(true);
+    const doneFrame = replay.messages.find((f) => f.type === "done");
+    expect(doneFrame).toBeDefined();
+    const errorFrame = replay.messages.find((f) => f.type === "error");
+    expect(errorFrame).toBeUndefined();
   });
 });

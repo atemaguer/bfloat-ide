@@ -357,6 +357,116 @@ const DEPRECATED_PACKAGE_REPLACEMENTS: Record<string, string> = {
   "expo-linear-gradient": "CSS gradients via experimental_backgroundImage",
 };
 
+const READ_ONLY_BASH_PREFIX = /^(ls|pwd|cat|sed\b|rg\b|find\b|git\s+(status|log|diff|show)\b|ps\b|which\b|command\s+-v\b|echo\b|wc\b|head\b|tail\b|sort\b|uniq\b|cut\b|awk\b|jq\b|stat\b|du\b|df\b|env\b|printenv\b|id\b|uname\b|date\b)(\s|$)/i;
+const MUTATING_TOOL_NAME_FRAGMENT = [
+  "write",
+  "edit",
+  "multiedit",
+  "create",
+  "delete",
+  "remove",
+  "rename",
+  "move",
+  "update",
+];
+
+function isLikelyMutatingToolCall(toolName: string, input: Record<string, unknown>): boolean {
+  const normalized = toolName.toLowerCase();
+  const command =
+    typeof input.command === "string"
+      ? input.command.trim()
+      : typeof input.cmd === "string"
+        ? input.cmd.trim()
+        : "";
+
+  const isShellTool =
+    normalized.includes("bash") ||
+    normalized.includes("shell") ||
+    normalized.includes("command");
+
+  if (isShellTool) {
+    if (!command) return false;
+    return !READ_ONLY_BASH_PREFIX.test(command);
+  }
+
+  return MUTATING_TOOL_NAME_FRAGMENT.some((fragment) =>
+    normalized.includes(fragment)
+  );
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function extractVerificationResult(output: string, isError: boolean): {
+  passed: boolean;
+  checkedAt?: string;
+  failureReason?: string;
+} {
+  if (isError) {
+    return {
+      passed: false,
+      failureReason: "workbench.verify_app_state returned an error result.",
+    };
+  }
+
+  const parsed = parseJsonObject(output);
+  if (!parsed) {
+    return {
+      passed: false,
+      failureReason: "Unable to parse verify_app_state output payload.",
+    };
+  }
+
+  const checkedAt =
+    typeof parsed.checkedAt === "string" ? parsed.checkedAt : undefined;
+  const status = typeof parsed.status === "string" ? parsed.status : "";
+  const evidence =
+    parsed.evidence && typeof parsed.evidence === "object"
+      ? (parsed.evidence as Record<string, unknown>)
+      : null;
+  const logs =
+    evidence?.logs && typeof evidence.logs === "object"
+      ? (evidence.logs as Record<string, unknown>)
+      : null;
+  const screenshot =
+    evidence?.screenshot && typeof evidence.screenshot === "object"
+      ? (evidence.screenshot as Record<string, unknown>)
+      : null;
+  const failures = Array.isArray(parsed.failures) ? parsed.failures : [];
+
+  const hasLogs = typeof logs?.text === "string" && logs.text.length > 0;
+  const screenshotOk = screenshot?.success === true;
+  const passed = status === "ok" && hasLogs && screenshotOk && failures.length === 0;
+
+  if (passed) {
+    return { passed: true, checkedAt };
+  }
+
+  let failureReason = "verify_app_state did not include successful logs and screenshot evidence.";
+  if (failures.length > 0 && typeof failures[0] === "object" && failures[0] !== null) {
+    const maybeMessage = (failures[0] as Record<string, unknown>).message;
+    if (typeof maybeMessage === "string" && maybeMessage.trim().length > 0) {
+      failureReason = maybeMessage;
+    }
+  }
+
+  return { passed: false, checkedAt, failureReason };
+}
+
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, " ");
 }
@@ -1267,6 +1377,11 @@ async function runStream(sessionId: string, message: string): Promise<void> {
   // Accumulate assistant text for conversation history
   let assistantText = "";
   const toolNameByCallId = new Map<string, string>();
+  let turnHadMutatingAction = false;
+  let verificationAttempted = false;
+  let verificationPassed = false;
+  let verificationCheckedAt: string | undefined;
+  let verificationFailureReason: string | undefined;
 
   try {
     const designModeDirective = workspaceProfile.isTemplateBootstrap
@@ -1287,6 +1402,7 @@ async function runStream(sessionId: string, message: string): Promise<void> {
     const verificationDirective = [
       "## Verification Before Completion",
       "If you changed runtime/app behavior (UI, routes, build/dev-server behavior, integrations, API effects), run workbench.verify_app_state before claiming the task is complete.",
+      "This is enforced by a completion gate: mutating turns without successful verify_app_state evidence are rejected with a recoverable error.",
       "For log-only checks, prefer workbench.get_app_logs instead of shell process/log discovery.",
       "For terminal inspection, prefer workbench.list_terminals and workbench.get_terminal_output before shell-based probing.",
       "In your final completion message, include verification evidence: checkedAt timestamp, screenshot confirmation, and recent log findings.",
@@ -1346,6 +1462,10 @@ async function runStream(sessionId: string, message: string): Promise<void> {
         }
 
         case "tool_call": {
+          if (isLikelyMutatingToolCall(event.name, event.input)) {
+            turnHadMutatingAction = true;
+          }
+
           const normalizedToolName = event.name.toLowerCase();
           const isShellTool =
             normalizedToolName.includes("bash") ||
@@ -1450,6 +1570,14 @@ async function runStream(sessionId: string, message: string): Promise<void> {
         case "tool_result": {
           const resolvedName =
             event.name || toolNameByCallId.get(event.callId) || "unknown_tool";
+          const normalizedResolvedName = resolvedName.toLowerCase();
+          if (normalizedResolvedName.includes("verify_app_state")) {
+            verificationAttempted = true;
+            const verification = extractVerificationResult(event.output, event.isError);
+            verificationPassed = verification.passed;
+            verificationCheckedAt = verification.checkedAt;
+            verificationFailureReason = verification.failureReason;
+          }
           frame = buildFrame(liveSession, "tool_result", {
             callId: event.callId,
             name: resolvedName,
@@ -1473,6 +1601,37 @@ async function runStream(sessionId: string, message: string): Promise<void> {
         }
 
         case "done": {
+          const verificationRequired = turnHadMutatingAction;
+          if (verificationRequired && !verificationPassed) {
+            liveSession.state.status = "error";
+            liveSession.state.endTime = Date.now();
+
+            const reason = verificationAttempted
+              ? verificationFailureReason ??
+                "Verification did not produce successful logs and screenshot evidence."
+              : "No workbench.verify_app_state call was observed after mutating actions.";
+
+            const gateMessage = [
+              "Completion verification gate blocked this turn.",
+              `Reason: ${reason}`,
+              "Run workbench.verify_app_state and continue only after it returns status \"ok\" with both logs and screenshot evidence.",
+            ].join("\n");
+
+            const gateTextFrame = buildFrame(liveSession, "text", {
+              delta: `${gateMessage}\n`,
+            } satisfies TextPayload);
+            broadcastToSession(liveSession, gateTextFrame);
+
+            frame = buildFrame(liveSession, "error", {
+              code: "completion_verification_required",
+              message: gateMessage,
+              recoverable: true,
+            } satisfies ErrorPayload);
+            broadcastToSession(liveSession, frame);
+            broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
+            return;
+          }
+
           liveSession.state.status = event.interrupted ? "interrupted" : "completed";
           liveSession.state.endTime = Date.now();
           if (event.totalTokens) {
@@ -1504,7 +1663,10 @@ async function runStream(sessionId: string, message: string): Promise<void> {
           }
 
           frame = buildFrame(liveSession, "done", {
-            result: event.result,
+            result:
+              verificationPassed && verificationCheckedAt
+                ? `${event.result ?? ""}\n[verification.checkedAt=${verificationCheckedAt}]`.trim()
+                : event.result,
             interrupted: event.interrupted,
             totalTokens: liveSession.state.totalTokens,
             totalCostUsd: liveSession.state.totalCostUsd,
