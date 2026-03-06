@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { terminalSessions } from "../routes/terminal.ts";
+import { listTerminalSessionsForCwd, terminalSessions } from "../routes/terminal.ts";
 import { upsertRuntimeState } from "./workbench-runtime.ts";
 import {
   getRedactedTerminalTail,
+  getRedactedTerminalTailForTerminalId,
   redactTerminalOutput,
   resolveRuntimeTerminal,
 } from "./workbench-verification.ts";
@@ -145,5 +146,77 @@ describe("workbench verification terminal resolution", () => {
     expect(tail.terminalId).toBeUndefined();
     expect(tail.logText).toBeUndefined();
     expect(tail.warning).toContain("not active");
+  });
+
+  it("reads output by explicit terminal id with redaction", () => {
+    const cwd = makeCwd("explicit");
+
+    terminalSessions.set(
+      "explicit-terminal",
+      {
+        id: "explicit-terminal",
+        pty: null,
+        fallbackProc: null,
+        isPty: false,
+        shell: "/bin/zsh",
+        cwd,
+        cols: 80,
+        rows: 24,
+        createdAt: 25,
+        outputBuffer: "TOKEN=shhh-secret\nAuthorization: Bearer verysecretvalue",
+        subscribers: new Set(),
+      } as any,
+    );
+
+    const tail = getRedactedTerminalTailForTerminalId("explicit-terminal", 1000);
+    expect(tail.terminalId).toBe("explicit-terminal");
+    expect(tail.source).toBe("explicit_terminal_id");
+    expect(tail.logText).toContain("TOKEN=[REDACTED");
+    expect(tail.logText).toContain("Bearer [REDACTED]");
+  });
+});
+
+describe("terminal session listing", () => {
+  it("lists cwd terminal sessions newest-first with metadata", () => {
+    const cwd = makeCwd("list");
+
+    terminalSessions.set(
+      "older",
+      {
+        id: "older",
+        pty: null,
+        fallbackProc: null,
+        isPty: false,
+        shell: "/bin/zsh",
+        cwd,
+        cols: 80,
+        rows: 24,
+        createdAt: 10,
+        outputBuffer: "old",
+        subscribers: new Set(),
+      } as any,
+    );
+    terminalSessions.set(
+      "newer",
+      {
+        id: "newer",
+        pty: null,
+        fallbackProc: null,
+        isPty: false,
+        shell: "/bin/zsh",
+        cwd,
+        cols: 100,
+        rows: 40,
+        createdAt: 20,
+        outputBuffer: "new",
+        subscribers: new Set(),
+      } as any,
+    );
+
+    const sessions = listTerminalSessionsForCwd(cwd);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0]?.id).toBe("newer");
+    expect(sessions[1]?.id).toBe("older");
+    expect(sessions[0]?.cols).toBe(100);
   });
 });

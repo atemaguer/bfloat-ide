@@ -8,7 +8,11 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { assessDevServer, getRuntimeState } from "./workbench-runtime.ts";
 import { captureScreenshot, getPreviewUrl } from "./screenshot.ts";
-import { getRedactedTerminalTail } from "./workbench-verification.ts";
+import {
+  getRedactedTerminalTail,
+  getRedactedTerminalTailForTerminalId,
+} from "./workbench-verification.ts";
+import { listTerminalSessionsForCwd } from "../routes/terminal.ts";
 
 export interface WorkbenchMcpOptions {
   cwd: string;
@@ -108,6 +112,103 @@ export function createWorkbenchMcpServer(options: WorkbenchMcpOptions) {
           };
 
           if (args.require_logs && !logPayload.logText) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify(payload, null, 2),
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify(payload, null, 2),
+              },
+            ],
+          };
+        }
+      ),
+      tool(
+        "list_terminals",
+        "List active terminal sessions for this project and identify the runtime-linked terminal.",
+        {},
+        async () => {
+          const runtime = getRuntimeState(options.cwd);
+          const sessions = listTerminalSessionsForCwd(options.cwd);
+          const runtimeTerminalId = runtime?.devServerTerminalId ?? null;
+
+          const payload = {
+            cwd: options.cwd,
+            checkedAt: new Date().toISOString(),
+            runtimeTerminalId,
+            runtimeTerminalActive:
+              runtimeTerminalId !== null &&
+              sessions.some((session) => session.id === runtimeTerminalId),
+            count: sessions.length,
+            sessions,
+          };
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify(payload, null, 2),
+              },
+            ],
+          };
+        }
+      ),
+      tool(
+        "get_terminal_output",
+        "Get recent redacted output from a terminal session. Defaults to the runtime-resolved dev-server terminal.",
+        {
+          terminal_id: z
+            .string()
+            .optional()
+            .describe(
+              "Specific terminal session ID. If omitted, resolves from runtime devServerTerminalId with cwd fallback."
+            ),
+          require_output: z
+            .boolean()
+            .optional()
+            .default(true)
+            .describe("Fail the tool call if terminal output cannot be collected."),
+          max_chars: z
+            .number()
+            .int()
+            .min(200)
+            .max(20_000)
+            .optional()
+            .default(6_000)
+            .describe("Maximum number of terminal output characters to return."),
+        },
+        async (args) => {
+          const checkedAt = new Date().toISOString();
+          const runtime = getRuntimeState(options.cwd);
+
+          const terminalPayload = args.terminal_id
+            ? getRedactedTerminalTailForTerminalId(args.terminal_id, args.max_chars)
+            : getRedactedTerminalTail(options.cwd, args.max_chars);
+
+          const payload = {
+            cwd: options.cwd,
+            checkedAt,
+            requestedTerminalId: args.terminal_id ?? null,
+            terminalId: terminalPayload.terminalId ?? null,
+            source: terminalPayload.source,
+            warning: terminalPayload.warning ?? null,
+            chars: terminalPayload.logChars ?? 0,
+            redactionCount: terminalPayload.redactionCount ?? 0,
+            text: terminalPayload.logText ?? "",
+            runtime: runtime ?? null,
+          };
+
+          if (args.require_output && !terminalPayload.logText) {
             return {
               content: [
                 {

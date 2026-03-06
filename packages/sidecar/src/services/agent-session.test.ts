@@ -454,5 +454,6 @@ describe("agent-session completion verification policy", () => {
     expect(prompt).toContain("Verification Before Completion");
     expect(prompt).toContain("workbench.verify_app_state");
     expect(prompt).toContain("workbench.get_app_logs");
+    expect(prompt).toContain("workbench.get_terminal_output");
   });
 });

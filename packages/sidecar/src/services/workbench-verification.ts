@@ -38,7 +38,7 @@ const SENSITIVE_ENV_FRAGMENTS = [
 
 export interface ResolvedTerminalInfo {
   snapshot: TerminalSessionSnapshot | null;
-  source: "runtime_terminal_id" | "cwd_latest" | "none";
+  source: "runtime_terminal_id" | "cwd_latest" | "explicit_terminal_id" | "none";
   warning?: string;
 }
 
@@ -174,13 +174,45 @@ export function getRedactedTerminalTail(
     };
   }
 
+  return getRedactedTerminalTailForTerminalId(snapshot.id, boundedChars, {
+    source: resolved.source,
+    warning: resolved.warning,
+  });
+}
+
+export function getRedactedTerminalTailForTerminalId(
+  terminalId: string,
+  maxChars: number = DEFAULT_LOG_MAX_CHARS,
+  context?: {
+    source?: ResolvedTerminalInfo["source"];
+    warning?: string;
+  }
+): {
+  terminalId?: string;
+  source: ResolvedTerminalInfo["source"];
+  warning?: string;
+  logText?: string;
+  logChars?: number;
+  redactionCount?: number;
+} {
+  const boundedChars = Math.max(200, Math.min(maxChars, 20_000));
+  const snapshot = getTerminalSessionSnapshot(terminalId, boundedChars);
+  if (!snapshot) {
+    return {
+      source: context?.source ?? "none",
+      warning:
+        context?.warning ??
+        `Terminal session '${terminalId}' is not active.`,
+    };
+  }
+
   const tail = snapshot.outputTail.slice(-boundedChars);
   const redacted = redactTerminalOutput(tail);
 
   return {
     terminalId: snapshot.id,
-    source: resolved.source,
-    warning: resolved.warning,
+    source: context?.source ?? "explicit_terminal_id",
+    warning: context?.warning,
     logText: redacted.text,
     logChars: redacted.text.length,
     redactionCount: redacted.redactionCount,
