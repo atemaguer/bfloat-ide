@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { useStore } from '@/app/hooks/useStore'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, FileText, Copy, Share2, RefreshCw, Code, Eye, Database, CreditCard, Settings, PanelLeft, Rocket, Check, Search, Loader2 } from 'lucide-react'
+import { ArrowLeft, FileText, RefreshCw, Code, Eye, Database, CreditCard, Settings, PanelLeft, Rocket, Check, Search, Loader2 } from 'lucide-react'
 import { workbenchStore, type WorkbenchTabType } from '@/app/stores/workbench'
 import { projectStore } from '@/app/stores/project-store'
 import { useWindowContext } from './WindowContext'
@@ -22,18 +22,24 @@ const SVG_PATHS = {
 
 // Tab configuration
 const WORKBENCH_TABS: Array<{ id: WorkbenchTabType; label: string; icon: typeof Code }> = [
-  { id: 'editor', label: 'Editor', icon: Code },
   { id: 'preview', label: 'Preview', icon: Eye },
+  { id: 'editor', label: 'Editor', icon: Code },
   { id: 'database', label: 'Database', icon: Database },
   { id: 'payments', label: 'Payments', icon: CreditCard },
   { id: 'settings', label: 'Settings', icon: Settings },
 ]
 
 // Project-specific titlebar content
-const ProjectTitlebarContent = () => {
+const ProjectTitlebarContent = ({
+  titlebarRef,
+}: {
+  titlebarRef: RefObject<HTMLDivElement | null>
+}) => {
   const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
   const deployButtonRef = useRef<HTMLButtonElement>(null)
+  const [tabRailLeft, setTabRailLeft] = useState(0)
+  const [tabRailWidth, setTabRailWidth] = useState<number | undefined>(undefined)
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle')
 
   // Subscribe to current project from workbench store (already loaded by ProjectPage)
@@ -45,11 +51,67 @@ const ProjectTitlebarContent = () => {
   const isLoading = !currentProject
   const isDeploying = activeDeployment?.status === 'running' && activeDeployment?.projectId === id
 
-  const handleCopyProjectId = () => {
-    if (id) {
-      navigator.clipboard.writeText(id)
+  useEffect(() => {
+    const recalc = () => {
+      const titlebarEl = titlebarRef.current
+      if (!titlebarEl) return
+
+      const titlebarRect = titlebarEl.getBoundingClientRect()
+      const controlsEl = titlebarEl.querySelector('.window-titlebar-controls-container') as HTMLElement | null
+      const projectActionsEl = titlebarEl.querySelector('.window-titlebar-project-actions') as HTMLElement | null
+      const controlsRect = controlsEl?.getBoundingClientRect()
+      const projectActionsRect = projectActionsEl?.getBoundingClientRect()
+      const maxRightByControls = controlsRect
+        ? controlsRect.left - titlebarRect.left - 8
+        : Number.POSITIVE_INFINITY
+      const maxRightByActions = projectActionsRect
+        ? projectActionsRect.left - titlebarRect.left - 8
+        : Number.POSITIVE_INFINITY
+      const maxAllowedRight = Math.min(maxRightByControls, maxRightByActions)
+
+      if (!isChatCollapsed) {
+        const dividerEl = document.querySelector('.project-resize-handle') as HTMLElement | null
+        const dividerRect = dividerEl?.getBoundingClientRect()
+        if (dividerRect) {
+          const nextLeft = Math.max(0, dividerRect.left - titlebarRect.left)
+          const fallbackRight = Number.isFinite(maxAllowedRight)
+            ? maxAllowedRight
+            : titlebarRect.width - 12
+          const nextRight = Math.max(nextLeft, fallbackRight)
+          setTabRailLeft(nextLeft)
+          setTabRailWidth(Math.max(0, nextRight - nextLeft))
+          return
+        }
+      }
+
+      const leftEl = titlebarEl.querySelector('.window-titlebar-project-left') as HTMLElement | null
+      if (!leftEl) return
+      const leftRect = leftEl.getBoundingClientRect()
+      const fallbackLeft = Math.max(0, leftRect.right - titlebarRect.left + 12)
+      const fallbackRight = Number.isFinite(maxAllowedRight)
+        ? maxAllowedRight
+        : titlebarRect.width - 12
+      setTabRailLeft(fallbackLeft)
+      setTabRailWidth(Math.max(0, fallbackRight - fallbackLeft))
     }
-  }
+
+    recalc()
+    window.addEventListener('resize', recalc)
+
+    const observer = new ResizeObserver(() => recalc())
+    if (titlebarRef.current) observer.observe(titlebarRef.current)
+    const controlsEl = titlebarRef.current?.querySelector('.window-titlebar-controls-container') as HTMLElement | null
+    if (controlsEl) observer.observe(controlsEl)
+    const actionsEl = titlebarRef.current?.querySelector('.window-titlebar-project-actions') as HTMLElement | null
+    if (actionsEl) observer.observe(actionsEl)
+    const workbenchPanelEl = document.querySelector('.project-panel-workbench') as HTMLElement | null
+    if (workbenchPanelEl) observer.observe(workbenchPanelEl)
+
+    return () => {
+      window.removeEventListener('resize', recalc)
+      observer.disconnect()
+    }
+  }, [isChatCollapsed, projectTitle, titlebarRef])
 
   const handleDeployClick = () => {
     deployStore.toggleModal()
@@ -105,40 +167,44 @@ const ProjectTitlebarContent = () => {
         <h1 className="window-titlebar-project-title" style={{ opacity: isLoading ? 0.6 : 1 }} data-tauri-drag-region>
           {projectTitle}
         </h1>
-        <div className="window-titlebar-drag-spacer" data-tauri-drag-region />
       </div>
 
-      {/* Workbench Tabs - centered in titlebar */}
-      <div className="window-titlebar-tabs">
-        {WORKBENCH_TABS.map((tab) => {
-          const Icon = tab.icon
-          return (
-            <button
-              key={tab.id}
-              className={`window-titlebar-tab ${activeTab === tab.id ? 'active' : ''}`}
-              onClick={() => workbenchStore.setActiveTab(tab.id)}
-            >
-              <Icon size={11} />
-              <span>{tab.label}</span>
-            </button>
-          )
-        })}
-        {/* Publish button after tabs */}
-        <button
-          ref={deployButtonRef}
-          className="window-titlebar-tab deploy"
-          onClick={handleDeployClick}
-          title="Publish app"
-        >
-          {isDeploying ? <Loader2 size={11} className="animate-spin" /> : <Rocket size={11} />}
-          <span>{isDeploying ? 'Publishing...' : 'Publish'}</span>
-        </button>
+      <div
+        className="window-titlebar-tabs-rail"
+        style={{
+          left: `${tabRailLeft}px`,
+          width: tabRailWidth ? `${tabRailWidth}px` : undefined,
+        }}
+      >
+        <div className="window-titlebar-tabs-primary">
+          {WORKBENCH_TABS.map((tab) => {
+            const Icon = tab.icon
+            return (
+              <button
+                key={tab.id}
+                className={`window-titlebar-tab ${activeTab === tab.id ? 'active' : ''}`}
+                onClick={() => workbenchStore.setActiveTab(tab.id)}
+              >
+                <Icon size={11} />
+                <span>{tab.label}</span>
+              </button>
+            )
+          })}
+        </div>
+        <div className="window-titlebar-tabs-secondary">
+          <button
+            ref={deployButtonRef}
+            className="window-titlebar-tab deploy"
+            onClick={handleDeployClick}
+            title="Publish app"
+          >
+            {isDeploying ? <Loader2 size={11} className="animate-spin" /> : <Rocket size={11} />}
+            <span>{isDeploying ? 'Publishing...' : 'Publish'}</span>
+          </button>
+        </div>
       </div>
 
       <div className="window-titlebar-project-actions">
-        <button className="window-titlebar-icon-btn" title="Copy Project ID" onClick={handleCopyProjectId}>
-          <Copy size={13} />
-        </button>
         <button
           className={`window-titlebar-icon-btn ${syncStatus === 'syncing' ? 'syncing' : ''} ${syncStatus === 'success' ? 'success' : ''} ${syncStatus === 'error' ? 'error' : ''}`}
           title={syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'success' ? 'Synced!' : syncStatus === 'error' ? 'Sync failed' : 'Sync to remote'}
@@ -160,6 +226,7 @@ export const Titlebar = () => {
   const { window: wcontext } = useWindowContext()
   const location = useLocation()
   const navigate = useNavigate()
+  const titlebarRef = useRef<HTMLDivElement>(null)
 
   // Check if we're on a project page
   const isProjectPage = location.pathname.startsWith('/projects/')
@@ -180,7 +247,7 @@ export const Titlebar = () => {
   if (isAuthPage) return null
 
   return (
-    <div className={`window-titlebar ${wcontext?.platform ? `platform-${wcontext.platform}` : ''}`} data-tauri-drag-region>
+    <div ref={titlebarRef} className={`window-titlebar ${wcontext?.platform ? `platform-${wcontext.platform}` : ''}`} data-tauri-drag-region>
       {wcontext?.platform === 'win32' && !isProjectPage && (
         <div className="window-titlebar-icon">
           <img src={icon} alt="App icon" />
@@ -188,7 +255,7 @@ export const Titlebar = () => {
       )}
 
       {isProjectPage ? (
-        <ProjectTitlebarContent />
+        <ProjectTitlebarContent titlebarRef={titlebarRef} />
       ) : (
         <>
           <div
