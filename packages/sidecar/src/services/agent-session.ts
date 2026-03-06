@@ -1699,6 +1699,22 @@ async function runStream(sessionId: string, message: string): Promise<void> {
         });
       }
 
+      if (turnHadMutatingAction && !verificationPassed) {
+        const reason = verificationAttempted
+          ? verificationFailureReason ??
+            "Verification did not complete successfully before streaming stopped."
+          : "No workbench.verify_app_state call was observed before streaming stopped.";
+        const interruptedGateMessage = [
+          "The agent stream stopped before completion verification finished.",
+          `Reason: ${reason}`,
+          "Resume the session and run workbench.verify_app_state, then continue once logs and screenshot evidence are both successful.",
+        ].join("\n");
+        const interruptedGateTextFrame = buildFrame(liveSession, "text", {
+          delta: `${interruptedGateMessage}\n`,
+        } satisfies TextPayload);
+        broadcastToSession(liveSession, interruptedGateTextFrame);
+      }
+
       const cancelledFrame = buildFrame(liveSession, "cancelled", {
         interrupted: true,
       });

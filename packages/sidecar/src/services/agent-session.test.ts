@@ -297,6 +297,42 @@ class MutatingWithSuccessfulVerificationProvider implements AgentProvider {
   }
 }
 
+class MutatingInterruptedProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Mutating Interrupted Provider";
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-interrupted",
+      model: "stub-model",
+      availableTools: [],
+    };
+
+    yield {
+      kind: "tool_call",
+      callId: "bash-1",
+      name: "Bash",
+      input: { command: "npm install left-pad" },
+      status: "running",
+    };
+
+    // Intentionally end stream without "done"
+    return;
+  }
+}
+
 async function waitForSessionStatus(
   sessionId: string,
   targetStatus: "completed" | "error",
@@ -604,5 +640,33 @@ describe("agent-session completion verification policy", () => {
     expect(doneFrame).toBeDefined();
     const errorFrame = replay.messages.find((f) => f.type === "error");
     expect(errorFrame).toBeUndefined();
+  });
+
+  it("appends verification guidance when stream stops before completion verification", async () => {
+    const provider = new MutatingInterruptedProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      projectId: "test-project-gate-interrupted",
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "Make changes");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "interrupted");
+
+    const replay = getBackgroundMessages(created.sessionId);
+    expect(replay.success).toBe(true);
+    const textFrames = replay.messages.filter((f) => f.type === "text");
+    const joinedText = textFrames
+      .map((frame) => String((frame.payload as { delta?: string })?.delta || ""))
+      .join("\n");
+    expect(joinedText).toContain("stream stopped before completion verification");
+    expect(joinedText).toContain("run workbench.verify_app_state");
+
+    const cancelledFrame = replay.messages.find((f) => f.type === "cancelled");
+    expect(cancelledFrame).toBeDefined();
   });
 });
