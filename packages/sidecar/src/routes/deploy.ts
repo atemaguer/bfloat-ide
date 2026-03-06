@@ -812,7 +812,6 @@ deployRouter.get("/stream/current", async (c) => {
   if (build.lastProgress) {
     write("progress", build.lastProgress);
   }
-
   if (build.done && build.result) {
     write("complete", build.result);
     writer.close().catch(() => {});
