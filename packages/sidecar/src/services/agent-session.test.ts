@@ -592,6 +592,8 @@ describe("agent-session completion verification policy", () => {
     expect(prompt).toContain("completion gate");
     expect(prompt).toContain("workbench.get_app_logs");
     expect(prompt).toContain("workbench.get_terminal_output");
+    expect(prompt).toContain("workbench.stop_app");
+    expect(prompt).toContain("workbench.start_app");
   });
 
   it("pauses completion when mutating actions cannot be auto-verified", async () => {

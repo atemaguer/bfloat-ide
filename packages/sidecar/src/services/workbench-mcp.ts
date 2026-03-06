@@ -18,6 +18,34 @@ export interface WorkbenchMcpOptions {
   cwd: string;
 }
 
+type AppLifecycleAction = "already_running" | "already_stopped" | "start_requested" | "stop_requested";
+
+async function evaluateStartApp(cwd: string): Promise<{
+  action: AppLifecycleAction;
+  assessment: Awaited<ReturnType<typeof assessDevServer>>;
+}> {
+  const assessment = await assessDevServer(cwd, true);
+  const isManagedHealthy =
+    assessment.status === "running" || assessment.status === "starting";
+  return {
+    action: isManagedHealthy ? "already_running" : "start_requested",
+    assessment,
+  };
+}
+
+async function evaluateStopApp(cwd: string): Promise<{
+  action: AppLifecycleAction;
+  assessment: Awaited<ReturnType<typeof assessDevServer>>;
+}> {
+  const assessment = await assessDevServer(cwd, true);
+  const isManagedHealthy =
+    assessment.status === "running" || assessment.status === "starting";
+  return {
+    action: isManagedHealthy ? "stop_requested" : "already_stopped",
+    assessment,
+  };
+}
+
 export function createWorkbenchMcpServer(options: WorkbenchMcpOptions) {
   return createSdkMcpServer({
     name: "workbench",
@@ -412,8 +440,82 @@ export function createWorkbenchMcpServer(options: WorkbenchMcpOptions) {
         }
       ),
       tool(
+        "stop_app",
+        "Request stopping the current app's dev server. Idempotent: returns already_stopped when no active managed server is running.",
+        {
+          reason: z
+            .string()
+            .optional()
+            .describe("Optional short reason for why stopping the app is needed."),
+        },
+        async (args) => {
+          const { action, assessment } = await evaluateStopApp(options.cwd);
+          const reasonSuffix =
+            typeof args.reason === "string" && args.reason.trim().length > 0
+              ? ` Reason: ${args.reason.trim()}`
+              : "";
+          const payload = {
+            cwd: options.cwd,
+            checkedAt: new Date().toISOString(),
+            action,
+            reason: reasonSuffix ? args.reason?.trim() : null,
+            status: assessment.status,
+            shouldStartServer: assessment.shouldStartServer,
+            shouldRestartServer: assessment.shouldRestartServer,
+            checks: assessment.checks,
+            metadata: assessment.metadata,
+          };
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify(payload, null, 2),
+              },
+            ],
+          };
+        }
+      ),
+      tool(
+        "start_app",
+        "Request starting the current app's dev server. Idempotent: returns already_running when the managed server is healthy.",
+        {
+          reason: z
+            .string()
+            .optional()
+            .describe("Optional short reason for why starting the app is needed."),
+        },
+        async (args) => {
+          const { action, assessment } = await evaluateStartApp(options.cwd);
+          const reasonSuffix =
+            typeof args.reason === "string" && args.reason.trim().length > 0
+              ? ` Reason: ${args.reason.trim()}`
+              : "";
+          const payload = {
+            cwd: options.cwd,
+            checkedAt: new Date().toISOString(),
+            action,
+            reason: reasonSuffix ? args.reason?.trim() : null,
+            status: assessment.status,
+            shouldStartServer: assessment.shouldStartServer,
+            shouldRestartServer: assessment.shouldRestartServer,
+            checks: assessment.checks,
+            metadata: assessment.metadata,
+          };
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify(payload, null, 2),
+              },
+            ],
+          };
+        }
+      ),
+      tool(
         "restart_app",
-        "Restart the current app's dev server using the workbench's built-in restart flow.",
+        "Restart the current app's dev server by composing stop_app then start_app checks without failing on healthy/already-stopped states.",
         {
           reason: z
             .string()
@@ -421,32 +523,44 @@ export function createWorkbenchMcpServer(options: WorkbenchMcpOptions) {
             .describe("Optional short reason for why the restart is needed."),
         },
         async (args) => {
-          const assessment = await assessDevServer(options.cwd, true);
-          const isManagedHealthy =
-            assessment.status === "running" || assessment.status === "starting";
-          if (isManagedHealthy) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text:
-                    "Restart blocked: dev server is healthy and managed by the workbench. Use get_dev_server_status first and only restart on error.",
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          const reasonSuffix =
+          const stop = await evaluateStopApp(options.cwd);
+          const start = await evaluateStartApp(options.cwd);
+          const reason =
             typeof args.reason === "string" && args.reason.trim().length > 0
-              ? ` Reason: ${args.reason.trim()}`
-              : "";
+              ? args.reason.trim()
+              : null;
+          const payload = {
+            cwd: options.cwd,
+            checkedAt: new Date().toISOString(),
+            reason,
+            steps: [
+              { name: "stop_app", action: stop.action, status: stop.assessment.status },
+              { name: "start_app", action: start.action, status: start.assessment.status },
+            ],
+            status: "restart_requested",
+            message:
+              "Restart flow requested. Use get_dev_server_status after this call to confirm runtime health.",
+            assessments: {
+              stop: {
+                shouldStartServer: stop.assessment.shouldStartServer,
+                shouldRestartServer: stop.assessment.shouldRestartServer,
+                checks: stop.assessment.checks,
+                metadata: stop.assessment.metadata,
+              },
+              start: {
+                shouldStartServer: start.assessment.shouldStartServer,
+                shouldRestartServer: start.assessment.shouldRestartServer,
+                checks: start.assessment.checks,
+                metadata: start.assessment.metadata,
+              },
+            },
+          };
 
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Restart requested.${reasonSuffix}`.trim(),
+                text: JSON.stringify(payload, null, 2),
               },
             ],
           };

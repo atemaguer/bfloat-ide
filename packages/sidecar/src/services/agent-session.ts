@@ -1455,6 +1455,7 @@ async function runStream(sessionId: string, message: string): Promise<void> {
       "This is enforced by a completion gate: mutating turns require successful logs+screenshot verification before completion.",
       "For log-only checks, prefer workbench.get_app_logs instead of shell process/log discovery.",
       "For terminal inspection, prefer workbench.list_terminals and workbench.get_terminal_output before shell-based probing.",
+      "For app lifecycle control, prefer workbench.stop_app and workbench.start_app; use workbench.restart_app only when an explicit restart is required.",
       "In your final completion message, include verification evidence: checkedAt timestamp, screenshot confirmation, and recent log findings.",
       "If verification fails, do not claim completion. Report the failure reason and your next corrective action.",
     ].join("\n");
