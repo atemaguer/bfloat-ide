@@ -268,6 +268,16 @@ interface SecretOperationResult {
   writePath?: string
 }
 
+interface EnsureConvexAuthEnvResult {
+  success: boolean
+  status: "already_configured" | "provisioned" | "skipped_missing_prereqs" | "failed"
+  projectId: string
+  updatedKeys: string[]
+  siteUrl: string | null
+  warning?: string
+  error?: string
+}
+
 // LocalProjectsApi types  — use `unknown` for Project/AgentSession since we
 // don't want a hard import across packages.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2111,6 +2121,28 @@ export const secretsBridge = {
     } catch (err) {
       console.warn("[conveyor-bridge] secrets.deleteSecret error:", err)
       return { success: false }
+    }
+  },
+
+  ensureConvexAuthEnv: async (
+    projectId: string,
+    appType: "web" | "mobile",
+  ): Promise<EnsureConvexAuthEnvResult> => {
+    try {
+      return await getSidecarApiSync().http.post<EnsureConvexAuthEnvResult>(
+        `/api/secrets/${projectId}/convex-auth-env/ensure`,
+        { appType },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] secrets.ensureConvexAuthEnv error:", err)
+      return {
+        success: false,
+        status: "failed",
+        projectId,
+        updatedKeys: [],
+        siteUrl: null,
+        error: err instanceof Error ? err.message : String(err),
+      }
     }
   },
 }

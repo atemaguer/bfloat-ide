@@ -46,15 +46,24 @@ export function getIntegrationCredentialSpec(
     }
     case 'convex': {
       const urlKey = appType === 'web' ? 'NEXT_PUBLIC_CONVEX_URL' : 'EXPO_PUBLIC_CONVEX_URL'
+      const siteUrlKey = appType === 'web' ? 'NEXT_PUBLIC_CONVEX_SITE_URL' : 'EXPO_PUBLIC_CONVEX_SITE_URL'
       return {
         title: 'Connect Convex',
-        description: 'Add both Convex URL and deploy key to enable setup and dashboard access.',
+        description: 'Add Convex URL and deploy key. Optionally add Convex site URL to auto-provision Better Auth SITE_URL.',
         fields: [
           {
             key: urlKey,
             label: 'Convex URL',
             placeholder: 'https://your-project.convex.cloud',
             required: true,
+            sensitive: false,
+          },
+          {
+            key: siteUrlKey,
+            label: 'Convex Site URL (Optional)',
+            placeholder: 'https://your-project.convex.site',
+            description: 'Used to provision Convex deployment SITE_URL for Better Auth.',
+            required: false,
             sensitive: false,
           },
           {

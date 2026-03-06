@@ -88,10 +88,16 @@ export function IntegrationCredentialsModal({
     setSaveFailures([])
 
     try {
-      const entries = spec.fields.map((field) => ({
-        key: field.key,
-        value: values[field.key]?.trim() || '',
-      }))
+      const entries = spec.fields
+        .map((field) => ({
+          field,
+          value: values[field.key]?.trim() || '',
+        }))
+        .filter(({ field, value }) => field.required || value.length > 0)
+        .map(({ field, value }) => ({
+          key: field.key,
+          value,
+        }))
 
       const result = await onSaveMany(entries)
       setSaveFailures(result.failures)

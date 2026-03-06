@@ -21,7 +21,16 @@ interface Secret {
 const KEY_SUGGESTIONS = [
   { provider: 'Stripe (Web)', keys: ['NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'] },
   { provider: 'Stripe (Mobile)', keys: ['EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY', 'STRIPE_SECRET_KEY'] },
-  { provider: 'Convex', keys: ['CONVEX_DEPLOY_KEY', 'NEXT_PUBLIC_CONVEX_URL', 'EXPO_PUBLIC_CONVEX_URL'] },
+  {
+    provider: 'Convex',
+    keys: [
+      'CONVEX_DEPLOY_KEY',
+      'NEXT_PUBLIC_CONVEX_URL',
+      'EXPO_PUBLIC_CONVEX_URL',
+      'NEXT_PUBLIC_CONVEX_SITE_URL',
+      'EXPO_PUBLIC_CONVEX_SITE_URL',
+    ],
+  },
   { provider: 'RevenueCat', keys: ['REVENUECAT_API_KEY', 'EXPO_PUBLIC_REVENUECAT_API_KEY', 'REVENUECAT_APPLE_API_KEY', 'REVENUECAT_GOOGLE_API_KEY'] },
   { provider: 'Firebase (Web)', keys: ['NEXT_PUBLIC_FIREBASE_API_KEY', 'NEXT_PUBLIC_FIREBASE_PROJECT_ID'] },
   { provider: 'Firebase (Mobile)', keys: ['EXPO_PUBLIC_FIREBASE_API_KEY', 'EXPO_PUBLIC_FIREBASE_PROJECT_ID'] },

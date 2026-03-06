@@ -17,6 +17,7 @@ import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { randomBytes } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Paths (mirror secrets-handler.ts)
@@ -158,6 +159,70 @@ const SetSecretSchema = z.object({
   value: z.string(),
 });
 
+const EnsureConvexAuthEnvSchema = z.object({
+  appType: z.enum(["web", "mobile"]).optional().default("web"),
+});
+
+type ConvexAppType = "web" | "mobile";
+
+interface EnsureConvexAuthEnvResult {
+  success: boolean;
+  status:
+    | "already_configured"
+    | "provisioned"
+    | "skipped_missing_prereqs"
+    | "failed";
+  projectId: string;
+  updatedKeys: string[];
+  siteUrl: string | null;
+  warning?: string;
+  error?: string;
+}
+
+function normalizeSecretValue(value: string | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function fallbackSiteUrlForAppType(appType: ConvexAppType): string {
+  return appType === "mobile" ? "http://localhost:8081" : "http://localhost:3000";
+}
+
+function resolveConvexSiteUrl(values: Record<string, string>, appType: ConvexAppType): string {
+  const primaryKey =
+    appType === "mobile" ? "EXPO_PUBLIC_CONVEX_SITE_URL" : "NEXT_PUBLIC_CONVEX_SITE_URL";
+  const secondaryKey =
+    appType === "mobile" ? "NEXT_PUBLIC_CONVEX_SITE_URL" : "EXPO_PUBLIC_CONVEX_SITE_URL";
+  const direct = normalizeSecretValue(values[primaryKey]) ?? normalizeSecretValue(values[secondaryKey]);
+  return direct ?? fallbackSiteUrlForAppType(appType);
+}
+
+async function runCommand(
+  cwd: string,
+  argv: string[],
+  env: Record<string, string>,
+): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(argv, {
+    cwd,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+
+  return {
+    success: exitCode === 0,
+    stdout,
+    stderr,
+    exitCode,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -282,4 +347,129 @@ secretsRouter.post("/:projectId/bulk", async (c) => {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ success: false, error: msg }, 500);
   }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/secrets/:projectId/convex-auth-env/ensure
+// Ensures BETTER_AUTH_SECRET and SITE_URL exist in the Convex deployment env.
+// ---------------------------------------------------------------------------
+secretsRouter.post("/:projectId/convex-auth-env/ensure", async (c) => {
+  const projectId = c.req.param("projectId");
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = EnsureConvexAuthEnvSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const appType = parsed.data.appType;
+  const { readPath } = resolveEnvPath(projectId);
+  const projectDir = path.join(PROJECTS_DIR, projectId);
+  if (!fs.existsSync(projectDir)) {
+    const result: EnsureConvexAuthEnvResult = {
+      success: false,
+      status: "failed",
+      projectId,
+      updatedKeys: [],
+      siteUrl: null,
+      error: `Project directory not found: ${projectDir}`,
+    };
+    return c.json(result, 404);
+  }
+
+  let content = "";
+  if (fs.existsSync(readPath)) {
+    content = await Bun.file(readPath).text();
+  }
+  const secretValues = Object.fromEntries(parseEnvFile(content).map((entry) => [entry.key, entry.value]));
+  const convexUrl =
+    normalizeSecretValue(secretValues["NEXT_PUBLIC_CONVEX_URL"]) ??
+    normalizeSecretValue(secretValues["EXPO_PUBLIC_CONVEX_URL"]);
+  const deployKey = normalizeSecretValue(secretValues["CONVEX_DEPLOY_KEY"]);
+
+  if (!convexUrl || !deployKey) {
+    const result: EnsureConvexAuthEnvResult = {
+      success: true,
+      status: "skipped_missing_prereqs",
+      projectId,
+      updatedKeys: [],
+      siteUrl: null,
+      warning:
+        "Skipped Convex auth env provisioning because Convex URL or CONVEX_DEPLOY_KEY is missing.",
+    };
+    return c.json(result);
+  }
+
+  const siteUrl = resolveConvexSiteUrl(secretValues, appType);
+  const commandEnv = {
+    ...(process.env as Record<string, string>),
+    CONVEX_DEPLOY_KEY: deployKey,
+  };
+
+  const listResult = await runCommand(projectDir, ["npx", "convex", "env", "list"], commandEnv);
+  if (!listResult.success) {
+    const result: EnsureConvexAuthEnvResult = {
+      success: false,
+      status: "failed",
+      projectId,
+      updatedKeys: [],
+      siteUrl,
+      error: `Failed to list Convex env vars: ${listResult.stderr || listResult.stdout || `exit ${listResult.exitCode}`}`,
+    };
+    return c.json(result, 500);
+  }
+
+  const listed = listResult.stdout;
+  const hasBetterAuthSecret = /\bBETTER_AUTH_SECRET\b/.test(listed);
+  const hasSiteUrl = /\bSITE_URL\b/.test(listed);
+  const updatedKeys: string[] = [];
+
+  if (!hasBetterAuthSecret) {
+    const generatedSecret = randomBytes(32).toString("base64");
+    const setResult = await runCommand(
+      projectDir,
+      ["npx", "convex", "env", "set", "BETTER_AUTH_SECRET", generatedSecret],
+      commandEnv,
+    );
+    if (!setResult.success) {
+      const result: EnsureConvexAuthEnvResult = {
+        success: false,
+        status: "failed",
+        projectId,
+        updatedKeys,
+        siteUrl,
+        error: `Failed setting BETTER_AUTH_SECRET: ${setResult.stderr || setResult.stdout || `exit ${setResult.exitCode}`}`,
+      };
+      return c.json(result, 500);
+    }
+    updatedKeys.push("BETTER_AUTH_SECRET");
+  }
+
+  if (!hasSiteUrl) {
+    const setResult = await runCommand(
+      projectDir,
+      ["npx", "convex", "env", "set", "SITE_URL", siteUrl],
+      commandEnv,
+    );
+    if (!setResult.success) {
+      const result: EnsureConvexAuthEnvResult = {
+        success: false,
+        status: "failed",
+        projectId,
+        updatedKeys,
+        siteUrl,
+        error: `Failed setting SITE_URL: ${setResult.stderr || setResult.stdout || `exit ${setResult.exitCode}`}`,
+      };
+      return c.json(result, 500);
+    }
+    updatedKeys.push("SITE_URL");
+  }
+
+  const result: EnsureConvexAuthEnvResult = {
+    success: true,
+    status: updatedKeys.length > 0 ? "provisioned" : "already_configured",
+    projectId,
+    updatedKeys,
+    siteUrl,
+  };
+  return c.json(result);
 });

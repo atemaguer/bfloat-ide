@@ -135,7 +135,12 @@ Copy [templates/convex/auth.config.ts](templates/convex/auth.config.ts) to `conv
 
 ## Step 7: Create Auth Functions
 
-Copy [templates/convex/auth.ts](templates/convex/auth.ts) to `convex/auth.ts`.
+Create `convex/auth.ts` from the framework template:
+
+- **Expo:** copy [templates/convex/auth.expo.ts](templates/convex/auth.expo.ts)
+- **Next.js:** copy [templates/convex/auth.next.ts](templates/convex/auth.next.ts)
+
+Both templates require `SITE_URL`. Do not remove the guard that throws when `SITE_URL` is missing.
 
 ## Step 8: Create HTTP Router
 
@@ -195,7 +200,9 @@ Create Convex functions in the `convex/` directory. Use `authComponent.getAuthUs
 
 ### Step 14: Update Existing Components
 
-Replace any local storage usage (AsyncStorage, etc.) with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`. Use `Authenticated`, `Unauthenticated`, and `AuthLoading` from `convex/react` to gate UI on auth state.
+Replace any local storage usage (AsyncStorage, etc.) with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`.
+
+For top-level auth gating, prefer Better Auth session state (`authClient.useSession()`) as the primary source of truth. Convex auth state can be used as a secondary signal, but do not gate the entire home screen on Convex-only helpers.
 
 ### Step 15: Validate Expo Auth Integration (Required for Expo)
 
@@ -292,7 +299,9 @@ export default async function Page() {
 
 ### Step 17: Update Existing Components
 
-Replace any local storage usage with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`. Use `Authenticated`, `Unauthenticated`, and `AuthLoading` from `convex/react` to gate UI on auth state.
+Replace any local storage usage with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`.
+
+For top-level auth gating, prefer Better Auth session state (`authClient.useSession()`) as the primary source of truth and use Convex auth as secondary/fallback signal.
 
 ---
 
@@ -348,17 +357,25 @@ export const currentUser = query({
 });
 ```
 
-### Auth-Gated UI
+### Auth-Gated UI (Session-First)
 
 ```tsx
-import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
+import { authClient } from "@/lib/auth-client";
+import { useConvexAuth } from "convex/react";
 
 function App() {
+  const { data: session, isPending } = authClient.useSession();
+  const { isLoading: isConvexAuthLoading, isAuthenticated: isConvexAuthenticated } = useConvexAuth();
+
+  const isAuthenticated = Boolean(session?.user?.id);
+  const shouldShowAuthenticated = isAuthenticated || isConvexAuthenticated;
+  const shouldShowLoading = isPending || (isAuthenticated && isConvexAuthLoading);
+
   return (
     <>
-      <AuthLoading>Loading...</AuthLoading>
-      <Unauthenticated><SignIn /></Unauthenticated>
-      <Authenticated><Content /><SignOutButton /></Authenticated>
+      {shouldShowLoading && <Loading />}
+      {!shouldShowLoading && !shouldShowAuthenticated && <SignIn />}
+      {!shouldShowLoading && shouldShowAuthenticated && <Content />}
     </>
   );
 }
@@ -476,12 +493,17 @@ For Expo apps, ensure the `scheme` in `auth-client.ts` matches the app's URL sch
 
 ```typescript
 export const createAuth = (ctx: GenericCtx<DataModel>) => {
+  const siteUrl = process.env.SITE_URL;
+  if (!siteUrl) {
+    throw new Error("Missing SITE_URL in Convex environment");
+  }
+
   return betterAuth({
-    baseURL: process.env.SITE_URL,
+    baseURL: siteUrl,
     database: authComponent.adapter(ctx),
     emailAndPassword: { enabled: true, requireEmailVerification: false },
     trustedOrigins: ["*"],
-    plugins: [convex({ authConfig })],
+    plugins: [crossDomain({ siteUrl }), convex({ authConfig })],
   });
 };
 ```
