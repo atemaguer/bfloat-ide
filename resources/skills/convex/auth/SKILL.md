@@ -32,6 +32,7 @@ You are a Convex authentication specialist for React Native (Expo) and Next.js a
 15. **EXPO NAVIGATION SAFETY** - In Expo auth screens, do NOT use `<Link asChild>` around `TouchableOpacity`, `Pressable`, or `Text`. Use `router.push()`/`router.replace()` inside `onPress` handlers instead.
 16. **EXPO ROUTE GROUP SAFETY** - Do NOT add `<Stack.Screen name="(auth)" ... />` in `app/_layout.tsx` unless an `app/(auth)/_layout.tsx` route exists. For plain `app/(auth)/sign-in.tsx` + `sign-up.tsx`, navigate directly by path and keep root stack entries explicit (`index`, `modal`, etc.).
 17. **PROVIDER TAG CONSISTENCY** - When replacing providers in layouts, update import name, opening tag, and closing tag in one atomic edit and verify there are no leftover tags from the old provider.
+18. **AUTH HYDRATION QUERY GATING** - Do NOT run protected Convex queries while Better Auth session is pending. Gate protected `useQuery` calls with `skip` until auth hydration completes (e.g., `!isSessionPending && isAuthenticated`).
 
 ## Framework Detection
 
@@ -78,7 +79,7 @@ Check package.json first. Only install what's missing:
 **Expo:**
 ```bash
 npm install convex@latest @convex-dev/better-auth better-auth@1.4.9 @better-auth/expo@1.4.9 --save-exact
-npx expo install expo-secure-store
+npx expo install expo-secure-store expo-network
 ```
 
 **Next.js:**
@@ -203,6 +204,15 @@ Create Convex functions in the `convex/` directory. Use `authComponent.getAuthUs
 Replace any local storage usage (AsyncStorage, etc.) with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`.
 
 For top-level auth gating, prefer Better Auth session state (`authClient.useSession()`) as the primary source of truth. Convex auth state can be used as a secondary signal, but do not gate the entire home screen on Convex-only helpers.
+
+For protected Convex queries on authenticated screens, guard query execution until auth is hydrated:
+
+```tsx
+const canRunProtectedQueries = !isSessionPending && isAuthenticated;
+const data = useQuery(api.someProtectedQuery.list, canRunProtectedQueries ? {} : "skip");
+```
+
+This prevents `Unauthenticated` races immediately after sign-in when session state is still resolving on first render.
 
 ### Step 15: Validate Expo Auth Integration (Required for Expo)
 
