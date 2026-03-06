@@ -47,7 +47,7 @@ export function DeployAndroidSection() {
         </button>
 
         {personalExpanded && (
-          <div className="flex items-center justify-between ps-4 pe-3 py-3 border border-border rounded-[10px]">
+          <div className="flex items-center justify-between ps-4 pe-3 py-3 border-0 bg-background rounded-[10px]">
             <div className="flex items-center gap-1">
               <span className="text-sm font-medium text-foreground">Version 1.0.0</span>
             </div>
@@ -81,7 +81,7 @@ export function DeployAndroidSection() {
         </button>
 
         {playStoreExpanded && (
-          <div className="ps-4 pe-3 py-3 border border-border rounded-[10px]">
+          <div className="ps-4 pe-3 py-3 border-0 bg-background rounded-[10px]">
             <p className="text-sm text-muted-foreground">Coming soon</p>
           </div>
         )}

@@ -249,7 +249,7 @@ export function DeployiOSSection({ disabled = false }: DeployiOSSectionProps) {
   return (
     <div className="flex flex-col gap-3">
       {/* Publish button row */}
-      <div className="flex items-center justify-between ps-4 pe-3 py-3 border border-border rounded-[10px]">
+      <div className="flex items-center justify-between ps-4 pe-3 py-3 border-0 bg-background rounded-[10px]">
         <div className="flex flex-col gap-0.5">
           <span className="text-sm font-medium text-foreground">Publish to App Store</span>
         </div>

@@ -41,7 +41,7 @@ export function EasAccountSelector({ disabled = false }: EasAccountSelectorProps
     <div className="relative group">
       <button
         disabled={disabled}
-        className="flex items-center gap-2 px-3 py-2 text-sm border border-input rounded-lg bg-background hover:bg-muted/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed w-full"
+        className="flex items-center gap-2 px-3 py-2 text-sm border-0 rounded-lg bg-background hover:bg-[oklch(0.29_0_0)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed w-full"
       >
         {currentAccount ? (
           <>
@@ -57,7 +57,7 @@ export function EasAccountSelector({ disabled = false }: EasAccountSelectorProps
 
       {/* Dropdown menu */}
       {!disabled && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-all z-50">
+        <div className="absolute top-full left-0 right-0 mt-1 bg-[oklch(0.227_0_0)] border-0 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-all z-50">
           {accounts.map((account) => {
             const isSelected = account.name === selectedAccount
 
@@ -65,8 +65,8 @@ export function EasAccountSelector({ disabled = false }: EasAccountSelectorProps
               <button
                 key={account.name}
                 onClick={() => deployStore.selectEasAccount(account.name)}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/50 transition-colors first:rounded-t-lg last:rounded-b-lg ${
-                  isSelected ? 'bg-muted/30' : ''
+                className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-[oklch(0.31_0_0)] transition-colors cursor-pointer first:rounded-t-lg last:rounded-b-lg ${
+                  isSelected ? 'bg-[oklch(0.29_0_0)]' : ''
                 }`}
               >
                 <AccountIcon account={account} />
