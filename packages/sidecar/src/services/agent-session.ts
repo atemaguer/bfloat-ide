@@ -26,7 +26,9 @@ import * as os from "node:os";
 import { createScreenshotMcpServer } from "./screenshot-mcp.ts";
 import { createWorkbenchMcpServer } from "./workbench-mcp.ts";
 import { buildWorkspaceProfile, shouldBlockScaffoldCommand } from "./workspace-profile.ts";
-import { assessDevServer } from "./workbench-runtime.ts";
+import { assessDevServer, getRuntimeState } from "./workbench-runtime.ts";
+import { getRedactedTerminalTail } from "./workbench-verification.ts";
+import { captureScreenshot, getPreviewUrl } from "./screenshot.ts";
 import { updateSessionInProject } from "../routes/local-projects.ts";
 import { CodexProvider } from "./codex-provider.ts";
 
@@ -465,6 +467,54 @@ function extractVerificationResult(output: string, isError: boolean): {
   }
 
   return { passed: false, checkedAt, failureReason };
+}
+
+async function runAutomaticCompletionVerification(cwd: string): Promise<{
+  passed: boolean;
+  checkedAt: string;
+  failureReason?: string;
+}> {
+  const checkedAt = new Date().toISOString();
+  const runtime = getRuntimeState(cwd);
+  const logPayload = getRedactedTerminalTail(cwd, 6_000);
+  const hasLogs = typeof logPayload.logText === "string" && logPayload.logText.length > 0;
+
+  let screenshotOk = false;
+  let screenshotFailure = "No preview URL available for screenshot verification.";
+  let previewUrl = runtime?.previewUrl ?? getPreviewUrl(cwd);
+
+  if (previewUrl) {
+    const isMobileRuntime = runtime?.appType === "mobile";
+    const screenshot = await captureScreenshot({
+      url: previewUrl,
+      mobile: isMobileRuntime,
+      width: isMobileRuntime ? 390 : undefined,
+      height: isMobileRuntime ? 844 : undefined,
+      deviceScaleFactor: isMobileRuntime ? 2 : undefined,
+    });
+    screenshotOk = Boolean(screenshot.success && screenshot.dataUrl);
+    if (!screenshotOk) {
+      screenshotFailure = screenshot.error ?? "Unknown screenshot error.";
+    }
+  }
+
+  if (hasLogs && screenshotOk) {
+    return { passed: true, checkedAt };
+  }
+
+  const reasons: string[] = [];
+  if (!hasLogs) {
+    reasons.push(logPayload.warning ?? "Terminal logs were unavailable.");
+  }
+  if (!screenshotOk) {
+    reasons.push(`Screenshot failed: ${screenshotFailure}`);
+  }
+
+  return {
+    passed: false,
+    checkedAt,
+    failureReason: reasons.join(" "),
+  };
 }
 
 function normalizeCommand(command: string): string {
@@ -1402,7 +1452,7 @@ async function runStream(sessionId: string, message: string): Promise<void> {
     const verificationDirective = [
       "## Verification Before Completion",
       "If you changed runtime/app behavior (UI, routes, build/dev-server behavior, integrations, API effects), run workbench.verify_app_state before claiming the task is complete.",
-      "This is enforced by a completion gate: mutating turns without successful verify_app_state evidence are rejected with a recoverable error.",
+      "This is enforced by a completion gate: mutating turns require successful logs+screenshot verification before completion.",
       "For log-only checks, prefer workbench.get_app_logs instead of shell process/log discovery.",
       "For terminal inspection, prefer workbench.list_terminals and workbench.get_terminal_output before shell-based probing.",
       "In your final completion message, include verification evidence: checkedAt timestamp, screenshot confirmation, and recent log findings.",
@@ -1603,33 +1653,41 @@ async function runStream(sessionId: string, message: string): Promise<void> {
         case "done": {
           const verificationRequired = turnHadMutatingAction;
           if (verificationRequired && !verificationPassed) {
-            liveSession.state.status = "error";
-            liveSession.state.endTime = Date.now();
+            const autoVerification = await runAutomaticCompletionVerification(
+              liveSession.state.cwd
+            );
+            if (autoVerification.passed) {
+              verificationAttempted = true;
+              verificationPassed = true;
+              verificationCheckedAt = autoVerification.checkedAt;
+            } else {
+              liveSession.state.status = "interrupted";
+              liveSession.state.endTime = Date.now();
 
-            const reason = verificationAttempted
-              ? verificationFailureReason ??
-                "Verification did not produce successful logs and screenshot evidence."
-              : "No workbench.verify_app_state call was observed after mutating actions.";
+              const reason = verificationAttempted
+                ? verificationFailureReason ??
+                  autoVerification.failureReason ??
+                  "Verification did not produce successful logs and screenshot evidence."
+                : autoVerification.failureReason ??
+                  "No workbench.verify_app_state call was observed after mutating actions.";
 
-            const gateMessage = [
-              "Completion verification gate blocked this turn.",
-              `Reason: ${reason}`,
-              "Run workbench.verify_app_state and continue only after it returns status \"ok\" with both logs and screenshot evidence.",
-            ].join("\n");
+              const gateMessage = [
+                "Completion verification gate paused this turn.",
+                `Reason: ${reason}`,
+                "Run workbench.verify_app_state and continue once logs and screenshot evidence are both successful.",
+              ].join("\n");
 
-            const gateTextFrame = buildFrame(liveSession, "text", {
-              delta: `${gateMessage}\n`,
-            } satisfies TextPayload);
-            broadcastToSession(liveSession, gateTextFrame);
-
-            frame = buildFrame(liveSession, "error", {
-              code: "completion_verification_required",
-              message: gateMessage,
-              recoverable: true,
-            } satisfies ErrorPayload);
-            broadcastToSession(liveSession, frame);
-            broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
-            return;
+              const gateTextFrame = buildFrame(liveSession, "text", {
+                delta: `${gateMessage}\n`,
+              } satisfies TextPayload);
+              broadcastToSession(liveSession, gateTextFrame);
+              broadcastToSession(
+                liveSession,
+                buildFrame(liveSession, "cancelled", { interrupted: true })
+              );
+              broadcastToSession(liveSession, buildFrame(liveSession, "stream_end", {}));
+              return;
+            }
           }
 
           liveSession.state.status = event.interrupted ? "interrupted" : "completed";

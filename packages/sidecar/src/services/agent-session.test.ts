@@ -335,7 +335,7 @@ class MutatingInterruptedProvider implements AgentProvider {
 
 async function waitForSessionStatus(
   sessionId: string,
-  targetStatus: "completed" | "error",
+  targetStatus: "completed" | "error" | "interrupted",
   timeoutMs = 1000,
 ): Promise<void> {
   const start = Date.now();
@@ -594,7 +594,7 @@ describe("agent-session completion verification policy", () => {
     expect(prompt).toContain("workbench.get_terminal_output");
   });
 
-  it("blocks completion when mutating actions lack successful verification evidence", async () => {
+  it("pauses completion when mutating actions cannot be auto-verified", async () => {
     const provider = new MutatingWithoutVerificationProvider();
     registerProvider(provider);
 
@@ -607,16 +607,20 @@ describe("agent-session completion verification policy", () => {
 
     const send = sendMessage(created.sessionId, "Make changes");
     expect(send.success).toBe(true);
-    await waitForSessionStatus(created.sessionId, "error");
+    await waitForSessionStatus(created.sessionId, "interrupted");
 
     const replay = getBackgroundMessages(created.sessionId);
     expect(replay.success).toBe(true);
-    const errorFrame = replay.messages.find((f) => f.type === "error");
-    const payload = (errorFrame?.payload ?? {}) as { code?: string; recoverable?: boolean };
-    expect(payload.code).toBe("completion_verification_required");
-    expect(payload.recoverable).toBe(true);
+    const textFrames = replay.messages.filter((f) => f.type === "text");
+    const joinedText = textFrames
+      .map((frame) => String((frame.payload as { delta?: string })?.delta || ""))
+      .join("\n");
+    expect(joinedText).toContain("Completion verification gate paused this turn");
+    expect(joinedText).toContain("Run workbench.verify_app_state");
     const doneFrame = replay.messages.find((f) => f.type === "done");
     expect(doneFrame).toBeUndefined();
+    const cancelledFrame = replay.messages.find((f) => f.type === "cancelled");
+    expect(cancelledFrame).toBeDefined();
   });
 
   it("allows completion when verify_app_state succeeds after mutating actions", async () => {
