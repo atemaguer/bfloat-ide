@@ -2027,7 +2027,7 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  border-bottom: 1px solid hsl(var(--border));
+  border-bottom: 1px solid hsl(var(--border) / 0.9);
   background: hsl(var(--background));
 }
 
@@ -2071,7 +2071,7 @@
 
 .session-tab.active {
   color: hsl(var(--foreground));
-  border-bottom-color: hsl(var(--color-state-brand, #3b82f6));
+  border-bottom-color: var(--color-accent-blue, #4a9eff);
 }
 
 .session-tab-label {
@@ -2145,7 +2145,7 @@
   display: flex;
   align-items: center;
   padding-right: 4px;
-  border-left: 1px solid hsl(var(--border) / 0.6);
+  border-left: 1px solid hsl(var(--border) / 0.9);
   background: hsl(var(--background));
 }
 
