@@ -86,7 +86,7 @@ export const WebPreviewNavigation = ({
 }: WebPreviewNavigationProps) => (
   <div
     className={cn(
-      "flex items-center gap-2 border-b border-border/50 bg-card px-3 py-2.5",
+      "flex h-9 items-center gap-1.5 border-b border-border/50 bg-card px-2",
       className
     )}
     {...props}
@@ -112,7 +112,7 @@ export const WebPreviewNavigationButton = ({
       <TooltipTrigger asChild>
         <Button
           className={cn(
-            "h-9 w-9 p-0 text-foreground/80 hover:text-foreground hover:bg-foreground/10",
+            "h-7 w-7 p-0 text-foreground/80 hover:text-foreground hover:bg-foreground/10",
             disabled && "text-muted-foreground/30 hover:text-muted-foreground/30 hover:bg-transparent cursor-not-allowed",
             className
           )}

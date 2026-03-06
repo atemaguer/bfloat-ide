@@ -70,8 +70,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  -webkit-app-region: drag;
 }
 
 /* macOS: avoid traffic light buttons + align content with them */
@@ -139,17 +140,12 @@
   text-overflow: ellipsis;
 }
 
-.window-titlebar-drag-spacer {
-  flex: 1;
-  min-width: 16px;
-  height: 100%;
-}
-
 .window-titlebar-project-actions {
   display: flex;
   align-items: center;
   gap: 4px;
   margin-right: 8px;
+  -webkit-app-region: no-drag;
 }
 
 .window-titlebar-icon-btn {
@@ -232,11 +228,45 @@
   transform: scale(0.95);
 }
 
-/* Titlebar Tabs */
-.window-titlebar-tabs {
+/* Divider-aligned rail matching the workbench panel */
+.window-titlebar-tabs-rail {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  z-index: 2;
+}
+
+/* Primary 5-tab strip */
+.window-titlebar-tabs-primary {
   display: flex;
   align-items: center;
   gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.window-titlebar-tabs-primary::-webkit-scrollbar {
+  display: none;
+}
+
+/* Keep Publish separate from primary 5 tabs */
+.window-titlebar-tabs-secondary {
+  display: flex;
+  align-items: center;
+  margin-left: 8px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+  z-index: 2;
 }
 
 .window-titlebar-tab {
@@ -269,7 +299,7 @@
 .window-titlebar-tab.deploy {
   color: #a78bfa;
   background: rgba(167, 139, 250, 0.1);
-  margin-left: 8px;
+  margin-left: 0;
   border-left: 1px solid hsl(var(--border));
   padding-left: 16px;
 }
