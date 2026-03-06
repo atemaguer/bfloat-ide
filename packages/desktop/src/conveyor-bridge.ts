@@ -556,6 +556,8 @@ const _terminalWriteQueues = new Map<string, Promise<TerminalWriteResult>>()
 // Agent terminal event emitters (no native Tauri equivalent yet — stubbed).
 const _agentTerminalCreatedListeners = new Set<(id: string) => void>()
 const _agentTerminalClosedListeners = new Set<(id: string) => void>()
+const _startDevServerListeners = new Set<() => void>()
+const _stopDevServerListeners = new Set<() => void>()
 const _restartDevServerListeners = new Set<() => void>()
 
 export const terminalBridge = {
@@ -751,6 +753,22 @@ export const terminalBridge = {
   },
 
   /**
+   * onStartDevServer
+   */
+  onStartDevServer: (callback: () => void): UnsubscribeFn => {
+    _startDevServerListeners.add(callback)
+    return () => _startDevServerListeners.delete(callback)
+  },
+
+  /**
+   * onStopDevServer
+   */
+  onStopDevServer: (callback: () => void): UnsubscribeFn => {
+    _stopDevServerListeners.add(callback)
+    return () => _stopDevServerListeners.delete(callback)
+  },
+
+  /**
    * onRestartDevServer
    */
   onRestartDevServer: (callback: () => void): UnsubscribeFn => {
@@ -864,6 +882,50 @@ function _isWorkbenchRestartToolName(raw: unknown): boolean {
   const isWorkbenchScoped = normalizedToolName.includes("workbench")
 
   return normalizedToolName === "restart_app" || (isWorkbenchScoped && isRestartAlias)
+}
+
+function _resolveWorkbenchLifecycleTool(raw: unknown): "start" | "stop" | "restart" | null {
+  const normalizedToolName = _normalizeToolName(raw)
+  if (!normalizedToolName) return null
+
+  const isWorkbenchScoped = normalizedToolName.includes("workbench")
+
+  const isStartAlias =
+    normalizedToolName === "start_app" ||
+    normalizedToolName.endsWith("_start_app")
+  if (normalizedToolName === "start_app" || (isWorkbenchScoped && isStartAlias)) {
+    return "start"
+  }
+
+  const isStopAlias =
+    normalizedToolName === "stop_app" ||
+    normalizedToolName.endsWith("_stop_app")
+  if (normalizedToolName === "stop_app" || (isWorkbenchScoped && isStopAlias)) {
+    return "stop"
+  }
+
+  if (_isWorkbenchRestartToolName(normalizedToolName)) {
+    return "restart"
+  }
+
+  return null
+}
+
+function _emitWorkbenchLifecycle(tool: "start" | "stop" | "restart"): void {
+  const listeners =
+    tool === "start"
+      ? _startDevServerListeners
+      : tool === "stop"
+        ? _stopDevServerListeners
+        : _restartDevServerListeners
+
+  for (const listener of listeners) {
+    try {
+      listener()
+    } catch (err) {
+      console.warn(`[conveyor-bridge] ${tool} listener error:`, err)
+    }
+  }
 }
 
 /**
@@ -1059,7 +1121,7 @@ export const aiAgentBridge = {
           }
         }
 
-        // Bridge successful workbench restart tool results to restart listeners.
+        // Bridge successful workbench lifecycle tool results to local listeners.
         if (translatedType === "tool_result") {
           const resultPayload = (translated as { content?: unknown }).content as
             | { callId?: unknown; name?: unknown; isError?: unknown }
@@ -1073,16 +1135,10 @@ export const aiAgentBridge = {
                 ? callMap?.get(callId)
                 : undefined
           const isError = resultPayload?.isError === true
-          const isWorkbenchRestartTool = _isWorkbenchRestartToolName(toolNameRaw)
+          const lifecycleTool = _resolveWorkbenchLifecycleTool(toolNameRaw)
 
-          if (isWorkbenchRestartTool && !isError) {
-            for (const listener of _restartDevServerListeners) {
-              try {
-                listener()
-              } catch (err) {
-                console.warn("[conveyor-bridge] restart listener error:", err)
-              }
-            }
+          if (lifecycleTool && !isError) {
+            _emitWorkbenchLifecycle(lifecycleTool)
           }
 
           if (callId && callMap) {
