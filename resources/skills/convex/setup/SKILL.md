@@ -17,9 +17,10 @@ You are a Convex backend integration specialist for React Native (Expo) and Next
 7. **NEVER retry failed commands** - If a command fails, report the error and stop. Do NOT run the same command again.
 8. **Check before installing** - Read package.json first. If a dependency is already installed, skip the install step.
 9. **Detect the framework** - Read package.json to determine if this is an Expo (React Native) or Next.js project. Use the correct env var prefix accordingly.
-10. **COPY TEMPLATES EXACTLY** - Do NOT speculate or generate provider code. Copy the templates provided below.
+10. **COPY TEMPLATES EXACTLY** - Do NOT speculate or generate provider code. Copy templates from this skill directory (`resources/skills/convex/setup/templates/...`).
 11. **NO CODE IN CHAT** - NEVER show code snippets in the chat. Just write code directly to files.
 12. **HOOKS BEFORE RETURNS** - ALL React hooks MUST be called BEFORE any conditional return statements.
+13. **PROVIDER TAG CONSISTENCY** - When adding/replacing a provider in layout files, update import name, opening tag, and closing tag in one atomic edit and verify there are no stale provider tags left behind.
 
 ## Framework Detection
 
@@ -43,13 +44,16 @@ If this fails, report the error and stop.
 
 ### Step 2: Initialize Convex
 
-The `CONVEX_DEPLOY_KEY` environment variable is pre-configured by the IDE.
+The Convex credentials must already exist in project secrets before this skill runs:
+- URL (`EXPO_PUBLIC_CONVEX_URL` for Expo or `NEXT_PUBLIC_CONVEX_URL` for Next.js)
+- `CONVEX_DEPLOY_KEY`
 
 ```bash
 npx convex dev --once
 ```
 
 This generates the `convex/_generated/` files. Do NOT pass `--configure`, `--team`, or `--project` flags. Do NOT try to log in interactively. If this fails, report the error and stop.
+NEVER fabricate files inside `convex/_generated/` manually.
 
 ### Step 3: Create the Schema
 
@@ -101,9 +105,11 @@ export const create = mutation({
 
 **Expo:**
 Copy [templates/providers/ConvexProvider-expo.tsx](templates/providers/ConvexProvider-expo.tsx) to `providers/ConvexProvider.tsx`. Then wrap the app with `<ConvexClientProvider>` in `app/_layout.tsx` or the root component.
+Make this layout provider change in one edit so tags stay consistent.
 
 **Next.js:**
 Copy [templates/providers/ConvexProvider-nextjs.tsx](templates/providers/ConvexProvider-nextjs.tsx) to `providers/ConvexProvider.tsx`. Then wrap the app with `<ConvexClientProvider>` in `app/layout.tsx`.
+Make this layout provider change in one edit so tags stay consistent.
 
 ### Step 6: Push Schema and Functions
 
@@ -142,13 +148,15 @@ function ItemList() {
 
 ## Required Secrets
 
-The Convex URL and deploy key are configured automatically by the IDE when the user connects Convex. The URL is stored under the framework-appropriate key (`EXPO_PUBLIC_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL`), and `CONVEX_DEPLOY_KEY` is always available.
+The skill requires existing project secrets before running:
+- Convex URL under the framework key (`EXPO_PUBLIC_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL`)
+- `CONVEX_DEPLOY_KEY`
 
-Do NOT tell users to set secrets manually — they are managed through the IDE and Convex CLI.
+If either is missing, stop and report that setup cannot proceed until both are present.
 
 ## After Integration
 
-Tell the user: "Convex is connected as your real-time backend. Your Convex URL has been configured automatically."
+Tell the user: "Convex is connected as your real-time backend."
 
 Do NOT tell users to:
 - Edit `.env` files

@@ -485,7 +485,12 @@ export function ChatInput({
                         onClick={() => {
                           if (integration.isConnected) {
                             integrationsMenu.onUse(integration.id)
-                          } else if (integration.id === 'firebase' || integration.id === 'convex' || integration.id === 'stripe') {
+                          } else if (
+                            integration.id === 'firebase' ||
+                            integration.id === 'convex' ||
+                            integration.id === 'stripe' ||
+                            integration.id === 'revenuecat'
+                          ) {
                             integrationsMenu.onConnect(integration.id)
                           } else {
                             integrationsMenu.onUse(integration.id)
@@ -546,7 +551,10 @@ export function ChatInput({
                               color: 'hsl(var(--muted-foreground))',
                             }}
                           >
-                            {integration.id === 'firebase' || integration.id === 'convex' || integration.id === 'stripe'
+                            {integration.id === 'firebase' ||
+                            integration.id === 'convex' ||
+                            integration.id === 'stripe' ||
+                            integration.id === 'revenuecat'
                               ? 'Connect'
                               : 'Set up'}
                           </span>

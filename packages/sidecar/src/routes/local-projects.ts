@@ -31,6 +31,7 @@ import * as os from "node:os";
 
 const BFLOAT_DIR = path.join(os.homedir(), ".bfloat-ide");
 const PROJECTS_FILE = path.join(BFLOAT_DIR, "projects.json");
+const PROJECTS_BASE = path.join(BFLOAT_DIR, "projects");
 
 // ---------------------------------------------------------------------------
 // Type definitions (mirror app/types/project)
@@ -43,6 +44,20 @@ export interface AgentSession {
   createdAt: string;
   updatedAt?: string;
   status?: string;
+  totalTokens?: number;
+  totalCostUsd?: number;
+  [key: string]: unknown;
+}
+
+export interface Deployment {
+  id: string;
+  projectId?: string;
+  platform: string;
+  status: string;
+  startedAt: string;
+  completedAt?: string;
+  url?: string;
+  error?: string;
   [key: string]: unknown;
 }
 
@@ -53,6 +68,8 @@ export interface Project {
   createdAt: string;
   updatedAt?: string;
   sessions?: AgentSession[];
+  deployments?: Deployment[];
+  launchConfig?: Record<string, unknown> | null;
   [key: string]: unknown;
 }
 
@@ -87,6 +104,11 @@ async function writeProjects(projects: Project[]): Promise<void> {
   await Bun.write(PROJECTS_FILE, JSON.stringify(projects, null, 2));
 }
 
+export async function getProjectById(projectId: string): Promise<Project | null> {
+  const projects = await readProjects();
+  return projects.find((project) => project.id === projectId) ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Zod schemas
 // ---------------------------------------------------------------------------
@@ -99,6 +121,19 @@ const AgentSessionSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string().optional(),
   status: z.string().optional(),
+  totalTokens: z.number().optional(),
+  totalCostUsd: z.number().optional(),
+}).passthrough();
+
+const DeploymentSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().optional(),
+  platform: z.string(),
+  status: z.string(),
+  startedAt: z.string(),
+  completedAt: z.string().optional(),
+  url: z.string().optional(),
+  error: z.string().optional(),
 }).passthrough();
 
 const ProjectSchema = z.object({
@@ -109,6 +144,37 @@ const ProjectSchema = z.object({
   updatedAt: z.string().optional(),
   sessions: z.array(AgentSessionSchema).optional(),
 }).passthrough();
+
+// ---------------------------------------------------------------------------
+// Shared helper — update a session within a project (used by routes + agent-session)
+// ---------------------------------------------------------------------------
+
+export async function updateSessionInProject(
+  projectId: string,
+  sessionId: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const projects = await readProjects();
+  const projectIndex = projects.findIndex((p) => p.id === projectId);
+  if (projectIndex === -1) {
+    console.warn(`[LocalProjects] updateSessionInProject: project ${projectId} not found`);
+    return;
+  }
+
+  const sessions = projects[projectIndex].sessions ?? [];
+  const sessionIndex = sessions.findIndex((s) => s.sessionId === sessionId);
+  if (sessionIndex === -1) {
+    console.warn(`[LocalProjects] updateSessionInProject: session ${sessionId} not found in project ${projectId}`);
+    return;
+  }
+
+  sessions[sessionIndex] = { ...sessions[sessionIndex], ...data };
+  projects[projectIndex].sessions = sessions;
+  projects[projectIndex].updatedAt = new Date().toISOString();
+
+  await writeProjects(projects);
+  console.log(`[LocalProjects] updateSessionInProject: updated session ${sessionId} in project ${projectId}`);
+}
 
 // ---------------------------------------------------------------------------
 // Router
@@ -173,6 +239,33 @@ localProjectsRouter.post("/", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// PUT /api/local-projects/:id/launch-config  – cache launch config
+// (Registered before PUT /:id so the more specific route matches first)
+// ---------------------------------------------------------------------------
+localProjectsRouter.put("/:id/launch-config", async (c) => {
+  const projectId = c.req.param("id");
+  const body = await c.req.json().catch(() => null);
+
+  try {
+    const projects = await readProjects();
+    const index = projects.findIndex((p) => p.id === projectId);
+    if (index === -1) {
+      return c.json({ error: "Project not found", projectId }, 404);
+    }
+
+    projects[index].launchConfig = body;
+    projects[index].updatedAt = new Date().toISOString();
+    await writeProjects(projects);
+
+    console.log(`[LocalProjects] Updated launch config for project ${projectId}`);
+    return c.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // PUT /api/local-projects/:id  – update (full replace)
 // ---------------------------------------------------------------------------
 localProjectsRouter.put("/:id", async (c) => {
@@ -206,11 +299,31 @@ localProjectsRouter.put("/:id", async (c) => {
 // ---------------------------------------------------------------------------
 localProjectsRouter.delete("/:id", async (c) => {
   const id = c.req.param("id");
+
+  // Path-traversal guard
+  if (/[/\\]|\.\./.test(id)) {
+    return c.json({ error: "Invalid project id" }, 400);
+  }
+
   try {
     const projects = await readProjects();
     const filtered = projects.filter((p) => p.id !== id);
     await writeProjects(filtered);
-    return c.json({ success: true });
+
+    // Clean up the project directory on disk
+    let warning: string | undefined;
+    const projectDir = path.join(PROJECTS_BASE, id);
+    try {
+      await fsp.rm(projectDir, { recursive: true, force: true });
+      console.log(`[LocalProjects] Removed project directory: ${projectDir}`);
+    } catch (rmErr: unknown) {
+      if ((rmErr as NodeJS.ErrnoException).code !== "ENOENT") {
+        warning = `Metadata removed but failed to delete project directory: ${(rmErr as Error).message}`;
+        console.warn(`[LocalProjects] ${warning}`);
+      }
+    }
+
+    return c.json({ success: true, ...(warning ? { warning } : {}) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: msg }, 500);
@@ -334,6 +447,133 @@ localProjectsRouter.delete("/:id/sessions/:sessionId", async (c) => {
 
     await writeProjects(projects);
     console.log(`[LocalProjects] Deleted session ${sessionId} from project ${projectId}`);
+    return c.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/local-projects/:id/deployments  – list deployments
+// ---------------------------------------------------------------------------
+localProjectsRouter.get("/:id/deployments", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const projects = await readProjects();
+    const project = projects.find((p) => p.id === id);
+    if (!project) {
+      return c.json({ error: "Project not found", id }, 404);
+    }
+    return c.json(project.deployments ?? []);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/local-projects/:id/deployments  – add / upsert deployment (cap 50)
+// ---------------------------------------------------------------------------
+localProjectsRouter.post("/:id/deployments", async (c) => {
+  const projectId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = DeploymentSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid deployment data", details: parsed.error.flatten() }, 400);
+  }
+
+  const deployment = parsed.data as Deployment;
+
+  try {
+    const projects = await readProjects();
+    const index = projects.findIndex((p) => p.id === projectId);
+    if (index === -1) {
+      return c.json({ error: "Project not found", projectId }, 404);
+    }
+
+    if (!projects[index].deployments) projects[index].deployments = [];
+
+    const existingIdx = projects[index].deployments!.findIndex(
+      (d) => d.id === deployment.id
+    );
+
+    if (existingIdx >= 0) {
+      projects[index].deployments![existingIdx] = deployment;
+      console.log(`[LocalProjects] Updated existing deployment ${deployment.id}`);
+    } else {
+      projects[index].deployments!.unshift(deployment);
+      // Cap at 50 deployments
+      if (projects[index].deployments!.length > 50) {
+        projects[index].deployments = projects[index].deployments!.slice(0, 50);
+      }
+      console.log(`[LocalProjects] Added deployment ${deployment.id}, total: ${projects[index].deployments!.length}`);
+    }
+
+    projects[index].updatedAt = new Date().toISOString();
+    await writeProjects(projects);
+
+    return c.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/local-projects/:id/deployments/:deploymentId  – partial update
+// ---------------------------------------------------------------------------
+localProjectsRouter.put("/:id/deployments/:deploymentId", async (c) => {
+  const projectId = c.req.param("id");
+  const deploymentId = c.req.param("deploymentId");
+  const body = await c.req.json().catch(() => ({}));
+
+  try {
+    const projects = await readProjects();
+    const projectIndex = projects.findIndex((p) => p.id === projectId);
+    if (projectIndex === -1) {
+      return c.json({ error: "Project not found", projectId }, 404);
+    }
+
+    const deployments = projects[projectIndex].deployments ?? [];
+    const deploymentIndex = deployments.findIndex((d) => d.id === deploymentId);
+    if (deploymentIndex === -1) {
+      return c.json({ error: "Deployment not found", deploymentId }, 404);
+    }
+
+    deployments[deploymentIndex] = { ...deployments[deploymentIndex], ...body };
+    projects[projectIndex].deployments = deployments;
+    projects[projectIndex].updatedAt = new Date().toISOString();
+
+    await writeProjects(projects);
+    console.log(`[LocalProjects] Updated deployment ${deploymentId}`);
+    return c.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/local-projects/:id/deployments/:deploymentId  – delete deployment
+// ---------------------------------------------------------------------------
+localProjectsRouter.delete("/:id/deployments/:deploymentId", async (c) => {
+  const projectId = c.req.param("id");
+  const deploymentId = c.req.param("deploymentId");
+
+  try {
+    const projects = await readProjects();
+    const projectIndex = projects.findIndex((p) => p.id === projectId);
+    if (projectIndex === -1) {
+      return c.json({ error: "Project not found", projectId }, 404);
+    }
+
+    const deployments = projects[projectIndex].deployments ?? [];
+    projects[projectIndex].deployments = deployments.filter((d) => d.id !== deploymentId);
+    projects[projectIndex].updatedAt = new Date().toISOString();
+
+    await writeProjects(projects);
+    console.log(`[LocalProjects] Deleted deployment ${deploymentId} from project ${projectId}`);
     return c.json({ success: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

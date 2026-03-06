@@ -1,12 +1,36 @@
 import ConvexLogo from '@/app/components/ui/icons/convex-logo'
+import type { ConvexIntegrationStage } from '@/app/lib/integrations/convex'
 
 interface ConvexSetupBannerProps {
-  isConnected: boolean
+  stage: ConvexIntegrationStage
+  missingKey?: 'url' | 'deploy_key' | null
   onConnect: () => void
   onUse: () => void
 }
 
-export function ConvexSetupBanner({ isConnected, onConnect, onUse }: ConvexSetupBannerProps) {
+export function ConvexSetupBanner({ stage, missingKey, onConnect, onUse }: ConvexSetupBannerProps) {
+  const isDisconnected = stage === 'disconnected'
+  const isSettingUp = stage === 'setting_up'
+  const isReady = stage === 'ready'
+
+  const message = isDisconnected
+    ? missingKey === 'deploy_key'
+      ? "Convex URL is set. Add CONVEX_DEPLOY_KEY to finish connecting Convex."
+      : "To add Convex backend support, add your Convex URL and deploy key first."
+    : isSettingUp
+      ? 'Convex is connected. Setup is currently in progress...'
+      : isReady
+        ? 'Convex backend is ready to use.'
+        : 'Convex is connected. Finish setup to generate schema and functions.'
+
+  const buttonLabel = isDisconnected
+    ? 'Connect Convex'
+    : isSettingUp
+      ? 'Setting up Convex...'
+      : isReady
+        ? 'Use Convex'
+        : 'Finish Convex Setup'
+
   return (
     <div
       style={{
@@ -22,27 +46,10 @@ export function ConvexSetupBanner({ isConnected, onConnect, onUse }: ConvexSetup
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <ConvexLogo width="20" height="20" />
         <span style={{ fontSize: '13px', color: 'var(--bfloat-text-secondary, #a0a0b8)' }}>
-          To add Convex backend support, let's get it connected first.
+          {message}
         </span>
       </div>
-      {isConnected ? (
-        <button
-          onClick={onUse}
-          style={{
-            padding: '8px 16px',
-            borderRadius: '8px',
-            border: 'none',
-            backgroundColor: 'var(--bfloat-accent, #6c5ce7)',
-            color: '#fff',
-            fontSize: '13px',
-            fontWeight: 500,
-            cursor: 'pointer',
-            alignSelf: 'flex-start',
-          }}
-        >
-          Set up Convex
-        </button>
-      ) : (
+      {isDisconnected ? (
         <button
           onClick={onConnect}
           style={{
@@ -57,7 +64,26 @@ export function ConvexSetupBanner({ isConnected, onConnect, onUse }: ConvexSetup
             alignSelf: 'flex-start',
           }}
         >
-          Connect Convex
+          {buttonLabel}
+        </button>
+      ) : (
+        <button
+          onClick={onUse}
+          disabled={isSettingUp}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '8px',
+            border: 'none',
+            backgroundColor: 'var(--bfloat-accent, #6c5ce7)',
+            color: '#fff',
+            fontSize: '13px',
+            fontWeight: 500,
+            cursor: isSettingUp ? 'wait' : 'pointer',
+            opacity: isSettingUp ? 0.7 : 1,
+            alignSelf: 'flex-start',
+          }}
+        >
+          {buttonLabel}
         </button>
       )}
     </div>

@@ -10,10 +10,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Brain } from 'lucide-react'
 
 import type { ChatMessage } from '@/app/types/project'
+import type { ConvexIntegrationStage } from '@/app/lib/integrations/convex'
 import { workbenchStore } from '@/app/stores/workbench'
 import { AssistantMessage } from './AssistantMessage'
-import { StripeSetupBanner } from './StripeSetupBanner'
 import { UserMessage } from './UserMessage'
+import type { ConvexIntentMode } from './ConvexIntentBanner'
 
 interface MessagesProps {
   messages: ChatMessage[]
@@ -21,11 +22,16 @@ interface MessagesProps {
   onAskUserSubmit?: (toolCallId: string, answers: Record<string, string>) => void
   onIntegrationConnect?: (id: string) => void
   onIntegrationUse?: (id: string) => void
+  onConvexIntentSelect?: (mode: ConvexIntentMode) => void
   onClaudeReconnect?: () => void
   onClaudeAuthError?: () => void
-  isConvexConnected?: boolean
+  convexStage?: ConvexIntegrationStage
+  convexMissingKey?: 'url' | 'deploy_key' | null
   isFirebaseConnected?: boolean
   isStripeConnected?: boolean
+  isStripeSettingUp?: boolean
+  isRevenueCatConnected?: boolean
+  isRevenueCatSettingUp?: boolean
   isClaudeAuthenticated?: boolean
 }
 
@@ -38,17 +44,33 @@ interface ToolCallPart {
   output: unknown
 }
 
+function validateJsonWrite(filePath: string, content: string): string | null {
+  if (!filePath.toLowerCase().endsWith('.json')) return null
+
+  try {
+    JSON.parse(content)
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Unknown JSON parse error'
+  }
+}
+
 export const Messages = memo(function Messages({
   messages,
   isStreaming,
   onAskUserSubmit,
   onIntegrationConnect,
   onIntegrationUse,
+  onConvexIntentSelect,
   onClaudeReconnect,
   onClaudeAuthError,
-  isConvexConnected,
+  convexStage,
+  convexMissingKey,
   isFirebaseConnected,
   isStripeConnected,
+  isStripeSettingUp,
+  isRevenueCatConnected,
+  isRevenueCatSettingUp,
   isClaudeAuthenticated,
 }: MessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -64,7 +86,10 @@ export const Messages = memo(function Messages({
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Keep latest assistant cards fully visible, especially near the input edge.
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    })
   }, [messages])
 
   // Process tool calls to apply file operations ONLY during active streaming
@@ -90,16 +115,25 @@ export const Messages = memo(function Messages({
       for (const part of toolParts) {
         // Only process tool calls that have output (completed)
         if (part.output) {
+          const { filePath, content } = part.input
+          if (filePath && content !== undefined) {
+            const jsonError = validateJsonWrite(filePath, content)
+            if (jsonError) {
+              const errorMessage = `Blocked invalid JSON write to ${filePath}: ${jsonError}`
+              console.error(`[Messages] ${errorMessage}`)
+              workbenchStore.setPromptError(errorMessage)
+              break
+            }
+          }
+
           switch (part.type) {
             case 'tool-createFile': {
-              const { filePath, content } = part.input
               if (filePath && content !== undefined) {
                 workbenchStore.addFile(filePath, content)
               }
               break
             }
             case 'tool-updateFile': {
-              const { filePath, content } = part.input
               if (filePath && content !== undefined) {
                 workbenchStore.updateFile(filePath, content)
               }
@@ -169,12 +203,18 @@ export const Messages = memo(function Messages({
                 onAskUserSubmit={onAskUserSubmit}
                 onIntegrationConnect={onIntegrationConnect}
                 onIntegrationUse={onIntegrationUse}
-                onClaudeReconnect={onClaudeReconnect}
-                onClaudeAuthError={onClaudeAuthError}
-                isConvexConnected={isConvexConnected}
-                isFirebaseConnected={isFirebaseConnected}
-                isClaudeAuthenticated={isClaudeAuthenticated}
-              />
+                onConvexIntentSelect={onConvexIntentSelect}
+                  onClaudeReconnect={onClaudeReconnect}
+                  onClaudeAuthError={onClaudeAuthError}
+                  convexStage={convexStage}
+                  convexMissingKey={convexMissingKey}
+                  isFirebaseConnected={isFirebaseConnected}
+                  isStripeConnected={isStripeConnected}
+                  isStripeSettingUp={isStripeSettingUp}
+                  isRevenueCatConnected={isRevenueCatConnected}
+                  isRevenueCatSettingUp={isRevenueCatSettingUp}
+                  isClaudeAuthenticated={isClaudeAuthenticated}
+                />
               )}
             </motion.div>
           )

@@ -10,11 +10,14 @@ use futures::{
     future::{self, Shared},
 };
 use std::{
+    fs::{self, OpenOptions},
+    io::Write,
     net::TcpListener,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri::{AppHandle, Manager, RunEvent, State, ipc::Channel};
+use tauri::{AppHandle, Manager, RunEvent, State, ipc::Channel, path::BaseDirectory};
 #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
 use tauri_plugin_deep_link::DeepLinkExt;
 use tokio::{
@@ -25,6 +28,10 @@ use tokio::{
 use crate::constants::*;
 use crate::server::get_saved_server_url;
 use crate::windows::MainWindow;
+
+const FRONTEND_LOG_FILE: &str = "frontend-console.log";
+const FRONTEND_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+const FRONTEND_LOG_BACKUPS: usize = 3;
 
 #[derive(Clone, serde::Serialize, specta::Type, Debug)]
 struct ServerReadyData {
@@ -118,6 +125,75 @@ async fn await_initialization(
         .map_err(|_| "Failed to get server status".to_string())?
 }
 
+#[tauri::command]
+#[specta::specta]
+fn append_frontend_log(app: AppHandle, line: String) -> Result<(), String> {
+    if !cfg!(debug_assertions) {
+        return Ok(());
+    }
+
+    let base = app
+        .path()
+        .resolve("", BaseDirectory::AppLocalData)
+        .map_err(|e| format!("Failed to resolve app local data dir: {e}"))?;
+
+    let log_dir = base.join("logs");
+    fs::create_dir_all(&log_dir).map_err(|e| format!("Failed to create log dir: {e}"))?;
+
+    let log_file: PathBuf = log_dir.join(FRONTEND_LOG_FILE);
+    rotate_frontend_log_if_needed(&log_file)?;
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .map_err(|e| format!("Failed to open log file {:?}: {e}", log_file))?;
+
+    writeln!(file, "{line}").map_err(|e| format!("Failed to append frontend log: {e}"))?;
+
+    Ok(())
+}
+
+fn rotate_frontend_log_if_needed(log_file: &Path) -> Result<(), String> {
+    let Ok(metadata) = fs::metadata(log_file) else {
+        return Ok(());
+    };
+
+    if metadata.len() < FRONTEND_LOG_MAX_BYTES {
+        return Ok(());
+    }
+
+    // Remove the oldest backup first so renames below can succeed consistently.
+    let oldest = log_file.with_extension(format!("log.{}", FRONTEND_LOG_BACKUPS));
+    if oldest.exists() {
+        fs::remove_file(&oldest)
+            .map_err(|e| format!("Failed to remove oldest log backup {:?}: {e}", oldest))?;
+    }
+
+    for idx in (1..=FRONTEND_LOG_BACKUPS).rev() {
+        let src = if idx == 1 {
+            log_file.to_path_buf()
+        } else {
+            log_file.with_extension(format!("log.{}", idx - 1))
+        };
+        let dst = log_file.with_extension(format!("log.{}", idx));
+
+        if !src.exists() {
+            continue;
+        }
+
+        if dst.exists() {
+            fs::remove_file(&dst)
+                .map_err(|e| format!("Failed to remove rotated log {:?}: {e}", dst))?;
+        }
+
+        fs::rename(&src, &dst)
+            .map_err(|e| format!("Failed to rotate log {:?} -> {:?}: {e}", src, dst))?;
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = make_specta_builder();
@@ -125,7 +201,7 @@ pub fn run() {
     #[cfg(debug_assertions)] // <- Only export on non-release builds
     export_types(&builder);
 
-    #[cfg(all(target_os = "macos", not(debug_assertions)))]
+    #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("killall")
         .arg("bfloat-sidecar")
         .output();
@@ -184,6 +260,7 @@ fn make_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .commands(tauri_specta::collect_commands![
             kill_sidecar,
             await_initialization,
+            append_frontend_log,
             server::get_default_server_url,
             server::set_default_server_url,
             window_commands::window_minimize,

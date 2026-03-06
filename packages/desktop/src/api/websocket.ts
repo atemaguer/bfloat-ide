@@ -223,12 +223,18 @@ export class SidecarWebSocket<
     }
 
     socket.onmessage = (event: MessageEvent) => {
+      const raw = String(event.data)
       let parsed: TIncoming
       try {
-        parsed = JSON.parse(event.data as string) as TIncoming
+        const candidate = JSON.parse(raw) as unknown
+        // Preserve primitive payloads (e.g. "1") as raw text so terminal
+        // output/input echo is not coerced into non-string values.
+        parsed = (candidate !== null && typeof candidate === "object"
+          ? candidate
+          : raw) as TIncoming
       } catch {
         // Non-JSON frame — deliver the raw string cast to TIncoming.
-        parsed = event.data as TIncoming
+        parsed = raw as TIncoming
       }
 
       for (const listener of this.messageListeners) {

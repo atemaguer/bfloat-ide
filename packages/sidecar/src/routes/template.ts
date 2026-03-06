@@ -28,6 +28,7 @@ import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { syncAgentInstructionFiles } from "../services/agent-instructions.ts";
 
 // ---------------------------------------------------------------------------
 // Template map (mirrors template-handler.ts TEMPLATE_MAP)
@@ -41,6 +42,10 @@ const TEMPLATE_MAP: Record<string, string> = {
   web: "nextjs-default",
   node: "nextjs-default",
 };
+
+const PROJECT_ORIGIN_DIR = ".bfloat-ide";
+const PROJECT_ORIGIN_FILE = "project-origin.json";
+const TEMPLATE_BOOTSTRAP_ORIGIN = "template-bootstrap";
 
 // ---------------------------------------------------------------------------
 // Templates base path resolution
@@ -103,16 +108,25 @@ function getTemplatePath(appType: string): string {
   return path.join(getTemplatesBasePath(), folder);
 }
 
+function getTemplateFolder(appType: string): string {
+  return TEMPLATE_MAP[appType] ?? TEMPLATE_MAP.web;
+}
+
 // ---------------------------------------------------------------------------
 // Directory copy helper (mirrors template-handler.ts copyDirectory)
 // ---------------------------------------------------------------------------
 
 async function copyDirectory(src: string, dest: string): Promise<void> {
+  const SKIP_ENTRIES = new Set(["node_modules", ".git", ".DS_Store"]);
   await fsp.mkdir(dest, { recursive: true });
 
   const entries = await fsp.readdir(src, { withFileTypes: true });
 
   for (const entry of entries) {
+    if (SKIP_ENTRIES.has(entry.name)) {
+      continue;
+    }
+
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
 
@@ -178,6 +192,7 @@ export async function initializeFromTemplate(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const templatePath = getTemplatePath(appType);
+    const templateFolder = getTemplateFolder(appType);
 
     // Verify the template exists
     try {
@@ -204,6 +219,7 @@ export async function initializeFromTemplate(
 
     await fsp.mkdir(projectPath, { recursive: true });
     await copyDirectory(templatePath, projectPath);
+    await writeProjectOriginMarker(projectPath, appType, templateFolder);
 
     console.log(`[Template] Initialized project at ${projectPath} from template '${appType}'`);
     return { success: true };
@@ -211,6 +227,24 @@ export async function initializeFromTemplate(
     console.error("[Template] Failed to initialize template:", err);
     return { success: false, error: String(err) };
   }
+}
+
+async function writeProjectOriginMarker(
+  projectPath: string,
+  appType: string,
+  templateId: string
+): Promise<void> {
+  const originDir = path.join(projectPath, PROJECT_ORIGIN_DIR);
+  const markerPath = path.join(originDir, PROJECT_ORIGIN_FILE);
+  const payload = {
+    origin: TEMPLATE_BOOTSTRAP_ORIGIN,
+    appType,
+    templateId,
+    initializedAt: new Date().toISOString(),
+  };
+
+  await fsp.mkdir(originDir, { recursive: true });
+  await fsp.writeFile(markerPath, JSON.stringify(payload, null, 2), "utf8");
 }
 
 // ---------------------------------------------------------------------------
@@ -284,5 +318,22 @@ templateRouter.post("/initialize", async (c) => {
   }
 
   const result = await initializeFromTemplate(resolvedPath, appType);
-  return c.json(result, result.success ? 200 : 500);
+  if (!result.success) {
+    return c.json(result, 500);
+  }
+
+  try {
+    await syncAgentInstructionFiles(resolvedPath, undefined);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json(
+      {
+        success: false,
+        error: `Template initialized but failed to sync AGENTS.md/CLAUDE.md: ${msg}`,
+      },
+      500
+    );
+  }
+
+  return c.json({ success: true }, 200);
 });

@@ -32,7 +32,8 @@ impl MainWindow {
         .disable_drag_drop_handler()
         .zoom_hotkeys_enabled(false)
         .visible(true)
-        .maximized(true)
+        .inner_size(1920.0, 1080.0)
+        .center()
         .initialization_script(format!(
             r#"
             window.__BFLOAT__ ??= {{}};

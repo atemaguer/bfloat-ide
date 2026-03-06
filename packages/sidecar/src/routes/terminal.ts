@@ -218,15 +218,14 @@ export async function createTerminalSession(opts: {
     try {
       const ptyProc = spawn(shell, shellArgs, {
         name: "xterm-256color",
+        cols,
+        rows,
         cwd,
         env,
       });
 
       session.pty = ptyProc;
       session.isPty = true;
-
-      // Resize to requested dimensions (bun-pty doesn't take cols/rows in spawn)
-      ptyProc.resize(cols, rows);
 
       ptyProc.onData((data) => {
         // bun-pty may return Uint8Array or string

@@ -4,21 +4,34 @@ import toast from 'react-hot-toast'
 
 import { MobileOnly } from '@/app/components/common/FeatureGate'
 import type { Project } from '@/app/types/project'
-import { Input } from '@/app/components/ui/input'
+import { Input, Textarea } from '@/app/components/ui/input'
 import { Button } from '@/app/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/app/components/ui/dialog'
 import { ImageDropzone } from '@/app/components/ui/image-dropzone'
 import { Switch } from '@/app/components/ui/Switch'
 import { localProjectsStore } from '@/app/stores/local-projects'
+import { useStore } from '@/app/hooks/useStore'
+import { workbenchStore } from '@/app/stores/workbench'
 import { SecretModal } from '@/app/components/settings/sections/SecretModal'
-import { secrets as secretsApi } from '@/app/api/sidecar'
+import {
+  IntegrationCredentialsModal,
+  type IntegrationSaveResult,
+} from '@/app/components/settings/sections/IntegrationCredentialsModal'
+import { secrets as secretsApi, projectFiles } from '@/app/api/sidecar'
+import { isConvexSecretKey } from '@/app/lib/integrations/secrets'
+import { detectConvexBootstrap, getConvexSecretStatusFromSecrets } from '@/app/lib/integrations/convex'
+import { getRequiredSecretKeys, hasRequiredSecrets, type ConnectIntegrationId } from '@/app/lib/integrations/credentials'
 import './styles.css'
 
 interface ProjectSettingsProps {
   project: Project
   onProjectUpdate?: (project: Project) => void
 }
+
+const REVENUECAT_API_KEY = 'REVENUECAT_API_KEY'
+const STRIPE_SETUP_PROMPT = 'Use the /add-stripe skill to set up Stripe payments integration for this project'
+const REVENUECAT_SETUP_PROMPT = 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project'
 
 export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsProps) {
   const [isSaving, setIsSaving] = useState(false)
@@ -32,6 +45,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [iosAppId, setIosAppId] = useState(project.iosAppId || '')
   const [androidPackageName, setAndroidPackageName] = useState(project.androidPackageName || '')
   const [isPublic, setIsPublic] = useState(project.isPublic || false)
+  const [agentInstructions, setAgentInstructions] = useState(project.agentInstructions || '')
 
   // App icon state
   const [iosAppIcon, setIosAppIcon] = useState<File | null>(null)
@@ -50,7 +64,42 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [visibleSecrets, setVisibleSecrets] = useState<Set<string>>(new Set())
   const [isSecretModalOpen, setIsSecretModalOpen] = useState(false)
   const [editingSecret, setEditingSecret] = useState<Secret | null>(null)
+  const [secretModalDefaultKey, setSecretModalDefaultKey] = useState<string | null>(null)
+  const [isIntegrationModalOpen, setIsIntegrationModalOpen] = useState(false)
+  const [activeIntegrationId, setActiveIntegrationId] = useState<ConnectIntegrationId | null>(null)
   const [deletingSecretKey, setDeletingSecretKey] = useState<string | null>(null)
+  const pendingIntegrationConnect = useStore(workbenchStore.pendingIntegrationConnect)
+  const files = useStore(workbenchStore.files)
+  const normalizedAppType: 'web' | 'mobile' =
+    project.appType === 'nextjs' || project.appType === 'vite' || project.appType === 'node' || project.appType === 'web'
+      ? 'web'
+      : 'mobile'
+  const requiredStripeKeys = getRequiredSecretKeys('stripe', normalizedAppType)
+
+  const validateSecretWriteTarget = (
+    result: { projectId?: string; writePath?: string },
+    actionLabel: string
+  ): boolean => {
+    if (!project.id) return true
+
+    if (result.projectId && result.projectId !== project.id) {
+      const msg = `${actionLabel} targeted ${result.projectId}, but active project is ${project.id}.`
+      console.error('[ProjectSettings]', msg, result)
+      setSecretsError(msg)
+      toast.error('Secret save targeted a different project. Please reload the project.')
+      return false
+    }
+
+    if (result.writePath && !result.writePath.includes(project.id)) {
+      const msg = `${actionLabel} wrote to ${result.writePath}, which does not match active project ${project.id}.`
+      console.error('[ProjectSettings]', msg, result)
+      setSecretsError(msg)
+      toast.error('Secret write path does not match active project. Please reload the project.')
+      return false
+    }
+
+    return true
+  }
 
   // Sync form with updated project prop
   useEffect(() => {
@@ -60,6 +109,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     setIosAppId(project.iosAppId || '')
     setAndroidPackageName(project.androidPackageName || '')
     setIsPublic(project.isPublic || false)
+    setAgentInstructions(project.agentInstructions || '')
     setIosAppIconPreview(project.iosAppIconUrl || null)
     setAndroidAppIconPreview(project.androidAppIconUrl || null)
   }, [project])
@@ -94,23 +144,207 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
 
   const handleAddSecret = () => {
     setEditingSecret(null)
+    setSecretModalDefaultKey(null)
     setIsSecretModalOpen(true)
   }
 
   const handleEditSecret = (secret: Secret) => {
     setEditingSecret(secret)
+    setSecretModalDefaultKey(null)
     setIsSecretModalOpen(true)
+  }
+
+  // Handle "Connect integration" requests from chat/workbench by opening
+  // the integration credentials modal with all required fields.
+  useEffect(() => {
+    if (!pendingIntegrationConnect || isLoadingSecrets) return
+
+    setActiveIntegrationId(pendingIntegrationConnect.integrationId)
+    setIsIntegrationModalOpen(true)
+    workbenchStore.clearPendingIntegrationConnect()
+  }, [pendingIntegrationConnect, isLoadingSecrets])
+
+  const promptConvexIntentChoice = (convexSecrets: ReturnType<typeof getConvexSecretStatusFromSecrets>) => {
+    if (!convexSecrets.hasUrl) {
+      toast('Add your Convex URL first before running setup.', { icon: 'ℹ️' })
+      return
+    }
+
+    if (!convexSecrets.hasDeployKey) {
+      toast('Convex URL saved. Add CONVEX_DEPLOY_KEY to run setup.', { icon: 'ℹ️' })
+      return
+    }
+
+    if (!detectConvexBootstrap(files)) {
+      workbenchStore.setPendingIntegrationChoice({
+        integrationId: 'convex',
+        source: 'settings',
+      })
+      toast.success('Convex credentials saved. Choose Convex setup mode in chat...')
+      return
+    }
+
+    toast.success('Convex credentials updated.')
   }
 
   const handleSaveSecret = async (key: string, value: string) => {
     if (!project.id) return
 
+    const nextValue = value.trim()
+    const previousSecret = secrets.find((s) => s.key === key)
+    const previousValue = previousSecret?.value.trim() || ''
+    const isChanged = previousValue !== nextValue
+
     const result = await secretsApi.setSecret(project.id, key, value)
     if (!result.success) {
       throw new Error(result.error || 'Failed to save secret')
     }
+    if (!validateSecretWriteTarget(result, `Saving ${key}`)) {
+      return
+    }
 
     await loadSecrets()
+    workbenchStore.bumpSecretsVersion()
+    if (isChanged && nextValue) {
+      workbenchStore.mergePendingEnvVars({ [key]: nextValue })
+    }
+
+    // Auto-run Convex setup only when URL + deploy key are both present.
+    if (isConvexSecretKey(key) && isChanged) {
+      const nextSecrets = secrets.filter((secret) => secret.key !== key)
+      if (nextValue) {
+        nextSecrets.push({ key, value: nextValue })
+      }
+
+      const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
+      promptConvexIntentChoice(convexSecrets)
+    }
+
+    if (key === REVENUECAT_API_KEY && isChanged && nextValue) {
+      workbenchStore.triggerChatPrompt(REVENUECAT_SETUP_PROMPT, {
+        integrationId: 'revenuecat',
+        projectId: project.id,
+        requiredSecretKeys: [REVENUECAT_API_KEY],
+        waitForSecrets: true,
+        timeoutMs: 8000,
+      })
+      toast.success('RevenueCat key saved. Starting RevenueCat setup in chat...')
+    }
+
+    if (requiredStripeKeys.includes(key) && isChanged && nextValue) {
+      const nextSecretKeys = new Set(secrets.map((secret) => secret.key))
+      nextSecretKeys.add(key)
+      const hasStripeKeys = hasRequiredSecrets([...nextSecretKeys], 'stripe', normalizedAppType)
+
+      if (hasStripeKeys) {
+        workbenchStore.triggerChatPrompt(STRIPE_SETUP_PROMPT, {
+          integrationId: 'stripe',
+          projectId: project.id,
+          requiredSecretKeys: requiredStripeKeys,
+          waitForSecrets: true,
+          timeoutMs: 8000,
+        })
+        toast.success('Stripe credentials saved. Starting Stripe setup in chat...')
+      }
+    }
+  }
+
+  const handleSaveIntegrationSecrets = async (
+    entries: Array<{ key: string; value: string }>
+  ): Promise<IntegrationSaveResult> => {
+    if (!project.id || !activeIntegrationId) {
+      return {
+        successes: [],
+        failures: entries.map((entry) => ({
+          key: entry.key,
+          error: 'Project is not ready',
+        })),
+      }
+    }
+
+    const successes: string[] = []
+    const failures: Array<{ key: string; error: string }> = []
+
+    for (const entry of entries) {
+      const result = await secretsApi.setSecret(project.id, entry.key, entry.value)
+      if (result.success) {
+        if (!validateSecretWriteTarget(result, `Saving ${entry.key}`)) {
+          failures.push({
+            key: entry.key,
+            error: 'Secret write target mismatch',
+          })
+          continue
+        }
+        successes.push(entry.key)
+      } else {
+        failures.push({
+          key: entry.key,
+          error: result.error || 'Failed to save',
+        })
+      }
+    }
+
+    if (successes.length > 0) {
+      await loadSecrets()
+      workbenchStore.bumpSecretsVersion()
+      const pendingEnv: Record<string, string> = {}
+      for (const entry of entries) {
+        if (successes.includes(entry.key) && entry.value.trim()) {
+          pendingEnv[entry.key] = entry.value.trim()
+        }
+      }
+      if (Object.keys(pendingEnv).length > 0) {
+        workbenchStore.mergePendingEnvVars(pendingEnv)
+      }
+    }
+
+    if (activeIntegrationId === 'convex' && successes.length > 0) {
+      const result = await secretsApi.readSecrets(project.id)
+      const nextSecrets = result.secrets || []
+      const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
+
+      promptConvexIntentChoice(convexSecrets)
+    }
+
+    if (activeIntegrationId === 'revenuecat' && successes.length > 0) {
+      const result = await secretsApi.readSecrets(project.id)
+      const secretKeys = (result.secrets || []).map((secret) => secret.key)
+      const hasRevenuecatKey = hasRequiredSecrets(secretKeys, 'revenuecat', normalizedAppType)
+
+      if (hasRevenuecatKey) {
+        workbenchStore.triggerChatPrompt(REVENUECAT_SETUP_PROMPT, {
+          integrationId: 'revenuecat',
+          projectId: project.id,
+          requiredSecretKeys: [REVENUECAT_API_KEY],
+          waitForSecrets: true,
+          timeoutMs: 8000,
+        })
+        toast.success('RevenueCat credentials saved. Starting RevenueCat setup in chat...')
+      }
+    }
+
+    if (activeIntegrationId === 'stripe' && successes.length > 0) {
+      const result = await secretsApi.readSecrets(project.id)
+      const secretKeys = (result.secrets || []).map((secret) => secret.key)
+      const hasStripeKeys = hasRequiredSecrets(secretKeys, 'stripe', normalizedAppType)
+
+      if (hasStripeKeys) {
+        workbenchStore.triggerChatPrompt(STRIPE_SETUP_PROMPT, {
+          integrationId: 'stripe',
+          projectId: project.id,
+          requiredSecretKeys: requiredStripeKeys,
+          waitForSecrets: true,
+          timeoutMs: 8000,
+        })
+        toast.success('Stripe credentials saved. Starting Stripe setup in chat...')
+      }
+    }
+
+    if (successes.length > 0 && activeIntegrationId !== 'convex' && activeIntegrationId !== 'revenuecat' && activeIntegrationId !== 'stripe') {
+      toast.success('Integration credentials saved.')
+    }
+
+    return { successes, failures }
   }
 
   const handleDeleteSecret = async (key: string) => {
@@ -123,6 +357,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         setSecretsError(result.error || 'Failed to delete secret')
       } else {
         await loadSecrets()
+        workbenchStore.bumpSecretsVersion()
       }
     } catch (err) {
       setSecretsError(err instanceof Error ? err.message : 'Failed to delete secret')
@@ -185,9 +420,14 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         iosAppId,
         androidPackageName,
         isPublic,
+        agentInstructions,
       }
 
       await localProjectsStore.update(project.id, updates)
+      const synced = await projectFiles.syncAgentInstructions(agentInstructions)
+      if (!synced) {
+        toast.error('Saved settings, but failed to sync AGENTS.md/CLAUDE.md')
+      }
 
       const updatedProject: Project = { ...project, ...updates, updatedAt: new Date().toISOString() }
 
@@ -313,6 +553,20 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                   />
                 </div>
               </MobileOnly>
+            </div>
+
+            <div className="settings-section">
+              <h3>Agent Instructions</h3>
+              <div className="settings-field">
+                <label htmlFor="agentInstructions">Shared Instructions for Claude + Codex</label>
+                <Textarea
+                  id="agentInstructions"
+                  value={agentInstructions}
+                  onChange={(e) => setAgentInstructions(e.target.value)}
+                  placeholder="Add project-specific instructions for both agents..."
+                  className="min-h-[140px] font-mono text-xs"
+                />
+              </div>
             </div>
 
             <MobileOnly>
@@ -566,6 +820,15 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         onSave={handleSaveSecret}
         existingSecrets={secrets}
         editingSecret={editingSecret}
+        defaultKey={secretModalDefaultKey}
+      />
+      <IntegrationCredentialsModal
+        open={isIntegrationModalOpen}
+        onOpenChange={setIsIntegrationModalOpen}
+        integrationId={activeIntegrationId}
+        appType={normalizedAppType}
+        existingSecrets={secrets}
+        onSaveMany={handleSaveIntegrationSecrets}
       />
     </div>
   )

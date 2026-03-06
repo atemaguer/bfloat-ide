@@ -259,6 +259,7 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
   const viewRef = useRef<EditorView | null>(null)
   const isUserChangeRef = useRef(false)
   const themeCompartmentRef = useRef(new Compartment())
+  const hasThemeCompartmentRef = useRef(false)
 
   const handleSave = useCallback(() => {
     onSave?.()
@@ -269,6 +270,7 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
     if (!containerRef.current) return
 
     const themeCompartment = themeCompartmentRef.current
+    hasThemeCompartmentRef.current = false
 
     // Create save keymap
     const saveKeymap = keymap.of([
@@ -281,39 +283,63 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
       },
     ])
 
-    const startState = EditorState.create({
-      doc: value,
-      extensions: [
-        lineNumbers(),
-        highlightActiveLine(),
-        highlightActiveLineGutter(),
-        history(),
-        foldGutter(),
-        bracketMatching(),
-        themeCompartment.of(getEditorThemeExtensions(themeStore.resolvedTheme.getState())),
-        getLanguageExtension(language),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
-        saveKeymap,
-        EditorState.readOnly.of(readOnly),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged && onChange) {
-            isUserChangeRef.current = true
-            onChange(update.state.doc.toString())
-          }
-        }),
-      ],
+    const updateListener = EditorView.updateListener.of((update) => {
+      if (update.docChanged && onChange) {
+        isUserChangeRef.current = true
+        onChange(update.state.doc.toString())
+      }
     })
 
-    const view = new EditorView({
-      state: startState,
-      parent: containerRef.current,
-    })
+    let view: EditorView
+    try {
+      const startState = EditorState.create({
+        doc: value,
+        extensions: [
+          lineNumbers(),
+          highlightActiveLine(),
+          highlightActiveLineGutter(),
+          history(),
+          foldGutter(),
+          bracketMatching(),
+          themeCompartment.of(getEditorThemeExtensions(themeStore.resolvedTheme.getState())),
+          getLanguageExtension(language),
+          keymap.of([...defaultKeymap, ...historyKeymap]),
+          saveKeymap,
+          EditorState.readOnly.of(readOnly),
+          updateListener,
+        ],
+      })
+
+      view = new EditorView({
+        state: startState,
+        parent: containerRef.current,
+      })
+      hasThemeCompartmentRef.current = true
+    } catch (error) {
+      // Guard against runtime extension-set incompatibilities so the project page
+      // remains usable even when a dependency mismatch occurs.
+      console.error('[CodeEditor] Failed to initialize full editor extensions, falling back to minimal mode:', error)
+      const fallbackState = EditorState.create({
+        doc: value,
+        extensions: [
+          lineNumbers(),
+          keymap.of(defaultKeymap),
+          saveKeymap,
+          EditorState.readOnly.of(readOnly),
+          updateListener,
+        ],
+      })
+      view = new EditorView({
+        state: fallbackState,
+        parent: containerRef.current,
+      })
+    }
 
     viewRef.current = view
 
     // Subscribe to theme changes
     const unsubTheme = themeStore.resolvedTheme.subscribe((resolved) => {
-      if (viewRef.current) {
+      if (viewRef.current && hasThemeCompartmentRef.current) {
         viewRef.current.dispatch({
           effects: themeCompartment.reconfigure(getEditorThemeExtensions(resolved)),
         })
@@ -349,4 +375,3 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
 
   return <div ref={containerRef} className="code-editor" />
 }
-

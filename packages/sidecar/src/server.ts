@@ -20,6 +20,10 @@ import { secretsRouter } from "./routes/secrets.ts";
 import { providerRouter } from "./routes/provider.ts";
 import { localProjectsRouter } from "./routes/local-projects.ts";
 import { templateRouter } from "./routes/template.ts";
+import { screenshotRouter } from "./routes/screenshot.ts";
+import { workbenchRouter } from "./routes/workbench.ts";
+import { previewProxyRouter, previewProxyFallback, getActiveProxyTarget, parsePreviewTargetUrl } from "./routes/preview-proxy.ts";
+import { shutdownBrowser } from "./services/screenshot.ts";
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -100,12 +104,45 @@ app.use("*", logger((message: string, ...rest: string[]) => {
 app.use(
   "*",
   cors({
-    origin: ["tauri://localhost", "http://tauri.localhost", "http://localhost"],
+    origin: ["tauri://localhost", "http://tauri.localhost", "http://localhost", "http://localhost:1420"],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Authorization", "Content-Type"],
     credentials: true,
   })
 );
+
+// Preview reverse proxy — mounted BEFORE auth middleware because the iframe
+// cannot send auth headers.  Target is restricted to localhost in the route.
+app.route("/preview-proxy", previewProxyRouter);
+
+// When preview proxy is active, allow unknown app-level /api/* requests
+// (e.g. /api/plans in Next.js projects) to pass through to the preview target
+// before sidecar auth middleware. Sidecar-owned API routes remain protected.
+const SIDECAR_API_PREFIXES = [
+  "/api/terminal",
+  "/api/agent",
+  "/api/fs",
+  "/api/project-files",
+  "/api/project-sync",
+  "/api/deploy",
+  "/api/secrets",
+  "/api/provider",
+  "/api/local-projects",
+  "/api/template",
+  "/api/screenshot",
+  "/api/workbench",
+] as const;
+
+app.use("/api/*", async (c, next) => {
+  const requestPath = c.req.path;
+  const isSidecarApi = SIDECAR_API_PREFIXES.some((prefix) => requestPath === prefix || requestPath.startsWith(`${prefix}/`));
+
+  if (!isSidecarApi && getActiveProxyTarget()) {
+    return previewProxyFallback(c, next);
+  }
+
+  await next();
+});
 
 // Auth middleware applies to all routes except health (checked inside health route)
 app.use("/api/*", authMiddleware(password));
@@ -142,6 +179,17 @@ app.route("/api/local-projects", localProjectsRouter);
 // Template listing and project initialisation from bundled templates
 app.route("/api/template", templateRouter);
 
+// Screenshot capture via headless Chrome + preview URL registration
+app.route("/api/screenshot", screenshotRouter);
+
+// Workbench runtime metadata for managed dev-server awareness
+app.route("/api/workbench", workbenchRouter);
+
+// Catch-all: proxy unmatched requests to the active preview target (if any).
+// This handles sub-resources like <script src="/entry.bundle"> that the browser
+// resolves to the sidecar origin instead of the /preview-proxy route.
+app.all("/*", previewProxyFallback);
+
 // 404 fallback
 app.notFound((c) => {
   console.error(`[${timestamp()}] 404 Not Found: ${c.req.method} ${c.req.path}`);
@@ -161,13 +209,18 @@ app.onError((err, c) => {
 // ---------------------------------------------------------------------------
 
 type WSData = {
-  type: "terminal" | "agent";
+  type: "terminal" | "agent" | "preview-proxy";
   sessionId: string;
   authenticated: boolean;
+  /** For preview-proxy WS: the target Expo dev server origin. */
+  proxyTarget?: string;
 };
 
 // Re-export type alias so the terminal module's ServerWebSocket<WSData>
 // is satisfied by the same shape (both define the same fields).
+
+// Map from client WS → upstream WS for preview-proxy HMR forwarding.
+const previewProxyUpstreams = new Map<object, WebSocket>();
 
 // ---------------------------------------------------------------------------
 // Start Bun server
@@ -188,14 +241,19 @@ const server = Bun.serve<WSData>({
     if (
       req.headers.get("upgrade")?.toLowerCase() === "websocket" &&
       (url.pathname.startsWith("/api/terminal/ws/") ||
-        url.pathname.startsWith("/api/agent/ws/"))
+        url.pathname.startsWith("/api/agent/ws/") ||
+        url.pathname.startsWith("/preview-proxy/ws"))
     ) {
-      // Validate auth before upgrading.
+      // Preview-proxy WS is unauthenticated (target restricted to localhost).
+      const isPreviewProxy = url.pathname.startsWith("/preview-proxy/ws");
+
+      // Validate auth before upgrading (skip for preview-proxy).
       // Browser WebSocket API cannot set headers, so we also accept
       // the password as a ?password= query parameter.
       const authHeader = req.headers.get("authorization") ?? "";
       const queryPassword = url.searchParams.get("password") ?? "";
       const authenticated =
+        isPreviewProxy ||
         validateWebSocketAuth(authHeader, password) ||
         queryPassword === password;
 
@@ -205,17 +263,51 @@ const server = Bun.serve<WSData>({
 
       let type: WSData["type"] = "agent";
       let sessionId = "unknown";
+      let proxyTarget: string | undefined;
 
       if (url.pathname.startsWith("/api/terminal/ws/")) {
         type = "terminal";
         sessionId = url.pathname.replace("/api/terminal/ws/", "");
+      } else if (url.pathname.startsWith("/preview-proxy/ws")) {
+        type = "preview-proxy";
+        const rawTarget = url.searchParams.get("target") ?? "";
+        const parsedTarget = parsePreviewTargetUrl(rawTarget);
+        if (!parsedTarget) {
+          return new Response("Invalid preview proxy target", { status: 400 });
+        }
+        proxyTarget = parsedTarget.origin;
+        sessionId = "preview-proxy";
       } else if (url.pathname.startsWith("/api/agent/ws/")) {
         type = "agent";
         sessionId = url.pathname.replace("/api/agent/ws/", "");
       }
 
       const upgraded = server.upgrade(req, {
-        data: { type, sessionId, authenticated },
+        data: { type, sessionId, authenticated, proxyTarget },
+      });
+
+      if (upgraded) return undefined;
+      return new Response("WebSocket upgrade failed", { status: 500 });
+    }
+
+    // Fallback WS upgrade: Metro HMR sockets (e.g. /message, /hot) that
+    // don't match any known route but should be proxied to the active Expo
+    // dev server when a preview session is active.
+    if (
+      req.headers.get("upgrade")?.toLowerCase() === "websocket" &&
+      getActiveProxyTarget()
+    ) {
+      const target = getActiveProxyTarget()!;
+      const wsTarget = target.replace(/^http/, "ws");
+      const proxyTarget = `${wsTarget}${url.pathname}${url.search}`;
+
+      const upgraded = server.upgrade(req, {
+        data: {
+          type: "preview-proxy" as const,
+          sessionId: "preview-proxy",
+          authenticated: true,
+          proxyTarget,
+        },
       });
 
       if (upgraded) return undefined;
@@ -236,6 +328,34 @@ const server = Bun.serve<WSData>({
 
       if (type === "terminal") {
         onTerminalWSOpen(ws);
+      } else if (type === "preview-proxy") {
+        // Pipe this client WS to the upstream Expo dev server's WS.
+        const target = ws.data.proxyTarget;
+        if (!target) {
+          ws.send(JSON.stringify({ type: "error", message: "Missing ?target= for preview-proxy WS" }));
+          ws.close(4000, "Missing target");
+          return;
+        }
+        try {
+          const wsTarget = target.replace(/^http/, "ws");
+          const upstream = new WebSocket(wsTarget);
+          previewProxyUpstreams.set(ws, upstream);
+
+          upstream.addEventListener("message", (event) => {
+            try { ws.send(typeof event.data === "string" ? event.data : event.data); } catch {}
+          });
+          upstream.addEventListener("close", () => {
+            try { ws.close(); } catch {}
+            previewProxyUpstreams.delete(ws);
+          });
+          upstream.addEventListener("error", () => {
+            try { ws.close(); } catch {}
+            previewProxyUpstreams.delete(ws);
+          });
+        } catch (err) {
+          console.error(`[${timestamp()}] Preview proxy WS upstream connection failed:`, err);
+          ws.close(4002, "Upstream connection failed");
+        }
       } else if (type === "agent") {
         // Subscribe this WebSocket to the agent session's stream.
         // subscribeWebSocket sends an immediate "connected" frame so the
@@ -278,6 +398,12 @@ const server = Bun.serve<WSData>({
 
       if (type === "terminal") {
         onTerminalWSMessage(ws, message as string | Buffer);
+      } else if (type === "preview-proxy") {
+        // Forward client → upstream for HMR
+        const upstream = previewProxyUpstreams.get(ws);
+        if (upstream && upstream.readyState === WebSocket.OPEN) {
+          upstream.send(typeof message === "string" ? message : message);
+        }
       } else if (type === "agent") {
         // Agent WebSockets are subscribe-only (server → client). Client-to-server
         // messages are not currently used; the client sends messages via the
@@ -303,6 +429,12 @@ const server = Bun.serve<WSData>({
 
       if (type === "terminal") {
         onTerminalWSClose(ws, code, reason);
+      } else if (type === "preview-proxy") {
+        const upstream = previewProxyUpstreams.get(ws);
+        if (upstream) {
+          try { upstream.close(); } catch {}
+          previewProxyUpstreams.delete(ws);
+        }
       } else if (type === "agent") {
         // Unsubscribe this WebSocket from the agent session.
         // The session itself is NOT closed — the client must DELETE the session
@@ -324,9 +456,10 @@ const server = Bun.serve<WSData>({
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 
-function shutdown(signal: string): void {
+async function shutdown(signal: string): Promise<void> {
   console.log(`[${timestamp()}] Received ${signal}. Shutting down gracefully...`);
   cleanupAllSessions();
+  await shutdownBrowser();
   server.stop(true);
   console.log(`[${timestamp()}] Server stopped. Goodbye.`);
   process.exit(0);
@@ -334,6 +467,22 @@ function shutdown(signal: string): void {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+process.on("exit", () => {
+  cleanupAllSessions();
+});
+
+process.on("uncaughtException", (err) => {
+  console.error(`[${timestamp()}] Uncaught exception:`, err);
+  cleanupAllSessions();
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error(`[${timestamp()}] Unhandled rejection:`, reason);
+  cleanupAllSessions();
+  process.exit(1);
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

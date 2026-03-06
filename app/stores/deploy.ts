@@ -59,26 +59,7 @@ export interface iOSDeployProgress {
 export type iOSSetupStep = 'idle' | 'wizard' | 'deploying' | 'complete'
 
 const STORAGE_KEY = 'bfloat_deployments'
-
-function getStoredDeployments(): Deployment[] {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-      return JSON.parse(stored)
-    }
-  } catch (e) {
-    console.error('[DeployStore] Failed to parse stored deployments:', e)
-  }
-  return []
-}
-
-function saveDeployments(deployments: Deployment[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(deployments))
-  } catch (e) {
-    console.error('[DeployStore] Failed to save deployments:', e)
-  }
-}
+const MIGRATION_KEY = 'bfloat_deployments_migrated'
 
 class DeployStore {
   // Modal visibility
@@ -90,8 +71,8 @@ class DeployStore {
   // Whether to show embedded terminal (for interactive deployments like iOS)
   showTerminal = createStore<boolean>(() => false)
 
-  // Deployment history (persisted to localStorage)
-  deployments = createStore<Deployment[]>(() => getStoredDeployments())
+  // Deployment history (persisted to projects.json via sidecar)
+  deployments = createStore<Deployment[]>(() => [])
 
   // Background completion notification
   deploymentNotification = createStore<DeploymentNotification | null>(() => null)
@@ -140,11 +121,59 @@ class DeployStore {
   // Pending Apple credentials for interactive build
   pendingAppleCredentials = createStore<{ appleId: string; password: string } | null>(() => null)
 
-  constructor() {
-    // Sync deployments to localStorage
-    this.deployments.subscribe((value) => {
-      saveDeployments(value)
-    })
+  /**
+   * Load deployments from sidecar for the given project
+   */
+  async loadDeployments(projectId: string): Promise<void> {
+    try {
+      const deployments = await window.conveyor.localProjects.listDeployments(projectId)
+      this.deployments.setState(deployments ?? [], true)
+    } catch (err) {
+      console.warn('[DeployStore] Failed to load deployments:', err)
+    }
+  }
+
+  /**
+   * One-time migration from localStorage to sidecar.
+   * Call after sidecar is confirmed ready.
+   */
+  async migrate(): Promise<void> {
+    try {
+      if (localStorage.getItem(MIGRATION_KEY)) return
+
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) {
+        localStorage.setItem(MIGRATION_KEY, '1')
+        return
+      }
+
+      const deployments: Deployment[] = JSON.parse(raw)
+
+      // Group by projectId
+      const byProject = new Map<string, Deployment[]>()
+      for (const d of deployments) {
+        if (!d.projectId) continue // Discard orphans
+        const bucket = byProject.get(d.projectId) ?? []
+        bucket.push(d)
+        byProject.set(d.projectId, bucket)
+      }
+
+      // Write each bucket to sidecar
+      const promises: Promise<void>[] = []
+      for (const [projectId, projectDeployments] of byProject) {
+        for (const deployment of projectDeployments) {
+          promises.push(
+            window.conveyor.localProjects.addDeployment(projectId, deployment)
+          )
+        }
+      }
+      await Promise.allSettled(promises)
+
+      localStorage.setItem(MIGRATION_KEY, '1')
+      console.log(`[DeployStore] Migrated ${deployments.length} deployments from localStorage`)
+    } catch (err) {
+      console.warn('[DeployStore] Migration failed:', err)
+    }
   }
 
   openModal(): void {
@@ -181,7 +210,7 @@ class DeployStore {
     return deployment
   }
 
-  completeDeployment(url?: string): void {
+  async completeDeployment(url?: string): Promise<void> {
     const active = this.activeDeployment.getState()
     if (!active) return
 
@@ -192,15 +221,22 @@ class DeployStore {
       url,
     }
 
-    // Add to history
+    // Optimistic in-memory update
     const history = this.deployments.getState()
-    this.deployments.setState([completed, ...history].slice(0, 50), true) // Keep last 50
+    this.deployments.setState([completed, ...history].slice(0, 50), true)
 
     this.activeDeployment.setState(null, true)
     this.showTerminal.setState(false, true)
+
+    // Persist to sidecar (fire-and-forget)
+    if (completed.projectId) {
+      window.conveyor.localProjects.addDeployment(completed.projectId, completed).catch((err: unknown) =>
+        console.warn('[DeployStore] Failed to persist deployment:', err)
+      )
+    }
   }
 
-  failDeployment(error: string): void {
+  async failDeployment(error: string): Promise<void> {
     const active = this.activeDeployment.getState()
     if (!active) return
 
@@ -211,12 +247,19 @@ class DeployStore {
       error,
     }
 
-    // Add to history
+    // Optimistic in-memory update
     const history = this.deployments.getState()
     this.deployments.setState([failed, ...history].slice(0, 50), true)
 
     this.activeDeployment.setState(null, true)
     this.showTerminal.setState(false, true)
+
+    // Persist to sidecar (fire-and-forget)
+    if (failed.projectId) {
+      window.conveyor.localProjects.addDeployment(failed.projectId, failed).catch((err: unknown) =>
+        console.warn('[DeployStore] Failed to persist deployment:', err)
+      )
+    }
   }
 
   cancelDeployment(): void {
@@ -319,7 +362,7 @@ class DeployStore {
   /**
    * Complete iOS deployment successfully
    */
-  completeIOSDeployment(buildUrl?: string): void {
+  async completeIOSDeployment(buildUrl?: string): Promise<void> {
     this.iOSProgress.setState({
       step: 'complete',
       percent: 100,
@@ -327,7 +370,7 @@ class DeployStore {
       buildUrl,
     }, true)
     this.iOSSetupStep.setState('complete', true)
-    this.completeDeployment(buildUrl)
+    await this.completeDeployment(buildUrl)
 
     if (!this.iOSProgressModalOpen.getState()) {
       this.showDeploymentNotification({
@@ -343,14 +386,14 @@ class DeployStore {
   /**
    * Fail iOS deployment with error
    */
-  failIOSDeployment(error: string): void {
+  async failIOSDeployment(error: string): Promise<void> {
     this.iOSProgress.setState({
       ...this.iOSProgress.getState(),
       step: 'error',
       error,
     }, true)
     this.iOSSetupStep.setState('idle', true)
-    this.failDeployment(error)
+    await this.failDeployment(error)
 
     if (!this.iOSProgressModalOpen.getState()) {
       this.showDeploymentNotification({

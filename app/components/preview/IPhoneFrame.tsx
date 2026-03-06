@@ -1,5 +1,7 @@
 import type * as React from "react";
 import { cn } from "@/lib/utils";
+import { themeStore } from "@/app/stores/theme";
+import { useStore } from "@/app/hooks/useStore";
 
 interface IPhoneFrameProps extends React.HTMLAttributes<HTMLDivElement> {
   children?: React.ReactNode;
@@ -34,6 +36,9 @@ export function IPhoneFrame({
   variant = 'silver',
   ...props
 }: IPhoneFrameProps) {
+  const resolvedTheme = useStore(themeStore.resolvedTheme);
+  const isDarkMode = resolvedTheme === 'dark';
+
   // ── Proportions (scaled from real mm) ──────────────────────────
   // We use a virtual canvas of 390 × 817 CSS-px so that the
   // aspect ratio matches the real 78 × 163.4 mm body exactly.
@@ -72,7 +77,36 @@ export function IPhoneFrame({
     },
   };
 
-  const colors = frameColors[variant] ?? frameColors['silver'];
+  const darkModeFrameOverrides: Partial<typeof frameColors> = {
+    silver: {
+      frame: '#6b6b6b',
+      bezel: '#0a0a0a',
+      accent: '#7a7a7a',
+      buttons: '#5b5b5b',
+      frameGrad: 'linear-gradient(135deg, #8b8b8b 0%, #6b6b6b 40%, #4f4f4f 60%, #6b6b6b 100%)',
+    },
+  };
+
+  const baseColors = frameColors[variant] ?? frameColors['silver'];
+  const colors = isDarkMode
+    ? (darkModeFrameOverrides[variant] ?? baseColors)
+    : baseColors;
+
+  const frameShadow = isDarkMode
+    ? `
+      inset 0 0.5px 0 rgba(255,255,255,0.15),
+      inset 0 -0.5px 0 rgba(0,0,0,0.30),
+      0 0 0 0.5px rgba(0,0,0,0.55),
+      0 2px 10px rgba(0,0,0,0.35),
+      0 16px 56px rgba(0,0,0,0.45)
+    `
+    : `
+      inset 0 0.5px 0 rgba(255,255,255,0.25),
+      inset 0 -0.5px 0 rgba(0,0,0,0.15),
+      0 0 0 0.5px rgba(0,0,0,0.4),
+      0 2px 8px rgba(0,0,0,0.25),
+      0 12px 48px rgba(0,0,0,0.35)
+    `;
 
   // Current time for status bar
   const currentTime = new Date().toLocaleTimeString('en-US', {
@@ -94,13 +128,7 @@ export function IPhoneFrame({
         background: colors.frameGrad,
         padding: bezelWidth,
         // Aluminum unibody look — subtle brushed-metal sheen
-        boxShadow: `
-          inset 0 0.5px 0 rgba(255,255,255,0.25),
-          inset 0 -0.5px 0 rgba(0,0,0,0.15),
-          0 0 0 0.5px rgba(0,0,0,0.4),
-          0 2px 8px rgba(0,0,0,0.25),
-          0 12px 48px rgba(0,0,0,0.35)
-        `,
+        boxShadow: frameShadow,
       }}
       {...props}
     >
@@ -246,20 +274,22 @@ export function IPhoneFrame({
         )}
 
         {/* Dynamic Island — same dimensions as iPhone 16 Pro Max */}
-        <div
-          style={{
-            position: 'absolute',
-            top: '1.3%',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: '30%',
-            height: '3.8%',
-            borderRadius: 999,
-            background: 'linear-gradient(180deg, #1a1a1a, #080808)',
-            zIndex: 20,
-            boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.04)',
-          }}
-        />
+        {showStatusBar && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '1.3%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: '30%',
+              height: '3.8%',
+              borderRadius: 999,
+              background: 'linear-gradient(180deg, #1a1a1a, #080808)',
+              zIndex: 20,
+              boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.04)',
+            }}
+          />
+        )}
 
         {/* App content — padded to clear Dynamic Island + home indicator
              like iOS safe-area-inset-top / -bottom */}
@@ -267,8 +297,8 @@ export function IPhoneFrame({
           width: '100%',
           height: '100%',
           position: 'relative',
-          paddingTop: '6%',   // clears Dynamic Island (~1.3% top + 3.8% height + gap)
-          paddingBottom: '2.5%', // clears home indicator area
+          paddingTop: showStatusBar ? '6%' : 0, // clears Dynamic Island when shown
+          paddingBottom: showHomeIndicator ? '2.5%' : 0, // clears home indicator area when shown
           boxSizing: 'border-box',
         }}>
           {children}

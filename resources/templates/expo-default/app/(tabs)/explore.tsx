@@ -1,162 +1,108 @@
+import { ExternalLink } from "@/components/external-link";
+import ParallaxScrollView from "@/components/parallax-scroll-view";
 import { ThemedText } from "@/components/themed-text";
+import { ThemedView } from "@/components/themed-view";
+import { Collapsible } from "@/components/ui/collapsible";
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { Colors } from "@/constants/theme";
-import { useColorScheme } from "@/hooks/use-color-scheme";
-import { ScrollView, StyleSheet, View } from "react-native";
+import { Fonts } from "@/constants/theme";
+import { Image } from "expo-image";
+import { Platform, StyleSheet } from "react-native";
 
-const SECTIONS = [
-  {
-    title: "File-Based Routing",
-    icon: "folder.fill",
-    items: [
-      "Screens map to files in the app/ directory",
-      "Tab navigation configured in app/(tabs)/_layout.tsx",
-      "Add new screens by creating new .tsx files",
-    ],
-  },
-  {
-    title: "Cross-Platform",
-    icon: "iphone",
-    items: [
-      "Single codebase for iOS, Android, and web",
-      "Platform-specific code via .ios.tsx and .android.tsx",
-      "Native look and feel on every platform",
-    ],
-  },
-  {
-    title: "NativeWind Styling",
-    icon: "paintbrush.fill",
-    items: [
-      "Tailwind CSS utility classes in React Native",
-      "Dark mode support out of the box",
-      "Consistent styling across platforms",
-    ],
-  },
-  {
-    title: "Backend Ready",
-    icon: "externaldrive.fill",
-    items: [
-      "Ask the AI to add a Convex backend",
-      "Real-time database, auth, and file storage",
-      "Automatic environment setup",
-    ],
-  },
-  {
-    title: "Payments",
-    icon: "creditcard.fill",
-    items: [
-      "Ask the AI to add RevenueCat",
-      "In-app purchases and subscriptions",
-      "Works with App Store and Google Play",
-    ],
-  },
-  {
-    title: "Deploy Anywhere",
-    icon: "rocket.fill",
-    items: [
-      "One-click App Store and Google Play submission",
-      "Over-the-air updates without app review",
-      "Build tracking and deployment logs",
-    ],
-  },
-];
-
-export default function ExploreScreen() {
-  const colorScheme = useColorScheme() ?? "light";
-
+export default function TabTwoScreen() {
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: Colors[colorScheme].background }}
-      contentContainerStyle={styles.scroll}>
-      <View style={styles.header}>
-        <ThemedText type="title">Explore</ThemedText>
-        <ThemedText style={styles.headerSub}>What this template includes and what you can add.</ThemedText>
-      </View>
-
-      {SECTIONS.map((section) => (
-        <View
-          key={section.title}
-          style={[
-            styles.card,
-            {
-              backgroundColor: colorScheme === "dark" ? "#1c1c1e" : "#f5f5f7",
-              borderColor: colorScheme === "dark" ? "#2c2c2e" : "#e5e5ea",
-            },
-          ]}>
-          <View style={styles.cardHeader}>
-            <View
-              style={[
-                styles.cardIcon,
-                {
-                  backgroundColor: colorScheme === "dark" ? "#2c2c2e" : "#e5e5ea",
-                },
-              ]}>
-              <IconSymbol name={section.icon as any} size={16} color={Colors[colorScheme].text} />
-            </View>
-            <ThemedText type="defaultSemiBold">{section.title}</ThemedText>
-          </View>
-          {section.items.map((item, i) => (
-            <View key={i} style={styles.listItem}>
-              <View style={[styles.bullet, { backgroundColor: Colors[colorScheme].icon }]} />
-              <ThemedText style={styles.listText}>{item}</ThemedText>
-            </View>
-          ))}
-        </View>
-      ))}
-    </ScrollView>
+    <ParallaxScrollView
+      headerBackgroundColor={{ light: "#D0D0D0", dark: "#353636" }}
+      headerImage={
+        <IconSymbol
+          size={310}
+          color="#808080"
+          name="chevron.left.forwardslash.chevron.right"
+          style={styles.headerImage}
+        />
+      }>
+      <ThemedView style={styles.titleContainer}>
+        <ThemedText
+          type="title"
+          style={{
+            fontFamily: Fonts.rounded,
+          }}>
+          Explore
+        </ThemedText>
+      </ThemedView>
+      <ThemedText>This app includes example code to help you get started.</ThemedText>
+      <Collapsible title="File-based routing">
+        <ThemedText>
+          This app has two screens: <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> and{" "}
+          <ThemedText type="defaultSemiBold">app/(tabs)/explore.tsx</ThemedText>
+        </ThemedText>
+        <ThemedText>
+          The layout file in <ThemedText type="defaultSemiBold">app/(tabs)/_layout.tsx</ThemedText> sets up the tab
+          navigator.
+        </ThemedText>
+        <ExternalLink href="https://docs.expo.dev/router/introduction">
+          <ThemedText type="link">Learn more</ThemedText>
+        </ExternalLink>
+      </Collapsible>
+      <Collapsible title="Android, iOS, and web support">
+        <ThemedText>
+          You can open this project on Android, iOS, and the web. To open the web version, press{" "}
+          <ThemedText type="defaultSemiBold">w</ThemedText> in the terminal running this project.
+        </ThemedText>
+      </Collapsible>
+      <Collapsible title="Images">
+        <ThemedText>
+          For static images, you can use the <ThemedText type="defaultSemiBold">@2x</ThemedText> and{" "}
+          <ThemedText type="defaultSemiBold">@3x</ThemedText> suffixes to provide files for different screen densities
+        </ThemedText>
+        <Image
+          source={require("@/assets/images/react-logo.png")}
+          style={{ width: 100, height: 100, alignSelf: "center" }}
+        />
+        <ExternalLink href="https://reactnative.dev/docs/images">
+          <ThemedText type="link">Learn more</ThemedText>
+        </ExternalLink>
+      </Collapsible>
+      <Collapsible title="Light and dark mode components">
+        <ThemedText>
+          This template has light and dark mode support. The{" "}
+          <ThemedText type="defaultSemiBold">useColorScheme()</ThemedText> hook lets you inspect what the user&apos;s
+          current color scheme is, and so you can adjust UI colors accordingly.
+        </ThemedText>
+        <ExternalLink href="https://docs.expo.dev/develop/user-interface/color-themes/">
+          <ThemedText type="link">Learn more</ThemedText>
+        </ExternalLink>
+      </Collapsible>
+      <Collapsible title="Animations">
+        <ThemedText>
+          This template includes an example of an animated component. The{" "}
+          <ThemedText type="defaultSemiBold">components/HelloWave.tsx</ThemedText> component uses the powerful{" "}
+          <ThemedText type="defaultSemiBold" style={{ fontFamily: Fonts.mono }}>
+            react-native-reanimated
+          </ThemedText>{" "}
+          library to create a waving hand animation.
+        </ThemedText>
+        {Platform.select({
+          ios: (
+            <ThemedText>
+              The <ThemedText type="defaultSemiBold">components/ParallaxScrollView.tsx</ThemedText> component provides a
+              parallax effect for the header image.
+            </ThemedText>
+          ),
+        })}
+      </Collapsible>
+    </ParallaxScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  scroll: {
-    paddingHorizontal: 24,
-    paddingTop: 80,
-    paddingBottom: 40,
+  headerImage: {
+    color: "#808080",
+    bottom: -90,
+    left: -35,
+    position: "absolute",
   },
-  header: {
-    marginBottom: 24,
-  },
-  headerSub: {
-    opacity: 0.5,
-    marginTop: 4,
-    lineHeight: 22,
-  },
-  card: {
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 16,
-    marginBottom: 10,
-    gap: 10,
-  },
-  cardHeader: {
+  titleContainer: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  cardIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  listItem: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 10,
-    paddingLeft: 40,
-  },
-  bullet: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    marginTop: 8,
-    opacity: 0.3,
-  },
-  listText: {
-    flex: 1,
-    fontSize: 14,
-    opacity: 0.6,
-    lineHeight: 20,
+    gap: 8,
   },
 });

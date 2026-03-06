@@ -21,6 +21,14 @@ You are a Convex authentication specialist for React Native (Expo) and Next.js a
 11. **NO CODE IN CHAT** - NEVER show code snippets in the chat. Just write code directly to files.
 12. **AUTH MEANS SCREENS** - When adding authentication, ALWAYS create sign-up and sign-in screens. Auth is not complete without user-facing screens.
 13. **HOOKS BEFORE RETURNS** - ALL React hooks MUST be called BEFORE any conditional return statements.
+14. **NON-OAUTH PREREQUISITE CONTRACT** - This flow must work without Convex account OAuth. Require project secrets only:
+   - Web: `NEXT_PUBLIC_CONVEX_URL`
+   - Mobile: `EXPO_PUBLIC_CONVEX_URL`
+   - Both: `CONVEX_DEPLOY_KEY`
+   If missing, STOP immediately with a clear error listing missing keys. Do not proceed to install, generate, or run Convex commands.
+15. **EXPO NAVIGATION SAFETY** - In Expo auth screens, do NOT use `<Link asChild>` around `TouchableOpacity`, `Pressable`, or `Text`. Use `router.push()`/`router.replace()` inside `onPress` handlers instead.
+16. **EXPO ROUTE GROUP SAFETY** - Do NOT add `<Stack.Screen name="(auth)" ... />` in `app/_layout.tsx` unless an `app/(auth)/_layout.tsx` route exists. For plain `app/(auth)/sign-in.tsx` + `sign-up.tsx`, navigate directly by path and keep root stack entries explicit (`index`, `modal`, etc.).
+17. **PROVIDER TAG CONSISTENCY** - When replacing providers in layouts, update import name, opening tag, and closing tag in one atomic edit and verify there are no leftover tags from the old provider.
 
 ## Framework Detection
 
@@ -77,11 +85,24 @@ npm install convex@latest @convex-dev/better-auth better-auth@1.4.9 --save-exact
 
 If this fails, report the error and stop.
 
-## Step 3: Verify Auth Secrets
+## Step 3: Validate Required Convex Secrets (Must pass before auth setup)
 
-The `CONVEX_DEPLOY_KEY` environment variable is pre-configured by the IDE.
+Determine framework, then verify secret contract before any further auth work:
 
-Verify `BETTER_AUTH_SECRET` exists on the Convex deployment (pre-provisioned by the IDE):
+- **Web** requires: `NEXT_PUBLIC_CONVEX_URL` and `CONVEX_DEPLOY_KEY`
+- **Expo** requires: `EXPO_PUBLIC_CONVEX_URL` and `CONVEX_DEPLOY_KEY`
+
+Check from `.env.local`, `.env`, and current shell env values. If any are missing, stop with:
+
+`Convex Better Auth setup requires <required keys>. Missing: <missing keys>.`
+
+Do NOT ask for OAuth connection. This setup path is secrets + Convex CLI only.
+
+## Step 4: Verify Convex Deployment Auth Env Vars
+
+After required Convex URL + deploy key are present, verify deployment auth env vars:
+
+Verify `BETTER_AUTH_SECRET` exists on the Convex deployment:
 
 ```bash
 npx convex env list
@@ -101,23 +122,23 @@ npx convex env set SITE_URL "http://localhost:3000"
 
 (Use `http://localhost:8081` for Expo projects.)
 
-## Step 4: Create convex.config.ts
+## Step 5: Create convex.config.ts
 
 Copy [templates/convex/convex.config.ts](templates/convex/convex.config.ts) to `convex/convex.config.ts`. This registers the Better Auth component.
 
-## Step 5: Create Auth Config
+## Step 6: Create Auth Config
 
 Copy [templates/convex/auth.config.ts](templates/convex/auth.config.ts) to `convex/auth.config.ts`.
 
-## Step 6: Create Auth Functions
+## Step 7: Create Auth Functions
 
 Copy [templates/convex/auth.ts](templates/convex/auth.ts) to `convex/auth.ts`.
 
-## Step 7: Create HTTP Router
+## Step 8: Create HTTP Router
 
 Copy [templates/convex/http.ts](templates/convex/http.ts) to `convex/http.ts`. The `{ cors: true }` option is required — it registers OPTIONS preflight handlers and adds CORS response headers so browsers allow cross-origin auth requests.
 
-## Step 8: Push Schema and Functions
+## Step 9: Push Schema and Functions
 
 ```bash
 npx convex dev --once
@@ -129,17 +150,18 @@ After pushing, use the `restart_dev_server` tool to restart the dev server so it
 
 ## Expo Setup (continued)
 
-### Step 9: Create Auth Client
+### Step 10: Create Auth Client
 
 Copy [templates/lib/auth-client-expo.ts](templates/lib/auth-client-expo.ts) to `lib/auth-client.ts` (or `src/lib/auth-client.ts` depending on project structure). Update the `scheme` to match the app's URL scheme from `app.json`.
 
-### Step 10: Set Up the Provider
+### Step 11: Set Up the Provider
 
 Copy [templates/providers/ConvexAuthProvider-expo.tsx](templates/providers/ConvexAuthProvider-expo.tsx) to `providers/ConvexAuthProvider.tsx`.
 
 Then wrap the app with `<ConvexProvider>` in `app/_layout.tsx` or the root component. Replace any existing `ConvexProvider` or `ConvexClientProvider`.
+Make this provider replacement in one edit so opening/closing tags and imports stay consistent.
 
-### Step 11: Create Auth Screens (REQUIRED)
+### Step 12: Create Auth Screens (REQUIRED)
 
 Create sign-in and sign-up screens at `app/(auth)/sign-in.tsx` and `app/(auth)/sign-up.tsx`.
 
@@ -162,38 +184,47 @@ const { data: session } = authClient.useSession();
 ```
 
 After successful auth, use `router.replace("/")` to navigate.
+For Expo route transitions between auth screens, use `TouchableOpacity`/`Pressable` `onPress={() => router.push("/(auth)/...")}` and avoid `Link asChild`.
 
-### Step 12: Create Query and Mutation Functions
+### Step 13: Create Query and Mutation Functions
 
 Create Convex functions in the `convex/` directory. Use `authComponent.getAuthUser(ctx)` from `./auth` to get the authenticated user.
 
-### Step 13: Update Existing Components
+### Step 14: Update Existing Components
 
 Replace any local storage usage (AsyncStorage, etc.) with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`. Use `Authenticated`, `Unauthenticated`, and `AuthLoading` from `convex/react` to gate UI on auth state.
+
+### Step 15: Validate Expo Auth Integration (Required for Expo)
+
+Before finishing Expo auth setup, verify:
+
+1. `app/_layout.tsx` has matching provider tags (no mixed `<ConvexProvider>` with `</ConvexClientProvider>`).
+2. No `<Link asChild>` wrappers are used for auth navigation in `app/index.tsx`, `app/(auth)/sign-in.tsx`, and `app/(auth)/sign-up.tsx`.
+3. `app/_layout.tsx` does not include `<Stack.Screen name="(auth)" ... />` unless `app/(auth)/_layout.tsx` exists.
 
 ---
 
 ## Next.js Setup (continued)
 
-### Step 9: Create Auth Client
+### Step 10: Create Auth Client
 
 Copy [templates/lib/auth-client-nextjs.ts](templates/lib/auth-client-nextjs.ts) to `lib/auth-client.ts`. Note: no `baseURL` is set — auth requests go to the same origin (`/api/auth/...`) which proxies to Convex server-side, avoiding CORS entirely.
 
-### Step 10: Create Auth Server Utilities
+### Step 11: Create Auth Server Utilities
 
 Copy [templates/nextjs/auth-server.ts](templates/nextjs/auth-server.ts) to `lib/auth-server.ts`.
 
-### Step 11: Create Auth API Route
+### Step 12: Create Auth API Route
 
 Copy [templates/nextjs/route.ts](templates/nextjs/route.ts) to `app/api/auth/[...all]/route.ts`. Create the directory structure if it doesn't exist. This route proxies auth requests from the client to Convex server-side.
 
-### Step 12: Set Up the Provider
+### Step 13: Set Up the Provider
 
 Copy [templates/providers/ConvexAuthProvider-nextjs.tsx](templates/providers/ConvexAuthProvider-nextjs.tsx) to `providers/ConvexAuthProvider.tsx` (or `components/ConvexAuthProvider.tsx`). The provider must have `"use client"` at the top.
 
 Then wrap the app with the provider in `app/layout.tsx`. Replace any existing `ConvexProvider` or `ConvexClientProvider`.
 
-### Step 13: Create Auth Pages (REQUIRED)
+### Step 14: Create Auth Pages (REQUIRED)
 
 Create sign-in and sign-up pages at `app/(auth)/sign-in/page.tsx` and `app/(auth)/sign-up/page.tsx`.
 
@@ -227,7 +258,7 @@ import { authClient } from "@/lib/auth-client";
 authClient.signOut();
 ```
 
-### Step 14: Route Protection
+### Step 15: Route Protection
 
 Use `isAuthenticated()` from `lib/auth-server.ts` in server components and layouts for route protection — NOT middleware:
 
@@ -242,7 +273,7 @@ export default async function ProtectedLayout({ children }) {
 }
 ```
 
-### Step 15: Server-Side Data Fetching (Optional)
+### Step 16: Server-Side Data Fetching (Optional)
 
 For authenticated queries in server components, use `preloadAuthQuery` from `lib/auth-server.ts`:
 
@@ -256,7 +287,7 @@ export default async function Page() {
 }
 ```
 
-### Step 16: Update Existing Components
+### Step 17: Update Existing Components
 
 Replace any local storage usage with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`. Use `Authenticated`, `Unauthenticated`, and `AuthLoading` from `convex/react` to gate UI on auth state.
 

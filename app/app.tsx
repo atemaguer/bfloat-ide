@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import { useStore } from '@/app/hooks/useStore'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from '@/app/lib/query-client'
@@ -88,32 +89,40 @@ export default function App() {
       <IOSDeployModals />
 
       {/* Global Toast Notifications */}
-      <Toaster
-        position="bottom-right"
-        toastOptions={{
-          style: {
-            background: 'var(--bfloat-bg-secondary, #1c1c2e)',
-            color: 'var(--bfloat-text-primary, #e0e0f0)',
-            border: '1px solid var(--bfloat-border, #2a2a40)',
-            borderRadius: '8px',
-            fontSize: '13px',
-          },
-          error: {
-            duration: 6000,
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: 'var(--bfloat-bg-secondary, #1c1c2e)',
+      {createPortal(
+        <Toaster
+          position="bottom-right"
+          gutter={10}
+          containerStyle={{
+            right: 16,
+            bottom: 'max(20px, calc(env(safe-area-inset-bottom, 0px) + 12px))',
+          }}
+          toastOptions={{
+            style: {
+              background: 'var(--bfloat-bg-secondary, #1c1c2e)',
+              color: 'var(--bfloat-text-primary, #e0e0f0)',
+              border: '1px solid var(--bfloat-border, #2a2a40)',
+              borderRadius: '8px',
+              fontSize: '13px',
             },
-          },
-          success: {
-            duration: 4000,
-            iconTheme: {
-              primary: '#22c55e',
-              secondary: 'var(--bfloat-bg-secondary, #1c1c2e)',
+            error: {
+              duration: 6000,
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: 'var(--bfloat-bg-secondary, #1c1c2e)',
+              },
             },
-          },
-        }}
-      />
+            success: {
+              duration: 4000,
+              iconTheme: {
+                primary: '#22c55e',
+                secondary: 'var(--bfloat-bg-secondary, #1c1c2e)',
+              },
+            },
+          }}
+        />,
+        document.body
+      )}
     </QueryClientProvider>
   )
 }

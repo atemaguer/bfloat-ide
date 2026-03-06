@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   FolderOpen,
   Github,
@@ -15,6 +15,8 @@ import {
   Smartphone,
   Globe,
 } from 'lucide-react'
+import { Button } from '@/app/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/app/components/ui/dialog'
 import { useStore } from '@/app/hooks/useStore'
 import { aiAgent } from '@/app/api/sidecar'
 import { localProjectsStore } from '@/app/stores/local-projects'
@@ -58,6 +60,14 @@ function getProjectColor(title: string): string {
   return colors[Math.abs(hash) % colors.length]
 }
 
+const APP_GENERATION_MESSAGES = [
+  "Cooking your app idea...",
+  "Steaming pixels to perfection...",
+  "Gitifying your starter project...",
+  "Teaching components to behave...",
+  "Polishing screens and wiring APIs...",
+]
+
 export default function HomePage() {
   const navigate = useNavigate()
   const [prompt, setPrompt] = useState('')
@@ -72,7 +82,7 @@ export default function HomePage() {
   // Default models per provider
   const defaultModelForProvider: Record<ProviderId, string> = {
     claude: 'claude-sonnet-4-20250514',
-    codex: 'o4-mini',
+    codex: 'gpt-5.3-codex',
   }
 
   // When switching providers, also update the model to the provider's default
@@ -83,7 +93,9 @@ export default function HomePage() {
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
+  const [deleteConfirmProjectId, setDeleteConfirmProjectId] = useState<string | null>(null)
   const [backgroundProjectIds, setBackgroundProjectIds] = useState<Set<string>>(new Set())
+  const [generationMessageIndex, setGenerationMessageIndex] = useState(0)
 
   const projects = useStore(localProjectsStore.sortedProjects)
   const isLoadingProjects = useStore(localProjectsStore.isLoading)
@@ -129,6 +141,18 @@ export default function HomePage() {
         console.error('Failed to fetch providers:', error)
       })
   }, [])
+
+  // Rotate generation messages while creating
+  useEffect(() => {
+    if (!isCreating) {
+      setGenerationMessageIndex(0)
+      return
+    }
+    const interval = setInterval(() => {
+      setGenerationMessageIndex((i) => (i + 1) % APP_GENERATION_MESSAGES.length)
+    }, 1800)
+    return () => clearInterval(interval)
+  }, [isCreating])
 
   // Always show both Claude and Codex, with auth status from the API
   const visibleProviders: ProviderInfo[] = useMemo(() => {
@@ -199,11 +223,8 @@ export default function HomePage() {
     navigate(`/projects/${project.id}`)
   }
 
-  const handleDeleteProject = async (e: React.MouseEvent, projectId: string) => {
-    e.stopPropagation()
-
+  const handleDeleteProject = async (projectId: string) => {
     setDeletingProjectId(projectId)
-    setOpenDropdownId(null)
 
     try {
       await localProjectsStore.delete(projectId)
@@ -211,7 +232,14 @@ export default function HomePage() {
       console.error('Failed to delete project:', error)
     } finally {
       setDeletingProjectId(null)
+      setDeleteConfirmProjectId(null)
     }
+  }
+
+  const handleDeleteClick = (e: React.MouseEvent, projectId: string) => {
+    e.stopPropagation()
+    setOpenDropdownId(null)
+    setDeleteConfirmProjectId(projectId)
   }
 
   const handleDropdownToggle = (e: React.MouseEvent, projectId: string) => {
@@ -260,6 +288,33 @@ export default function HomePage() {
 
       {/* Main Content */}
       <div className={`home-main ${projects.length === 0 && !isLoadingProjects ? 'empty-state' : ''}`}>
+        {/* Generation Overlay */}
+        <AnimatePresence>
+          {isCreating && (
+            <motion.div
+              className="home-generation-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25 }}
+            >
+              <motion.div
+                className="home-generation-card"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ duration: 0.25, delay: 0.05 }}
+              >
+                <Loader2 size={32} className="home-generation-spinner" />
+                <p className="home-generation-title">Creating your app</p>
+                <p className="home-generation-message">
+                  {APP_GENERATION_MESSAGES[generationMessageIndex]}
+                </p>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <div className="home-main-content">
           {/* Logo */}
           <motion.div
@@ -513,7 +568,7 @@ export default function HomePage() {
                                 />
                                 <div className="home-dropdown-menu">
                                   <button
-                                    onClick={(e) => handleDeleteProject(e, project.id)}
+                                    onClick={(e) => handleDeleteClick(e, project.id)}
                                     style={{
                                       display: 'flex',
                                       alignItems: 'center',
@@ -683,6 +738,60 @@ export default function HomePage() {
           </div>
         </div>
       </div>
+      <Dialog
+        open={deleteConfirmProjectId !== null}
+        onOpenChange={(open) => { if (!open) setDeleteConfirmProjectId(null) }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ef4444' }}>
+              <AlertCircle size={20} />
+              Delete Project
+            </DialogTitle>
+          </DialogHeader>
+          <div style={{ padding: '8px 0' }}>
+            <p style={{ marginBottom: '12px', color: 'hsl(var(--muted-foreground))' }}>
+              Are you sure you want to delete this project? This action{' '}
+              <strong>cannot be undone</strong>.
+            </p>
+            <div style={{ padding: '12px', borderRadius: '8px', background: 'hsl(var(--destructive) / 0.1)', border: '1px solid hsl(var(--destructive) / 0.2)' }}>
+              <p style={{ fontWeight: 600, marginBottom: '8px', fontSize: '13px' }}>You will lose:</p>
+              <ul style={{ paddingLeft: '20px', fontSize: '13px', color: 'hsl(var(--muted-foreground))', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <li>All project files and code</li>
+                <li>Deployment configurations</li>
+                <li>App icons and assets</li>
+                <li>Integration settings</li>
+              </ul>
+            </div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', paddingTop: '16px', borderTop: '1px solid hsl(var(--border))' }}>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteConfirmProjectId(null)}
+              disabled={deletingProjectId !== null}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => deleteConfirmProjectId && handleDeleteProject(deleteConfirmProjectId)}
+              disabled={deletingProjectId !== null}
+            >
+              {deletingProjectId ? (
+                <>
+                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 size={16} />
+                  Yes, Delete Project
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

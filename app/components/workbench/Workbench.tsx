@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react'
+import { useCallback, useEffect, useRef, useState, useImperativeHandle, forwardRef, useMemo } from 'react'
 import { useStore } from '@/app/hooks/useStore'
 import { motion } from 'framer-motion'
 import { ChevronDown, ChevronUp, Terminal as TerminalIcon, Plus, X } from 'lucide-react'
@@ -16,7 +16,14 @@ import { ConvexIntegration } from '@/app/components/integrations/ConvexIntegrati
 import { ProjectSettings } from '@/app/components/project/ProjectSettings'
 import { PaymentsOverview } from '@/app/components/payments/PaymentsOverview'
 import { AppTypeProvider } from '@/app/contexts/AppTypeContext'
-import { terminal, filesystem, aiAgent, projectSync, projectFiles } from '@/app/api/sidecar'
+import { terminal, filesystem, aiAgent, projectSync, projectFiles, secrets as secretsApi, workbench as workbenchApi } from '@/app/api/sidecar'
+import {
+  getConvexDashboardConfigFromSecrets,
+  getConvexSecretStatusFromSecrets,
+  type SecretEntry,
+} from '@/app/lib/integrations/convex'
+import { detectIntegrationSecretsPresence } from '@/app/lib/integrations/secrets'
+import toast from 'react-hot-toast'
 import './styles.css'
 
 // Export interface for external access to workbench terminal commands
@@ -63,6 +70,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const unsavedFiles = useStore(workbenchStore.unsavedFiles)
   const files = useStore(workbenchStore.files)
   const chatStreaming = useStore(workbenchStore.chatStreaming)
+  const secretsVersion = useStore(workbenchStore.secretsVersion)
 
   // Raw app type from database - normalization happens in AppTypeContext
   const rawAppType = project.appType || 'mobile'
@@ -88,12 +96,18 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   // Dev server state
   const [previewUrl, setPreviewUrl] = useState<string>('')
+  const [previewRefreshKey, setPreviewRefreshKey] = useState(0)
+  const prevActiveTabRef = useRef(activeTab)
   const [serverStatus, setServerStatus] = useState<'starting' | 'running' | 'error'>('starting')
 
   // Shared state
   const [expoUrl, setExpoUrl] = useState('')
+  const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
   const terminalOutputBuffer = useRef('')
   const devServerTerminalIdRef = useRef<string | null>(null)
+  const portConflictRef = useRef(false)
+  const lastAcceptedExpoPortPromptRef = useRef<number | null>(null)
+  const runtimeCwdRef = useRef<string | null>(null)
 
   // Terminal panel state
   const [isTerminalOpen, setIsTerminalOpen] = useState(false)
@@ -111,10 +125,27 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     { id: 'terminal-1', name: 'Terminal' }
   ])
   const [activeTerminalId, setActiveTerminalId] = useState('terminal-1')
+  const activeTerminalIdRef = useRef(activeTerminalId)
+  activeTerminalIdRef.current = activeTerminalId
   const terminalCountRef = useRef(1)
   const agentTerminalCountRef = useRef(0)
   const terminalReadyRef = useRef<Set<string>>(new Set())
   const terminalExitedRef = useRef<Set<string>>(new Set())
+  const terminalFirstOutputRef = useRef<Set<string>>(new Set())
+  const terminalLastOutputAtRef = useRef<Map<string, number>>(new Map())
+  const shellReadyResolversRef = useRef<Map<string, () => void>>(new Map())
+
+  // Re-mount the preview iframe when switching back to the preview tab.
+  // Browsers may discard invisible cross-origin iframe content, causing a
+  // black screen when the tab becomes visible again.
+  useEffect(() => {
+    const wasAway = prevActiveTabRef.current !== 'preview'
+    prevActiveTabRef.current = activeTab
+
+    if (activeTab === 'preview' && wasAway && previewUrl) {
+      setPreviewRefreshKey(k => k + 1)
+    }
+  }, [activeTab, previewUrl])
 
   // Mark terminal as ready when it's initialized
   const handleTerminalReady = useCallback((terminalId: string) => {
@@ -153,6 +184,52 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     })
   }, [])
 
+  // Wait for the shell to emit its first output (prompt), indicating it's ready for input
+  const waitForShellReady = useCallback((terminalId: string, maxWaitMs = 5000): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (terminalFirstOutputRef.current.has(terminalId)) {
+        resolve(true)
+        return
+      }
+
+      const timeout = setTimeout(() => {
+        shellReadyResolversRef.current.delete(terminalId)
+        console.warn(`[Workbench] Shell for ${terminalId} did not produce output within ${maxWaitMs}ms`)
+        resolve(false)
+      }, maxWaitMs)
+
+      shellReadyResolversRef.current.set(terminalId, () => {
+        clearTimeout(timeout)
+        resolve(true)
+      })
+    })
+  }, [])
+
+  // Wait until terminal output has been quiet for a short duration.
+  const waitForTerminalQuiet = useCallback(
+    (terminalId: string, quietMs = 800, maxWaitMs = 5000): Promise<boolean> => {
+      return new Promise((resolve) => {
+        const startedAt = Date.now()
+        const checkInterval = setInterval(() => {
+          const now = Date.now()
+          const lastOutputAt = terminalLastOutputAtRef.current.get(terminalId) ?? startedAt
+
+          if (now - lastOutputAt >= quietMs) {
+            clearInterval(checkInterval)
+            resolve(true)
+            return
+          }
+
+          if (now - startedAt >= maxWaitMs) {
+            clearInterval(checkInterval)
+            resolve(false)
+          }
+        }, 100)
+      })
+    },
+    [],
+  )
+
   const addTerminalTab = useCallback(() => {
     terminalCountRef.current += 1
     const newId = `terminal-${terminalCountRef.current}`
@@ -189,6 +266,19 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   // Handle terminal output to extract Expo URL and detect dev server status
   const handleTerminalOutput = useCallback((data: string) => {
+    // Mark shell as ready on first output (the shell prompt)
+    const currentTerminalId = activeTerminalIdRef.current
+    terminalLastOutputAtRef.current.set(currentTerminalId, Date.now())
+    if (!terminalFirstOutputRef.current.has(currentTerminalId)) {
+      terminalFirstOutputRef.current.add(currentTerminalId)
+      console.log(`[Workbench] Shell first output detected for ${currentTerminalId}`)
+      const resolver = shellReadyResolversRef.current.get(currentTerminalId)
+      if (resolver) {
+        shellReadyResolversRef.current.delete(currentTerminalId)
+        resolver()
+      }
+    }
+
     // Helper function to strip ANSI escape codes (needed for colored terminal output)
     const stripAnsi = (str: string) => {
       return str
@@ -200,6 +290,58 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     // Accumulate output in buffer (strip ANSI for cleaner matching)
     const cleanData = stripAnsi(data)
     terminalOutputBuffer.current += cleanData
+
+    // Treat each "Starting project at ..." line as a new Expo start attempt.
+    // This allows repeated restarts to auto-accept the same suggested fallback
+    // port across runs while still deduplicating within a single prompt cycle.
+    if (/\bStarting project at\b/i.test(cleanData)) {
+      lastAcceptedExpoPortPromptRef.current = null
+    }
+
+    // Detect Expo port fallback — "Something is already running on port 19000"
+    // When this happens, clear the stale port so the fallback doesn't use it
+    const portConflict = cleanData.match(/already running on port (\d+)/i)
+      || terminalOutputBuffer.current.match(/already running on port (\d+)/i)
+    if (portConflict) {
+      portConflictRef.current = true
+    }
+
+    // Expo can still prompt for fallback port selection at runtime.
+    // Auto-accept so startup remains non-interactive for users.
+    const expoPortPromptMatch = cleanData.match(/(?:Use|Would you like to use) port (\d+) (?:instead)?\?/i)
+      || terminalOutputBuffer.current.match(/(?:Use|Would you like to use) port (\d+) (?:instead)?\?/i)
+    if (expoPortPromptMatch) {
+      const suggestedPort = parseInt(expoPortPromptMatch[1], 10)
+      const shouldAutoAccept = Number.isFinite(suggestedPort)
+        && suggestedPort > 0
+        && suggestedPort <= 65535
+        && lastAcceptedExpoPortPromptRef.current !== suggestedPort
+
+      if (shouldAutoAccept) {
+        const terminalId = devServerTerminalIdRef.current || activeTerminalIdRef.current
+        console.log(`[Workbench] Auto-accepting Expo port fallback: ${suggestedPort}`)
+        lastAcceptedExpoPortPromptRef.current = suggestedPort
+        actualPortRef.current = suggestedPort
+        portConflictRef.current = true
+        terminal.write(terminalId, 'y\r')
+      }
+    }
+
+    // Parse "Starting Metro on port XXXXX" to update actualPortRef after a port switch
+    const metroPortMatch = cleanData.match(/Starting Metro on port (\d+)/i)
+      || terminalOutputBuffer.current.match(/Starting Metro on port (\d+)/i)
+    if (metroPortMatch) {
+      actualPortRef.current = parseInt(metroPortMatch[1], 10)
+      portConflictRef.current = false
+    }
+
+    // Expo may also confirm fallback with variants like "Using port 19001".
+    const usingPortMatch = cleanData.match(/\busing port (\d+)\b/i)
+      || terminalOutputBuffer.current.match(/\busing port (\d+)\b/i)
+    if (usingPortMatch) {
+      actualPortRef.current = parseInt(usingPortMatch[1], 10)
+      portConflictRef.current = false
+    }
 
     // Look for Expo URL in the output for QR codes (native devices)
     // Matches:
@@ -236,6 +378,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       if (webUrl !== previewUrl) {
         console.log('[Workbench] Expo Web URL detected:', webUrl, '(overriding previous:', previewUrl || 'none', ')')
         actualPortRef.current = webPort
+        portConflictRef.current = false
         setPreviewUrl(webUrl)
         setServerStatus('running')
       }
@@ -289,7 +432,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
           terminalOutputBuffer.current.includes('open debugger') ||
           terminalOutputBuffer.current.includes('Logs for your project')
 
-        if (isExpoReady && actualPortRef.current > 0) {
+        if (isExpoReady && actualPortRef.current > 0 && !portConflictRef.current) {
           const fallbackUrl = `http://localhost:${actualPortRef.current}`
           console.log('[Workbench] Dev server ready (using assigned port):', fallbackUrl)
           setPreviewUrl(fallbackUrl)
@@ -564,7 +707,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       setupInitiated: setupInitiatedRef.current,
       lastProjectId: lastProjectId.current,
       gitProjectPath,
-      hasSourceUrl: !!project?.sourceUrl
     })
 
     if (!project?.id) {
@@ -575,28 +717,16 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     // Check if this is a new project
     const isNewProject = project.id !== lastProjectId.current
 
-    // For git-based projects, wait for gitProjectPath to be available
-    const isGitBasedProject = !!project.sourceUrl
-    if (isGitBasedProject && !gitProjectPath) {
-      console.log('[Workbench] Git-based project, waiting for gitProjectPath...')
+    // All projects are managed by projectStore — wait for the path to be available
+    if (!gitProjectPath) {
+      console.log('[Workbench] Waiting for project path from projectStore...')
       return
     }
 
     // Check if we have files to work with
     const fileCount = Object.keys(files).length
-    // For git-based projects, we need files to be loaded from the clone
-    // For legacy projects, we can proceed with an empty project (files stored in DB might be empty)
-    if (fileCount === 0 && isGitBasedProject) {
-      console.log('[Workbench] Waiting for files to be loaded from git...')
-      return
-    }
-
-    // Don't auto-run while AI is still generating files (legacy non-git projects only)
-    // For git-based projects, template files are already in the repo, so we can start immediately
-    // AI will modify files after the dev server is running
-    // If we already have files (e.g., from template), proceed anyway
-    if (project.updateInProgress && !isGitBasedProject && fileCount === 0) {
-      console.log('[Workbench] AI is still generating files, waiting...')
+    if (fileCount === 0) {
+      console.log('[Workbench] Waiting for files to be loaded...')
       return
     }
 
@@ -613,6 +743,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       setExpoUrl('')
       terminalOutputBuffer.current = ''
       actualPortRef.current = portRange.start
+      portConflictRef.current = false
+      lastAcceptedExpoPortPromptRef.current = null
 
       // Cleanup old project's temp directory if it exists
       if (tempDirPathRef.current) {
@@ -626,11 +758,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     }
 
     // Prevent running multiple times for the same project
-    // Only skip if setup was initiated AND projectPath is set (setup actually completed)
-    const currentProjectPath = workbenchStore.projectPath.getState()
-    console.log('[Workbench] Setup check:', { setupInitiated: setupInitiatedRef.current, currentProjectPath, fileCount })
-    if (setupInitiatedRef.current && currentProjectPath) {
-      console.log('[Workbench] Setup already completed for this project, skipping')
+    // setupInitiatedRef is set synchronously (line 679) so it alone prevents re-entry,
+    // even before the async workbenchStore.projectPath.setState() has landed.
+    console.log('[Workbench] Setup check:', { setupInitiated: setupInitiatedRef.current, fileCount })
+    if (setupInitiatedRef.current) {
+      console.log('[Workbench] Setup already initiated for this project, skipping')
       return
     }
 
@@ -658,9 +790,14 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         console.log(`[Workbench] Terminal ${capturedTerminalId} is ready!`)
       }
 
-      // Add a delay to ensure shell has fully initialized
-      console.log('[Workbench] Waiting for shell to fully initialize...')
-      await new Promise(resolve => setTimeout(resolve, 500))
+      // Wait for shell to emit its first output (prompt) before sending commands
+      console.log('[Workbench] Waiting for shell prompt output...')
+      const shellReady = await waitForShellReady(capturedTerminalId, 5000)
+      if (shellReady) {
+        console.log(`[Workbench] Shell prompt detected for ${capturedTerminalId}`)
+      } else {
+        console.warn('[Workbench] Shell prompt not detected within timeout, proceeding anyway')
+      }
 
       // Check if terminal has exited
       if (terminalExitedRef.current.has(capturedTerminalId)) {
@@ -692,6 +829,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
       // Store the actual port for preview URL
       actualPortRef.current = actualPort
+      lastAcceptedExpoPortPromptRef.current = null
 
       // Track which terminal is running the dev server (for sending keypresses like 'i' for iOS)
       devServerTerminalIdRef.current = capturedTerminalId
@@ -709,125 +847,30 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       // This ensures the Terminal component has mounted
       await new Promise(resolve => setTimeout(resolve, 300))
 
-      // If using git-based project path, skip temp directory creation
-      // Files are already in the cloned repo
-      if (gitProjectPath) {
-        console.log(`[Workbench] Using git project path: ${gitProjectPath}`)
-        tempDirPathRef.current = gitProjectPath
-        workbenchStore.projectPath.setState(gitProjectPath, true)
+      console.log(`[Workbench] Using project path: ${gitProjectPath}`)
+      tempDirPathRef.current = gitProjectPath
+      workbenchStore.projectPath.setState(gitProjectPath, true)
 
-        // Get launch config from project files, or auto-detect from package.json
-        let launchConfig = getLaunchConfig(files)
-        if (!launchConfig) {
-          // Try to detect from package.json (more accurate than database appType)
-          launchConfig = detectLaunchConfig(files)
-        }
-        if (!launchConfig) {
-          // Final fallback to database appType
-          console.log('[Workbench] Using fallback defaults for appType:', appType)
-          launchConfig = {
-            type: appType,
-            ...DEFAULT_CONFIGS[appType],
-          }
-        }
-        console.log('[Workbench] Using launch config:', launchConfig)
-
-        // Skip file writing, just run the dev server
-        await runDevServer(gitProjectPath, launchConfig)
-        return
+      // Get launch config from project files, or auto-detect from package.json
+      let launchConfig = getLaunchConfig(files)
+      if (!launchConfig) {
+        // Try to detect from package.json (more accurate than database appType)
+        launchConfig = detectLaunchConfig(files)
       }
-
-      // Legacy temp directory flow for non-git projects
-      try {
-        // Step 1: Create a temporary directory for this project
-        console.log(`[Workbench] Creating temp directory for project: ${project.id}`)
-        const createResult = await filesystem.createTempDir(project.id)
-
-        if (!createResult.success || !createResult.path) {
-          console.error('[Workbench] Failed to create temp directory:', createResult.error)
-          return
+      if (!launchConfig) {
+        // Final fallback to database appType
+        console.log('[Workbench] Using fallback defaults for appType:', appType)
+        launchConfig = {
+          type: appType,
+          ...DEFAULT_CONFIGS[appType],
         }
-
-        const tempPath = createResult.path
-        tempDirPathRef.current = tempPath
-        console.log(`[Workbench] Temp directory created: ${tempPath}`)
-
-        // Set the project path in the store for file saving
-        workbenchStore.projectPath.setState(tempPath, true)
-
-        // Step 2: Convert FileMap to array of file entries + clean package.json
-        // Use the snapshot to ensure we're using the same files that triggered this setup
-        const projectFiles = filesSnapshotRef.current || files
-        const fileEntries: Array<{ path: string; content: string }> = []
-        for (const [filePath, dirent] of Object.entries(projectFiles)) {
-          if (dirent?.type === 'file') {
-            let content = dirent.content
-
-            // Clean package.json by removing fake packages
-            if (filePath === 'package.json') {
-              try {
-                const packageJsonData = JSON.parse(content)
-                const fakePrefixes = ['convex/', '@auth0/auth0-react']
-
-                if (packageJsonData.dependencies) {
-                  for (const dep of Object.keys(packageJsonData.dependencies)) {
-                    if (fakePrefixes.some(prefix => dep.startsWith(prefix) || dep === prefix)) {
-                      delete packageJsonData.dependencies[dep]
-                      console.log(`[Workbench] Removed fake package: ${dep}`)
-                    }
-                  }
-                }
-
-                content = JSON.stringify(packageJsonData, null, 2)
-                console.log('[Workbench] Cleaned fake packages from package.json')
-              } catch (error) {
-                console.error('[Workbench] Failed to clean package.json:', error)
-              }
-            }
-
-            fileEntries.push({
-              path: filePath,
-              content,
-            })
-          }
-        }
-
-        if (fileEntries.length === 0) {
-          console.warn('[Workbench] No files to write - this should not happen')
-          return
-        }
-
-        // Step 3: Write all files to the temp directory
-        console.log(`[Workbench] Writing ${fileEntries.length} files to temp directory...`)
-        const writeResult = await filesystem.writeFiles(tempPath, fileEntries)
-
-        if (!writeResult.success) {
-          console.error('[Workbench] Failed to write files:', writeResult.error)
-          return
-        }
-        console.log(`[Workbench] Files written successfully`)
-
-        // Step 4: Get launch config and run dev server
-        let launchConfig = getLaunchConfig(projectFiles)
-        if (!launchConfig) {
-          // Try to detect from package.json
-          launchConfig = detectLaunchConfig(projectFiles)
-        }
-        if (!launchConfig) {
-          // Final fallback to database appType
-          console.log('[Workbench] Using fallback defaults for appType:', appType)
-          launchConfig = {
-            type: appType,
-            ...DEFAULT_CONFIGS[appType],
-          }
-        }
-        console.log('[Workbench] Using launch config:', launchConfig)
-
-        await runDevServer(tempPath, launchConfig)
-
-      } catch (error) {
-        console.error('[Workbench] Error setting up project:', error)
       }
+      console.log('[Workbench] Using launch config:', launchConfig)
+
+      // Cache launch config in projects.json (fire-and-forget)
+      window.conveyor?.localProjects?.updateLaunchConfig?.(project.id, launchConfig).catch(() => {})
+
+      await runDevServer(gitProjectPath, launchConfig)
     }
 
     setupProjectAndRunExpo().catch((error) => {
@@ -837,11 +880,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     // No cleanup needed here - cleanup happens when detecting a new project above
     // This ensures temp directory persists across tab switches and re-renders
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.id, project?.updateInProgress, Object.keys(files).length, gitProjectPath, project?.sourceUrl])
+  }, [project?.id, project?.updateInProgress, Object.keys(files).length, gitProjectPath])
   // Note: Using files.length instead of files object to detect when files are loaded
   // project?.updateInProgress is included so auto-run triggers when AI finishes generating
-  // gitProjectPath is included so git-based projects wait for the agent to clone
-  // sourceUrl is included so git-based projects wait until backend sets it
+  // gitProjectPath is included so projects wait for projectStore to resolve the path
   // activeTerminalId and waitForTerminalReady are captured at setup time
   // setupInitiatedRef prevents re-running after initial setup
 
@@ -860,7 +902,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       console.log('[Workbench] Chat streaming ended, refreshing preview...')
       // Small delay to ensure files are written to disk
       setTimeout(() => {
-        setPreviewUrl(`http://localhost:${actualPortRef.current}?t=${Date.now()}`)
+        setPreviewRefreshKey(k => k + 1)
       }, 500)
     }
   }, [chatStreaming, previewUrl])
@@ -884,9 +926,23 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     mountTimeRef.current = Date.now()
   }, [])
 
+  // Clean up any stale terminal sessions from a previous crash
+  useEffect(() => {
+    terminal.killAll().catch((err: unknown) =>
+      console.warn('[Workbench] Failed to clean up stale sessions:', err)
+    )
+  }, [])
+
   // Cleanup temp directory and kill all terminal sessions when workbench unmounts (user exits to landing page)
   useEffect(() => {
     return () => {
+      // Always reset setup refs so the next mount can re-run auto-setup.
+      // This is safe even during StrictMode's quick remount.
+      setupInitiatedRef.current = false
+      devServerTerminalIdRef.current = null
+      terminalFirstOutputRef.current.clear()
+      shellReadyResolversRef.current.clear()
+
       // Don't cleanup if we haven't been mounted for at least 1 second
       // This prevents React StrictMode's double-mount from killing terminals
       const mountDuration = Date.now() - mountTimeRef.current
@@ -941,8 +997,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   const handleRefresh = useCallback(() => {
     if (previewUrl) {
-      // Force reload by updating URL with timestamp
-      setPreviewUrl(`http://localhost:${actualPortRef.current}?t=${Date.now()}`)
+      setPreviewRefreshKey(k => k + 1)
     }
   }, [previewUrl])
 
@@ -950,7 +1005,36 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // This captures clean error messages from the UI instead of raw terminal output
   const handlePreviewError = useCallback((error: string) => {
     console.log('[Workbench] Preview error received:', error)
-    // Only set the error if not currently streaming (to avoid interrupting AI work)
+    toast.error(
+      (t) => (
+        <div className="flex min-w-0 w-full flex-col">
+          <div className="min-w-0 text-sm leading-relaxed whitespace-normal break-words">
+            {error}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+            <button className="cursor-pointer rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-muted"
+              onClick={() => {
+                navigator.clipboard.writeText(error)
+                  .then(() => toast.success('Copied error'))
+                  .catch(() => toast.error('Failed to copy'))
+              }}>COPY</button>
+            <button className="cursor-pointer rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+              onClick={() => {
+                const errorPrompt = `Please fix the following error:\n\n\`\`\`\n${error}\n\`\`\``
+                workbenchStore.triggerChatPrompt(errorPrompt)
+                workbenchStore.clearPromptError()
+                toast.dismiss(t.id)
+              }}>FIX WITH AI</button>
+          </div>
+        </div>
+      ),
+      {
+        id: 'preview-error',
+        duration: 12000,
+        style: { width: 'min(560px, calc(100vw - 2rem))', maxWidth: 'min(560px, calc(100vw - 2rem))' },
+      },
+    )
+    // Also set the error banner above the chat input (when not streaming)
     if (!chatStreaming) {
       workbenchStore.setPromptError(error)
     }
@@ -963,6 +1047,45 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       ;(window as any).__bfloatPreviewUrl = ''
     }
   }, [previewUrl])
+
+  // Publish managed dev-server runtime metadata for agent-side MCP checks.
+  useEffect(() => {
+    const publishRuntime = () => {
+      const cwd = tempDirPathRef.current || workbenchStore.projectPath.getState() || gitProjectPath || ''
+      if (!cwd) return
+
+      const previousCwd = runtimeCwdRef.current
+      if (previousCwd && previousCwd !== cwd) {
+        workbenchApi.updateRuntime({ cwd: previousCwd, serverStatus: 'unknown' }).catch(() => {})
+      }
+      runtimeCwdRef.current = cwd
+
+      workbenchApi.updateRuntime({
+        cwd,
+        serverStatus,
+        previewUrl: previewUrl || undefined,
+        port: actualPortRef.current || undefined,
+        expoUrl: expoUrl || undefined,
+        appType,
+        devServerTerminalId: devServerTerminalIdRef.current || undefined,
+      }).catch(() => {})
+    }
+
+    publishRuntime()
+    const timer = setInterval(publishRuntime, 5000)
+
+    return () => clearInterval(timer)
+  }, [serverStatus, previewUrl, expoUrl, appType, gitProjectPath, project.id])
+
+  // Mark runtime unknown on unmount to avoid stale "healthy" state.
+  useEffect(() => {
+    return () => {
+      const cwd = runtimeCwdRef.current
+      if (cwd) {
+        workbenchApi.updateRuntime({ cwd, serverStatus: 'unknown' }).catch(() => {})
+      }
+    }
+  }, [])
 
   // Handle screenshot from Preview component — add to chat as pending attachment
   const handleScreenshot = useCallback((dataUrl: string) => {
@@ -1001,8 +1124,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     // Send Ctrl+C to kill the current process
     terminal.write(terminalId, '\x03')
 
-    // Wait for the process to be interrupted
-    await new Promise(resolve => setTimeout(resolve, 500))
+    // Wait for interruption output to settle before sending a new start command.
+    terminalLastOutputAtRef.current.set(terminalId, Date.now())
+    const becameQuiet = await waitForTerminalQuiet(terminalId, 800, 5000)
+    if (!becameQuiet) {
+      console.warn('[Workbench] Terminal did not become quiet after Ctrl+C; applying fallback delay')
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
 
     // Find the project directory
     const projectDir = tempDirPathRef.current || workbenchStore.projectPath.getState()
@@ -1024,6 +1152,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       }
     }
 
+    // Cache launch config in projects.json (fire-and-forget)
+    window.conveyor?.localProjects?.updateLaunchConfig?.(project.id, launchConfig).catch(() => {})
+
     // Find a new available port
     const isWebProject = launchConfig.type === 'web'
     const range = isWebProject ? { start: 9000, end: 9999 } : { start: 19000, end: 19999 }
@@ -1039,6 +1170,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     }
 
     actualPortRef.current = actualPort
+    lastAcceptedExpoPortPromptRef.current = null
 
     // Build and run the command
     const command = buildFullCommand(launchConfig, projectDir, actualPort)
@@ -1049,7 +1181,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       console.error('[Workbench] Failed to restart dev server:', result.error)
       setServerStatus('error')
     }
-  }, [files, appType])
+  }, [files, appType, waitForTerminalQuiet])
 
   // Keep ref in sync so the IPC listener always calls the latest version
   handleRestartServerRef.current = handleRestartServer
@@ -1064,6 +1196,50 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       console.warn('[Workbench] Cannot launch Android Emulator - no dev server terminal')
     }
   }, [])
+
+  // Keep secrets in sync so Convex dashboard state reflects current credentials.
+  useEffect(() => {
+    if (!project.id) {
+      setProjectSecrets([])
+      return
+    }
+
+    let isCancelled = false
+
+    secretsApi
+      .readSecrets(project.id)
+      .then((result) => {
+        if (isCancelled || result.error || !result.secrets) return
+        setProjectSecrets(result.secrets)
+      })
+      .catch(() => {})
+
+    return () => {
+      isCancelled = true
+    }
+  }, [project.id, secretsVersion, activeTab])
+
+  const convexSecretStatus = useMemo(
+    () => getConvexSecretStatusFromSecrets(projectSecrets, appType),
+    [projectSecrets, appType]
+  )
+  const integrationSecretsPresence = useMemo(
+    () => detectIntegrationSecretsPresence(projectSecrets.map((secret) => secret.key), appType),
+    [projectSecrets, appType]
+  )
+
+  const convexDashboardConfig = useMemo(() => {
+    const fromSecrets = getConvexDashboardConfigFromSecrets(projectSecrets, appType)
+    if (fromSecrets) return fromSecrets
+    if (convexDeploymentKey && convexUrl && convexDeployment) {
+      return {
+        deployKey: convexDeploymentKey,
+        deploymentUrl: convexUrl,
+        deploymentName: convexDeployment,
+      }
+    }
+    return null
+  }, [projectSecrets, appType, convexDeploymentKey, convexUrl, convexDeployment])
 
 
   // Calculate slide position based on tab
@@ -1106,6 +1282,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 <Preview
                   previewUrl={previewUrl}
                   serverStatus={serverStatus}
+                  isTerminalOpen={isTerminalOpen}
+                  terminalHeight={terminalHeight}
                   onRefresh={handleRefresh}
                   onRestartServer={handleRestartServer}
                   expoUrl={expoUrl}
@@ -1115,6 +1293,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   onLaunchIOSSimulator={handleLaunchIOSSimulator}
                   onLaunchAndroidEmulator={handleLaunchAndroidEmulator}
                   onScreenshot={handleScreenshot}
+                  refreshKey={previewRefreshKey}
                 />
               </div>
             </div>
@@ -1124,20 +1303,45 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               {/* Database Tab */}
               {activeTab === 'database' && (
                 <div className="workbench-tab-panel settings">
-                  {convexDeploymentKey && convexUrl && convexDeployment ? (
+                  {convexDashboardConfig ? (
                     <ConvexDashboard
-                      deployKey={convexDeploymentKey}
-                      deploymentUrl={convexUrl}
-                      deploymentName={convexDeployment}
+                      deployKey={convexDashboardConfig.deployKey}
+                      deploymentUrl={convexDashboardConfig.deploymentUrl}
+                      deploymentName={convexDashboardConfig.deploymentName}
                       isVisible={true}
+                      onStatusChange={(status) => {
+                        if (status !== 'error') return
+                        console.warn('[Workbench] Convex dashboard entered error state')
+                      }}
+                      onError={(reason) => {
+                        console.warn('[Workbench] Convex dashboard error:', reason)
+                      }}
+                      onOpenSettings={() => {
+                        workbenchStore.setActiveTab('settings')
+                      }}
+                      onOpenExternal={() => {
+                        window.open(
+                          `https://dashboard.convex.dev/d/${convexDashboardConfig.deploymentName}`,
+                          '_blank',
+                          'noopener,noreferrer'
+                        )
+                      }}
                     />
                   ) : (
-                    <div className="flex items-center justify-center h-full text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4">
+                      {convexSecretStatus.hasUrl && !convexSecretStatus.hasDeployKey && (
+                        <div className="max-w-md px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 text-sm">
+                          Convex URL found, but `CONVEX_DEPLOY_KEY` is missing. Add it in Settings to load the Convex dashboard.
+                        </div>
+                      )}
                       <ConvexIntegration
                         isConnected={hasConvexIntegration || false}
                         onConnect={() => {
-                          const backendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined
-                          window.open(`${backendUrl}/desktop/convex/connect`, '_blank')
+                          workbenchStore.setActiveTab('settings')
+                          workbenchStore.setPendingIntegrationConnect({
+                            integrationId: 'convex',
+                            source: 'workbench',
+                          })
                         }}
                         onDisconnect={async () => {
                           console.log('[Workbench] Convex disconnect requested (local-first mode)')
@@ -1152,7 +1356,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               {/* Payments Tab */}
               {activeTab === 'payments' && (
                 <div className="workbench-tab-panel settings">
-                  <PaymentsOverview project={project} />
+                  <PaymentsOverview
+                    project={project}
+                    isConnected={appType === 'web' ? integrationSecretsPresence.stripe : integrationSecretsPresence.revenuecat}
+                  />
                 </div>
               )}
 
@@ -1193,6 +1400,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                 <Preview
                   previewUrl={previewUrl}
                   serverStatus={serverStatus}
+                  isTerminalOpen={isTerminalOpen}
+                  terminalHeight={terminalHeight}
                   onRefresh={handleRefresh}
                   onRestartServer={handleRestartServer}
                   expoUrl={expoUrl}
@@ -1202,6 +1411,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                   onLaunchIOSSimulator={handleLaunchIOSSimulator}
                   onLaunchAndroidEmulator={handleLaunchAndroidEmulator}
                   onScreenshot={handleScreenshot}
+                  refreshKey={previewRefreshKey}
                 />
               </motion.div>
 
@@ -1306,7 +1516,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                     <Terminal
                       terminalId={tab.id}
                       onReady={() => handleTerminalReady(tab.id)}
-                      onOutput={activeTerminalId === tab.id ? handleTerminalOutput : undefined}
+                      onOutput={(activeTerminalId === tab.id || devServerTerminalIdRef.current === tab.id) ? handleTerminalOutput : undefined}
                       onExit={(exitCode) => handleTerminalExit(tab.id, exitCode)}
                     />
                   </div>

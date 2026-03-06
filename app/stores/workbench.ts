@@ -6,6 +6,30 @@ import { projectStore } from './project-store'
 
 export type WorkbenchViewType = 'editor' | 'preview'
 export type WorkbenchTabType = 'editor' | 'preview' | 'database' | 'payments' | 'settings'
+export type PendingIntegrationId = 'firebase' | 'convex' | 'stripe' | 'revenuecat'
+
+export interface PendingIntegrationConnectRequest {
+  integrationId: PendingIntegrationId
+  source?: 'chat' | 'workbench'
+}
+
+export interface PendingIntegrationChoiceRequest {
+  id: string
+  integrationId: PendingIntegrationId
+  source?: 'chat' | 'settings' | 'workbench'
+  createdAt: number
+}
+
+export interface PendingPromptRequest {
+  id: string
+  prompt: string
+  integrationId?: PendingIntegrationId
+  projectId?: string
+  requiredSecretKeys?: string[]
+  waitForSecrets?: boolean
+  timeoutMs?: number
+  createdAt: number
+}
 
 // Store a reference to the workbench's runCommand function
 let workbenchRunCommand: ((command: string, terminalId?: string) => Promise<void>) | null = null
@@ -54,7 +78,7 @@ export class WorkbenchStore {
 
   // Pending prompt from external components (e.g., deployment)
   // The Chat component watches this and sends the prompt when set
-  pendingPrompt = createStore<string | null>(() => null)
+  pendingPrompt = createStore<PendingPromptRequest | null>(() => null)
 
   // Pending environment variables for the next agent session
   // Used for passing temporary credentials (e.g., Apple ID for iOS deployment)
@@ -66,6 +90,14 @@ export class WorkbenchStore {
 
   // Pending screenshot from Preview — consumed by Chat to add as attachment
   pendingScreenshot = createStore<string | null>(() => null)
+
+  // Pending integration connect request - consumed by ProjectSettings
+  pendingIntegrationConnect = createStore<PendingIntegrationConnectRequest | null>(() => null)
+  // Pending integration choice request - consumed by Chat
+  pendingIntegrationChoice = createStore<PendingIntegrationChoiceRequest | null>(() => null)
+
+  // Invalidation counter for secret mutations (settings -> chat status refresh)
+  secretsVersion = createStore<number>(() => 0)
 
   /**
    * Register the filesystem API for file operations
@@ -192,11 +224,21 @@ export class WorkbenchStore {
    * This opens the chat panel if collapsed and sets a pending prompt
    * The Chat component will pick up the pending prompt and send it
    */
-  triggerChatPrompt(prompt: string): void {
+  triggerChatPrompt(
+    prompt: string,
+    options?: Omit<Partial<PendingPromptRequest>, 'id' | 'prompt' | 'createdAt'>
+  ): void {
+    const request: PendingPromptRequest = {
+      id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      prompt,
+      createdAt: Date.now(),
+      ...options,
+    }
+
     console.log('[workbenchStore] triggerChatPrompt called with:', prompt)
     console.log('[workbenchStore] Previous pendingPrompt:', this.pendingPrompt.getState())
     console.log('[workbenchStore] isChatCollapsed before:', this.isChatCollapsed.getState())
-    this.pendingPrompt.setState(prompt, true)
+    this.pendingPrompt.setState(request, true)
     this.isChatCollapsed.setState(false, true) // Open chat panel
     console.log('[workbenchStore] pendingPrompt set to:', this.pendingPrompt.getState())
     console.log('[workbenchStore] isChatCollapsed after:', this.isChatCollapsed.getState())
@@ -213,6 +255,49 @@ export class WorkbenchStore {
   }
 
   /**
+   * Set a pending integration connect request
+   * ProjectSettings consumes this to open and prefill secret modal
+   */
+  setPendingIntegrationConnect(request: PendingIntegrationConnectRequest): void {
+    this.pendingIntegrationConnect.setState(request, true)
+  }
+
+  /**
+   * Clear pending integration connect request
+   */
+  clearPendingIntegrationConnect(): void {
+    this.pendingIntegrationConnect.setState(null, true)
+  }
+
+  /**
+   * Set a pending integration choice request.
+   * Chat consumes this to render intent-selection cards.
+   */
+  setPendingIntegrationChoice(request: Omit<PendingIntegrationChoiceRequest, 'id' | 'createdAt'>): void {
+    const choiceRequest: PendingIntegrationChoiceRequest = {
+      id: `choice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: Date.now(),
+      ...request,
+    }
+    this.pendingIntegrationChoice.setState(choiceRequest, true)
+    this.isChatCollapsed.setState(false, true)
+  }
+
+  /**
+   * Clear pending integration choice request
+   */
+  clearPendingIntegrationChoice(): void {
+    this.pendingIntegrationChoice.setState(null, true)
+  }
+
+  /**
+   * Increment secrets version to notify listeners that secrets changed
+   */
+  bumpSecretsVersion(): void {
+    this.secretsVersion.setState(this.secretsVersion.getState() + 1, true)
+  }
+
+  /**
    * Set environment variables for the next agent session
    * This is used for passing temporary credentials (e.g., Apple ID for iOS deployment)
    */
@@ -221,6 +306,18 @@ export class WorkbenchStore {
     console.log('[workbenchStore] Previous pendingEnvVars:', this.pendingEnvVars.getState())
     this.pendingEnvVars.setState(envVars, true)
     console.log('[workbenchStore] pendingEnvVars set to:', this.pendingEnvVars.getState())
+  }
+
+  /**
+   * Merge environment variables into pending env vars for the next agent session.
+   */
+  mergePendingEnvVars(envVars: Record<string, string>): void {
+    const current = this.pendingEnvVars.getState() || {}
+    const merged = { ...current, ...envVars }
+    console.log('[workbenchStore] mergePendingEnvVars called with keys:', Object.keys(envVars))
+    console.log('[workbenchStore] Previous pendingEnvVars:', this.pendingEnvVars.getState())
+    this.pendingEnvVars.setState(merged, true)
+    console.log('[workbenchStore] pendingEnvVars merged to:', this.pendingEnvVars.getState())
   }
 
   /**
@@ -390,7 +487,13 @@ export class WorkbenchStore {
       try {
         await projectStore.commitAndPush('Auto-save before close')
       } catch (error) {
-        console.error('[WorkbenchStore] Failed to commit changes:', error)
+        // No git repo is expected for some projects — not an error
+        const msg = error instanceof Error ? error.message : String(error)
+        if (msg.includes('No git repository')) {
+          console.log('[WorkbenchStore] Skipping commit — no git repository')
+        } else {
+          console.error('[WorkbenchStore] Failed to commit changes:', error)
+        }
       }
     }
   }
@@ -607,7 +710,11 @@ export class WorkbenchStore {
     this.unsavedFiles.setState(new Set(), true)
 
     // Clear pending screenshot
+    this.pendingPrompt.setState(null, true)
     this.pendingScreenshot.setState(null, true)
+    this.pendingIntegrationConnect.setState(null, true)
+    this.pendingIntegrationChoice.setState(null, true)
+    this.secretsVersion.setState(0, true)
 
     // Reset view state to defaults
     this.activeView.setState('preview', true)
