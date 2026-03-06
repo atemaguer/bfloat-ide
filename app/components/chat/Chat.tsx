@@ -995,6 +995,16 @@ export function Chat({
           }
           return prev
         })
+      } else if (msg.type === 'queue_user_prompt') {
+        const queuedContent = msg.content as { prompt?: string; reason?: string; source?: string }
+        const prompt = typeof queuedContent.prompt === 'string' ? queuedContent.prompt.trim() : ''
+        if (prompt.length > 0) {
+          console.log('[Chat] Queueing user prompt from stream:', {
+            source: queuedContent.source ?? 'unknown',
+            reason: queuedContent.reason ?? null,
+          })
+          workbenchStore.triggerChatPrompt(prompt)
+        }
       } else if (msg.type === 'reasoning') {
         // Handle reasoning messages (agent's thinking)
         const reasoningContent = msg.content as string

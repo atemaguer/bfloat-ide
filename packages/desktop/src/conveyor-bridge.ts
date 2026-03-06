@@ -988,6 +988,15 @@ function _translateAgentFrame(raw: unknown, sessionId: string): any {
       }
       break
 
+    case "queue_user_prompt":
+      // payload: { prompt, reason?, source? }
+      content = {
+        prompt: (payload.prompt as string) ?? "",
+        reason: (payload.reason as string | undefined) ?? undefined,
+        source: (payload.source as string | undefined) ?? undefined,
+      }
+      break
+
     case "error":
       // payload: { code, message, recoverable }
       content = {

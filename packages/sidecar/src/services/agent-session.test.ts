@@ -648,7 +648,7 @@ describe("agent-session completion verification policy", () => {
     expect(errorFrame).toBeUndefined();
   });
 
-  it("appends verification guidance when stream stops before completion verification", async () => {
+  it("queues verification guidance as a user prompt when stream stops before completion verification", async () => {
     const provider = new MutatingInterruptedProvider();
     registerProvider(provider);
 
@@ -665,12 +665,13 @@ describe("agent-session completion verification policy", () => {
 
     const replay = getBackgroundMessages(created.sessionId);
     expect(replay.success).toBe(true);
-    const textFrames = replay.messages.filter((f) => f.type === "text");
-    const joinedText = textFrames
-      .map((frame) => String((frame.payload as { delta?: string })?.delta || ""))
-      .join("\n");
-    expect(joinedText).toContain("stream stopped before completion verification");
-    expect(joinedText).toContain("run workbench.verify_app_state");
+    const queueFrame = replay.messages.find((f) => f.type === "queue_user_prompt");
+    expect(queueFrame).toBeDefined();
+    const queuedPrompt = String(
+      (queueFrame?.payload as { prompt?: string } | undefined)?.prompt ?? "",
+    );
+    expect(queuedPrompt).toContain("stream stopped before completion verification");
+    expect(queuedPrompt).toContain("run workbench.verify_app_state");
 
     const cancelledFrame = replay.messages.find((f) => f.type === "cancelled");
     expect(cancelledFrame).toBeDefined();

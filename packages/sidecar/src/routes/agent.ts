@@ -134,6 +134,14 @@ function translateFrameToMessage(frame: AgentFrame): AgentMessage {
       };
       break;
 
+    case "queue_user_prompt":
+      content = {
+        prompt: payload.prompt ?? "",
+        reason: payload.reason,
+        source: payload.source,
+      };
+      break;
+
     case "error":
       content = {
         code: payload.code ?? "unknown",
@@ -426,7 +434,7 @@ agentRouter.get("/sessions/:id/stream", (c) => {
       protocol:
         "Frames are JSON-encoded AgentFrame objects: " +
         "{ type, sessionId, seq, ts, payload }. " +
-        "Frame types: init | text | reasoning | tool_call | tool_result | error | done | stream_end | cancelled",
+        "Frame types: init | text | reasoning | tool_call | tool_result | queue_user_prompt | error | done | stream_end | cancelled",
     },
     400
   );

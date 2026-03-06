@@ -42,6 +42,7 @@ export type AgentFrameType =
   | "reasoning"   // Extended thinking / internal reasoning
   | "tool_call"   // Tool invocation started
   | "tool_result" // Tool execution completed
+  | "queue_user_prompt" // Queue a user prompt for the next turn
   | "error"       // Error occurred (may or may not be recoverable)
   | "done"        // Stream completed successfully
   | "stream_end"  // Synthetic end-of-stream sentinel (always emitted last)
@@ -87,6 +88,12 @@ export interface ToolResultPayload {
   name: string;
   output: string;
   isError: boolean;
+}
+
+export interface QueueUserPromptPayload {
+  prompt: string;
+  reason?: string;
+  source?: string;
 }
 
 export interface ErrorPayload {
@@ -1768,10 +1775,12 @@ async function runStream(sessionId: string, message: string): Promise<void> {
           `Reason: ${reason}`,
           "Resume the session and run workbench.verify_app_state, then continue once logs and screenshot evidence are both successful.",
         ].join("\n");
-        const interruptedGateTextFrame = buildFrame(liveSession, "text", {
-          delta: `${interruptedGateMessage}\n`,
-        } satisfies TextPayload);
-        broadcastToSession(liveSession, interruptedGateTextFrame);
+        const interruptedGateQueueFrame = buildFrame(liveSession, "queue_user_prompt", {
+          prompt: interruptedGateMessage,
+          reason,
+          source: "completion_verification_gate",
+        } satisfies QueueUserPromptPayload);
+        broadcastToSession(liveSession, interruptedGateQueueFrame);
       }
 
       const cancelledFrame = buildFrame(liveSession, "cancelled", {
