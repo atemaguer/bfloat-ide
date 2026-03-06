@@ -22,6 +22,7 @@ import {
   getConvexSecretStatusFromSecrets,
   type SecretEntry,
 } from '@/app/lib/integrations/convex'
+import { detectIntegrationSecretsPresence } from '@/app/lib/integrations/secrets'
 import toast from 'react-hot-toast'
 import './styles.css'
 
@@ -1222,6 +1223,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     () => getConvexSecretStatusFromSecrets(projectSecrets, appType),
     [projectSecrets, appType]
   )
+  const integrationSecretsPresence = useMemo(
+    () => detectIntegrationSecretsPresence(projectSecrets.map((secret) => secret.key), appType),
+    [projectSecrets, appType]
+  )
 
   const convexDashboardConfig = useMemo(() => {
     const fromSecrets = getConvexDashboardConfigFromSecrets(projectSecrets, appType)
@@ -1351,7 +1356,10 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               {/* Payments Tab */}
               {activeTab === 'payments' && (
                 <div className="workbench-tab-panel settings">
-                  <PaymentsOverview project={project} />
+                  <PaymentsOverview
+                    project={project}
+                    isConnected={appType === 'web' ? integrationSecretsPresence.stripe : integrationSecretsPresence.revenuecat}
+                  />
                 </div>
               )}
 
