@@ -56,6 +56,7 @@ export type MessageType =
   | "reasoning"
   | "tool_call"
   | "tool_result"
+  | "queue_user_prompt"
   | "error"
   | "done"
 
@@ -113,6 +114,12 @@ export interface ErrorContent {
   recoverable: boolean
 }
 
+export interface QueueUserPromptContent {
+  prompt: string
+  reason?: string
+  source?: string
+}
+
 export interface InitContent {
   sessionId: string
   availableTools: string[]
@@ -131,6 +138,7 @@ export interface AgentMessage {
     | string
     | ToolCallContent
     | ToolResultContent
+    | QueueUserPromptContent
     | ErrorContent
     | InitContent
     | DoneContent

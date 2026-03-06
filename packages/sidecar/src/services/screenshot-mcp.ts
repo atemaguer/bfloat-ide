@@ -35,7 +35,8 @@ export function createScreenshotMcpServer(options: ScreenshotMcpOptions) {
           let targetUrl = args.url;
 
           if (!targetUrl) {
-            targetUrl = getPreviewUrl(options.cwd);
+            const runtime = getRuntimeState(options.cwd);
+            targetUrl = runtime?.previewUrl ?? getPreviewUrl(options.cwd);
             if (!targetUrl) {
               return {
                 content: [

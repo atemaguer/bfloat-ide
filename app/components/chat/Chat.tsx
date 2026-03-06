@@ -157,7 +157,9 @@ export function Chat({
   // Any session IDs received during streaming (current session) should NOT trigger a load
   const initialSessionIdAtMount = useRef(resolvedInitialSessionId)
   const usageRef = useRef<{ inputTokens: number; outputTokens: number }>({ inputTokens: 0, outputTokens: 0 })
-  const submitRef = useRef<((text: string, attachments?: ImageAttachment[]) => void) | null>(null)
+  const submitRef = useRef<
+    ((text: string, attachments?: ImageAttachment[], options?: { hideUserMessage?: boolean }) => void) | null
+  >(null)
   const messagesRef = useRef<ChatMessage[]>(messages)
   const [providerAuthStatus, setProviderAuthStatus] = useState<Record<string, boolean>>({})
   // Track if Claude auth modal should be shown
@@ -320,8 +322,11 @@ export function Chat({
   // Handle Claude auth error detected from message content
   const handleClaudeAuthError = useCallback(() => {
     console.log('[Chat] Claude auth error detected in message stream')
-    setProviderAuthStatus((prev) => ({ ...prev, claude: false }))
-    providerAuthStore.markAuthInvalidated('anthropic')
+    setProviderAuthStatus((prev) => {
+      if (prev.claude === false) return prev
+      providerAuthStore.markAuthInvalidated('anthropic')
+      return { ...prev, claude: false }
+    })
   }, [])
 
   // Handle Claude auth modal completion - re-fetch actual auth status
@@ -992,6 +997,19 @@ export function Chat({
           }
           return prev
         })
+      } else if (msg.type === 'queue_user_prompt') {
+        const queuedContent = msg.content as { prompt?: string; reason?: string; source?: string }
+        const prompt = typeof queuedContent.prompt === 'string' ? queuedContent.prompt.trim() : ''
+        if (prompt.length > 0) {
+          console.log('[Chat] Queueing user prompt from stream:', {
+            source: queuedContent.source ?? 'unknown',
+            reason: queuedContent.reason ?? null,
+          })
+          workbenchStore.triggerChatPrompt(prompt, {
+            source: queuedContent.source,
+            hiddenFromUser: queuedContent.source === 'completion_verification_gate',
+          })
+        }
       } else if (msg.type === 'reasoning') {
         // Handle reasoning messages (agent's thinking)
         const reasoningContent = msg.content as string
@@ -1068,9 +1086,12 @@ export function Chat({
       // If this is a Claude auth error, mark Claude as not authenticated
       if (isClaudeAuthError(err)) {
         console.log('[Chat] Claude auth error detected, marking as not authenticated')
-        setProviderAuthStatus((prev) => ({ ...prev, claude: false }))
-        // Also mark in global store so Connected Accounts page shows correct status
-        providerAuthStore.markAuthInvalidated('anthropic')
+        setProviderAuthStatus((prev) => {
+          if (prev.claude === false) return prev
+          // Also mark in global store so Connected Accounts page shows correct status
+          providerAuthStore.markAuthInvalidated('anthropic')
+          return { ...prev, claude: false }
+        })
       }
     },
     onComplete: () => {
@@ -1227,7 +1248,7 @@ export function Chat({
   }, [isStreaming])
 
   const handleSubmit = useCallback(
-    async (text: string, attachments: ImageAttachment[] = []) => {
+    async (text: string, attachments: ImageAttachment[] = [], options?: { hideUserMessage?: boolean }) => {
       console.log('[Chat] handleSubmit called with:', text.substring(0, 100), 'attachments:', attachments.length)
 
       const hasContent = text.trim().length > 0 || attachments.length > 0
@@ -1326,96 +1347,99 @@ export function Chat({
         createdAt: new Date().toISOString(),
       }
 
-      // Intercept Firebase-related prompts when Firebase is not provisioned and secrets are not configured
-      if (
-        /\bfirebase\b/i.test(text) &&
-        !projectHasFirebase &&
-        !firebaseProvisioned &&
-        !hasIntegrationSecrets.firebase &&
-        !/\/firebase-setup\b/i.test(text)
-      ) {
-        const guidanceMessage: ChatMessage = {
-          id: generateId(),
-          role: 'assistant',
-          content: '',
-          parts: [{ type: 'firebase-setup-prompt' } as MessagePart],
-          createdAt: new Date().toISOString(),
+      const hideUserMessage = options?.hideUserMessage === true
+      if (!hideUserMessage) {
+        // Intercept Firebase-related prompts when Firebase is not provisioned and secrets are not configured
+        if (
+          /\bfirebase\b/i.test(text) &&
+          !projectHasFirebase &&
+          !firebaseProvisioned &&
+          !hasIntegrationSecrets.firebase &&
+          !/\/firebase-setup\b/i.test(text)
+        ) {
+          const guidanceMessage: ChatMessage = {
+            id: generateId(),
+            role: 'assistant',
+            content: '',
+            parts: [{ type: 'firebase-setup-prompt' } as MessagePart],
+            createdAt: new Date().toISOString(),
+          }
+          setMessages((prev) => [...prev, userMessage, guidanceMessage])
+          setInput('')
+          return
         }
-        setMessages((prev) => [...prev, userMessage, guidanceMessage])
-        setInput('')
-        return
-      }
 
-      if (text.includes('/convex-auth') && !convexSecretStatus.isConfigured) {
-        const requiredConvexKeys = [convexSecretStatus.urlKey, 'CONVEX_DEPLOY_KEY']
-        const guidanceText =
-          `Convex Better Auth setup requires ${requiredConvexKeys.join(' + ')} ` +
-          'in Project Settings -> Development Variables.'
-        const guidanceMessage: ChatMessage = {
-          id: generateId(),
-          role: 'assistant',
-          content: guidanceText,
-          parts: [{ type: 'text', text: guidanceText }],
-          createdAt: new Date().toISOString(),
+        if (text.includes('/convex-auth') && !convexSecretStatus.isConfigured) {
+          const requiredConvexKeys = [convexSecretStatus.urlKey, 'CONVEX_DEPLOY_KEY']
+          const guidanceText =
+            `Convex Better Auth setup requires ${requiredConvexKeys.join(' + ')} ` +
+            'in Project Settings -> Development Variables.'
+          const guidanceMessage: ChatMessage = {
+            id: generateId(),
+            role: 'assistant',
+            content: guidanceText,
+            parts: [{ type: 'text', text: guidanceText }],
+            createdAt: new Date().toISOString(),
+          }
+          setMessages((prev) => [...prev, userMessage, guidanceMessage])
+          setInput('')
+          return
         }
-        setMessages((prev) => [...prev, userMessage, guidanceMessage])
-        setInput('')
-        return
-      }
 
-      // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
-      if (
-        /\bconvex\b/i.test(text) &&
-        convexStage === 'disconnected' &&
-        !/\/convex-auth\b/i.test(text)
-      ) {
-        const guidanceMessage: ChatMessage = {
-          id: generateId(),
-          role: 'assistant',
-          content: '',
-          parts: [{ type: 'convex-setup-prompt' } as MessagePart],
-          createdAt: new Date().toISOString(),
+        // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
+        if (
+          /\bconvex\b/i.test(text) &&
+          convexStage === 'disconnected' &&
+          !/\/convex-auth\b/i.test(text)
+        ) {
+          const guidanceMessage: ChatMessage = {
+            id: generateId(),
+            role: 'assistant',
+            content: '',
+            parts: [{ type: 'convex-setup-prompt' } as MessagePart],
+            createdAt: new Date().toISOString(),
+          }
+          setMessages((prev) => [...prev, userMessage, guidanceMessage])
+          setInput('')
+          return
         }
-        setMessages((prev) => [...prev, userMessage, guidanceMessage])
-        setInput('')
-        return
-      }
 
-      // Intercept Stripe-related prompts when Stripe is not provisioned and secrets are not configured
-      if (/\bstripe\b/i.test(text) && !projectHasStripe && !hasIntegrationSecrets.stripe && !/\/add-stripe\b/i.test(text)) {
-        const guidanceMessage: ChatMessage = {
-          id: generateId(),
-          role: 'assistant',
-          content: '',
-          parts: [{ type: 'stripe-setup-prompt' } as MessagePart],
-          createdAt: new Date().toISOString(),
+        // Intercept Stripe-related prompts when Stripe is not provisioned and secrets are not configured
+        if (/\bstripe\b/i.test(text) && !projectHasStripe && !hasIntegrationSecrets.stripe && !/\/add-stripe\b/i.test(text)) {
+          const guidanceMessage: ChatMessage = {
+            id: generateId(),
+            role: 'assistant',
+            content: '',
+            parts: [{ type: 'stripe-setup-prompt' } as MessagePart],
+            createdAt: new Date().toISOString(),
+          }
+          setMessages((prev) => [...prev, userMessage, guidanceMessage])
+          setInput('')
+          return
         }
-        setMessages((prev) => [...prev, userMessage, guidanceMessage])
-        setInput('')
-        return
-      }
 
-      // Intercept RevenueCat-related prompts when RevenueCat is not provisioned and secrets are not configured
-      if (
-        /\brevenue\s*cat\b/i.test(text) &&
-        !projectHasRevenuecat &&
-        !revenuecatProvisioned &&
-        !hasIntegrationSecrets.revenuecat &&
-        !/\/add-revenuecat\b/i.test(text)
-      ) {
-        const guidanceMessage: ChatMessage = {
-          id: generateId(),
-          role: 'assistant',
-          content: '',
-          parts: [{ type: 'revenuecat-setup-prompt' } as MessagePart],
-          createdAt: new Date().toISOString(),
+        // Intercept RevenueCat-related prompts when RevenueCat is not provisioned and secrets are not configured
+        if (
+          /\brevenue\s*cat\b/i.test(text) &&
+          !projectHasRevenuecat &&
+          !revenuecatProvisioned &&
+          !hasIntegrationSecrets.revenuecat &&
+          !/\/add-revenuecat\b/i.test(text)
+        ) {
+          const guidanceMessage: ChatMessage = {
+            id: generateId(),
+            role: 'assistant',
+            content: '',
+            parts: [{ type: 'revenuecat-setup-prompt' } as MessagePart],
+            createdAt: new Date().toISOString(),
+          }
+          setMessages((prev) => [...prev, userMessage, guidanceMessage])
+          setInput('')
+          return
         }
-        setMessages((prev) => [...prev, userMessage, guidanceMessage])
-        setInput('')
-        return
-      }
 
-      setMessages((prev) => [...prev, userMessage])
+        setMessages((prev) => [...prev, userMessage])
+      }
       setIsStreaming(true)
 
       try {
@@ -1773,7 +1797,7 @@ export function Chat({
           return
         }
 
-        await handleSubmit(pendingPrompt)
+        await handleSubmit(pendingPrompt, [], { hideUserMessage: pendingPromptRequest.hiddenFromUser === true })
       } catch (err) {
         console.error('[Chat] Failed to handle pending prompt:', err)
       } finally {

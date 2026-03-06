@@ -12,7 +12,7 @@
  * - Thinking indicator during streaming
  */
 
-import { memo, useMemo, useState, useCallback, useEffect } from 'react'
+import { memo, useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Shimmer } from '@/app/components/ui/shimmer'
 import { Markdown } from './Markdown'
@@ -262,18 +262,41 @@ export const AssistantMessage = memo(function AssistantMessage({
 }: AssistantMessageProps) {
   // Track submitting state for AskUserQuestion
   const [submittingId, setSubmittingId] = useState<string | null>(null)
+  const lastAuthErrorSignatureRef = useRef<string | null>(null)
 
   // Filter out null/undefined parts
-  const safeParts = parts.filter((part): part is MessagePart => part != null)
+  const safeParts = useMemo(
+    () => parts.filter((part): part is MessagePart => part != null),
+    [parts]
+  )
 
   // Parse into sections
   const sections = useMemo(() => parseIntoSections(safeParts), [safeParts])
 
   // Notify parent when Claude auth error is detected
   useEffect(() => {
-    const hasAuthError = sections.some((s) => s.type === 'claude_auth')
-    if (hasAuthError && !isClaudeAuthenticated) {
+    const authErrorTextSections = sections
+      .filter((section): section is TextSection => section.type === 'text')
+      .map((section) => section.content)
+      .filter((content) => isClaudeAuthError(content))
+    const hasAuthError = sections.some((s) => s.type === 'claude_auth') || authErrorTextSections.length > 0
+
+    if (!hasAuthError) {
+      lastAuthErrorSignatureRef.current = null
+      return
+    }
+
+    const signature = authErrorTextSections.join('\n').slice(0, 400) || 'claude-auth-section'
+    const shouldNotify =
+      !isClaudeAuthenticated && lastAuthErrorSignatureRef.current !== signature
+
+    if (shouldNotify) {
+      lastAuthErrorSignatureRef.current = signature
       onClaudeAuthError?.()
+    }
+
+    if (isClaudeAuthenticated) {
+      lastAuthErrorSignatureRef.current = null
     }
   }, [sections, isClaudeAuthenticated, onClaudeAuthError])
 

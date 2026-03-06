@@ -24,6 +24,8 @@ export interface PendingPromptRequest {
   id: string
   prompt: string
   integrationId?: PendingIntegrationId
+  source?: string
+  hiddenFromUser?: boolean
   projectId?: string
   requiredSecretKeys?: string[]
   waitForSecrets?: boolean
