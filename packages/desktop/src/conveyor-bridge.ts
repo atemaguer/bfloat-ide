@@ -268,6 +268,16 @@ interface SecretOperationResult {
   writePath?: string
 }
 
+interface EnsureConvexAuthEnvResult {
+  success: boolean
+  status: "already_configured" | "provisioned" | "skipped_missing_prereqs" | "failed"
+  projectId: string
+  updatedKeys: string[]
+  siteUrl: string | null
+  warning?: string
+  error?: string
+}
+
 // LocalProjectsApi types  — use `unknown` for Project/AgentSession since we
 // don't want a hard import across packages.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -556,6 +566,8 @@ const _terminalWriteQueues = new Map<string, Promise<TerminalWriteResult>>()
 // Agent terminal event emitters (no native Tauri equivalent yet — stubbed).
 const _agentTerminalCreatedListeners = new Set<(id: string) => void>()
 const _agentTerminalClosedListeners = new Set<(id: string) => void>()
+const _startDevServerListeners = new Set<() => void>()
+const _stopDevServerListeners = new Set<() => void>()
 const _restartDevServerListeners = new Set<() => void>()
 
 export const terminalBridge = {
@@ -751,6 +763,22 @@ export const terminalBridge = {
   },
 
   /**
+   * onStartDevServer
+   */
+  onStartDevServer: (callback: () => void): UnsubscribeFn => {
+    _startDevServerListeners.add(callback)
+    return () => _startDevServerListeners.delete(callback)
+  },
+
+  /**
+   * onStopDevServer
+   */
+  onStopDevServer: (callback: () => void): UnsubscribeFn => {
+    _stopDevServerListeners.add(callback)
+    return () => _stopDevServerListeners.delete(callback)
+  },
+
+  /**
    * onRestartDevServer
    */
   onRestartDevServer: (callback: () => void): UnsubscribeFn => {
@@ -844,6 +872,71 @@ export const filesystemBridge = {
 // multiple subscribers.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _agentStreams = new Map<string, { ws: any; callbacks: Set<(msg: any) => void> }>()
+const _agentToolCalls = new Map<string, Map<string, string>>()
+
+function _normalizeToolName(raw: unknown): string {
+  if (typeof raw !== "string") return ""
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+}
+
+function _isWorkbenchRestartToolName(raw: unknown): boolean {
+  const normalizedToolName = _normalizeToolName(raw)
+  if (!normalizedToolName) return false
+
+  const isRestartAlias =
+    normalizedToolName === "restart_app" ||
+    normalizedToolName.endsWith("_restart_app")
+  const isWorkbenchScoped = normalizedToolName.includes("workbench")
+
+  return normalizedToolName === "restart_app" || (isWorkbenchScoped && isRestartAlias)
+}
+
+function _resolveWorkbenchLifecycleTool(raw: unknown): "start" | "stop" | "restart" | null {
+  const normalizedToolName = _normalizeToolName(raw)
+  if (!normalizedToolName) return null
+
+  const isWorkbenchScoped = normalizedToolName.includes("workbench")
+
+  const isStartAlias =
+    normalizedToolName === "start_app" ||
+    normalizedToolName.endsWith("_start_app")
+  if (normalizedToolName === "start_app" || (isWorkbenchScoped && isStartAlias)) {
+    return "start"
+  }
+
+  const isStopAlias =
+    normalizedToolName === "stop_app" ||
+    normalizedToolName.endsWith("_stop_app")
+  if (normalizedToolName === "stop_app" || (isWorkbenchScoped && isStopAlias)) {
+    return "stop"
+  }
+
+  if (_isWorkbenchRestartToolName(normalizedToolName)) {
+    return "restart"
+  }
+
+  return null
+}
+
+function _emitWorkbenchLifecycle(tool: "start" | "stop" | "restart"): void {
+  const listeners =
+    tool === "start"
+      ? _startDevServerListeners
+      : tool === "stop"
+        ? _stopDevServerListeners
+        : _restartDevServerListeners
+
+  for (const listener of listeners) {
+    try {
+      listener()
+    } catch (err) {
+      console.warn(`[conveyor-bridge] ${tool} listener error:`, err)
+    }
+  }
+}
 
 /**
  * Translate a sidecar AgentFrame into the AgentMessage shape expected by
@@ -902,6 +995,15 @@ function _translateAgentFrame(raw: unknown, sessionId: string): any {
         name: payload.name ?? "",
         output: payload.output ?? "",
         isError: payload.isError ?? false,
+      }
+      break
+
+    case "queue_user_prompt":
+      // payload: { prompt, reason?, source? }
+      content = {
+        prompt: (payload.prompt as string) ?? "",
+        reason: (payload.reason as string | undefined) ?? undefined,
+        source: (payload.source as string | undefined) ?? undefined,
       }
       break
 
@@ -1022,34 +1124,45 @@ export const aiAgentBridge = {
         //   { type, content, metadata?: { seq, timestamp, tokens, cost } }
         // Translate here so the rest of the app works unchanged.
         const translated = _translateAgentFrame(msg, sessionId)
+        const translatedType = (translated as { type?: string }).type
 
-        // Bridge successful workbench restart tool results to restart listeners.
-        if ((translated as { type?: string }).type === "tool_result") {
-          const resultPayload = (translated as { content?: unknown }).content as
-            | { name?: unknown; isError?: unknown }
+        // Track tool_call ids so tool_result frames without name can still be resolved.
+        if (translatedType === "tool_call") {
+          const toolCallPayload = (translated as { content?: unknown }).content as
+            | { id?: unknown; name?: unknown }
             | undefined
-          const toolNameRaw = resultPayload?.name
-          const toolName = typeof toolNameRaw === "string" ? toolNameRaw.toLowerCase() : ""
-          const normalizedToolName = toolName
-            .replace(/[^a-z0-9]+/g, "_")
-            .replace(/^_+|_+$/g, "")
-          const isError = resultPayload?.isError === true
-          const isRestartAlias =
-            normalizedToolName === "restart_app" ||
-            normalizedToolName.endsWith("_restart_app")
-          const isWorkbenchScoped = normalizedToolName.includes("workbench")
-          const isWorkbenchRestartTool =
-            normalizedToolName === "restart_app" ||
-            (isWorkbenchScoped && isRestartAlias)
+          const callId = typeof toolCallPayload?.id === "string" ? toolCallPayload.id : ""
+          const toolName = _normalizeToolName(toolCallPayload?.name)
+          if (callId && toolName) {
+            const callMap = _agentToolCalls.get(sessionId) ?? new Map<string, string>()
+            callMap.set(callId, toolName)
+            _agentToolCalls.set(sessionId, callMap)
+          }
+        }
 
-          if (isWorkbenchRestartTool && !isError) {
-            for (const listener of _restartDevServerListeners) {
-              try {
-                listener()
-              } catch (err) {
-                console.warn("[conveyor-bridge] restart listener error:", err)
-              }
-            }
+        // Bridge successful workbench lifecycle tool results to local listeners.
+        if (translatedType === "tool_result") {
+          const resultPayload = (translated as { content?: unknown }).content as
+            | { callId?: unknown; name?: unknown; isError?: unknown }
+            | undefined
+          const callId = typeof resultPayload?.callId === "string" ? resultPayload.callId : ""
+          const callMap = _agentToolCalls.get(sessionId)
+          const toolNameRaw =
+            typeof resultPayload?.name === "string" && resultPayload.name.length > 0
+              ? resultPayload.name
+              : callId
+                ? callMap?.get(callId)
+                : undefined
+          const isError = resultPayload?.isError === true
+          const lifecycleTool = _resolveWorkbenchLifecycleTool(toolNameRaw)
+
+          if (lifecycleTool && !isError) {
+            _emitWorkbenchLifecycle(lifecycleTool)
+          }
+
+          if (callId && callMap) {
+            callMap.delete(callId)
+            if (callMap.size === 0) _agentToolCalls.delete(sessionId)
           }
         }
 
@@ -1065,13 +1178,15 @@ export const aiAgentBridge = {
         }
 
         // Clean up when the stream ends
-        if ((translated as { type?: string }).type === "stream_end") {
+        if (translatedType === "stream_end") {
+          _agentToolCalls.delete(sessionId)
           _agentStreams.delete(sessionId)
         }
       })
 
       ws.on("error", (err: unknown) => {
         console.warn(`[conveyor-bridge] agent stream error (${sessionId}):`, err)
+        _agentToolCalls.delete(sessionId)
         _agentStreams.delete(sessionId)
       })
 
@@ -1086,6 +1201,7 @@ export const aiAgentBridge = {
       e.callbacks.delete(callback)
       if (e.callbacks.size === 0) {
         e.ws.close()
+        _agentToolCalls.delete(sessionId)
         _agentStreams.delete(sessionId)
       }
     }
@@ -2005,6 +2121,28 @@ export const secretsBridge = {
     } catch (err) {
       console.warn("[conveyor-bridge] secrets.deleteSecret error:", err)
       return { success: false }
+    }
+  },
+
+  ensureConvexAuthEnv: async (
+    projectId: string,
+    appType: "web" | "mobile",
+  ): Promise<EnsureConvexAuthEnvResult> => {
+    try {
+      return await getSidecarApiSync().http.post<EnsureConvexAuthEnvResult>(
+        `/api/secrets/${projectId}/convex-auth-env/ensure`,
+        { appType },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] secrets.ensureConvexAuthEnv error:", err)
+      return {
+        success: false,
+        status: "failed",
+        projectId,
+        updatedKeys: [],
+        siteUrl: null,
+        error: err instanceof Error ? err.message : String(err),
+      }
     }
   },
 }

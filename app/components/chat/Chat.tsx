@@ -320,8 +320,11 @@ export function Chat({
   // Handle Claude auth error detected from message content
   const handleClaudeAuthError = useCallback(() => {
     console.log('[Chat] Claude auth error detected in message stream')
-    setProviderAuthStatus((prev) => ({ ...prev, claude: false }))
-    providerAuthStore.markAuthInvalidated('anthropic')
+    setProviderAuthStatus((prev) => {
+      if (prev.claude === false) return prev
+      providerAuthStore.markAuthInvalidated('anthropic')
+      return { ...prev, claude: false }
+    })
   }, [])
 
   // Handle Claude auth modal completion - re-fetch actual auth status
@@ -992,6 +995,16 @@ export function Chat({
           }
           return prev
         })
+      } else if (msg.type === 'queue_user_prompt') {
+        const queuedContent = msg.content as { prompt?: string; reason?: string; source?: string }
+        const prompt = typeof queuedContent.prompt === 'string' ? queuedContent.prompt.trim() : ''
+        if (prompt.length > 0) {
+          console.log('[Chat] Queueing user prompt from stream:', {
+            source: queuedContent.source ?? 'unknown',
+            reason: queuedContent.reason ?? null,
+          })
+          workbenchStore.triggerChatPrompt(prompt)
+        }
       } else if (msg.type === 'reasoning') {
         // Handle reasoning messages (agent's thinking)
         const reasoningContent = msg.content as string
@@ -1068,9 +1081,12 @@ export function Chat({
       // If this is a Claude auth error, mark Claude as not authenticated
       if (isClaudeAuthError(err)) {
         console.log('[Chat] Claude auth error detected, marking as not authenticated')
-        setProviderAuthStatus((prev) => ({ ...prev, claude: false }))
-        // Also mark in global store so Connected Accounts page shows correct status
-        providerAuthStore.markAuthInvalidated('anthropic')
+        setProviderAuthStatus((prev) => {
+          if (prev.claude === false) return prev
+          // Also mark in global store so Connected Accounts page shows correct status
+          providerAuthStore.markAuthInvalidated('anthropic')
+          return { ...prev, claude: false }
+        })
       }
     },
     onComplete: () => {

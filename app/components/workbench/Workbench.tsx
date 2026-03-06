@@ -681,13 +681,25 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     }
   }, [])
 
-  // Listen for agent-triggered dev server restart events
+  // Listen for agent-triggered dev server lifecycle events
+  const handleStartServerRef = useRef<() => void>()
+  const handleStopServerRef = useRef<() => void>()
   const handleRestartServerRef = useRef<() => void>()
   useEffect(() => {
-    const cleanup = terminal.onRestartDevServer(() => {
+    const cleanupStart = terminal.onStartDevServer(() => {
+      handleStartServerRef.current?.()
+    })
+    const cleanupStop = terminal.onStopDevServer(() => {
+      handleStopServerRef.current?.()
+    })
+    const cleanupRestart = terminal.onRestartDevServer(() => {
       handleRestartServerRef.current?.()
     })
-    return cleanup
+    return () => {
+      cleanupStart()
+      cleanupStop()
+      cleanupRestart()
+    }
   }, [])
 
   // Track the temp directory path for the current project
@@ -1105,42 +1117,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     }
   }, [])
 
-  // Restart the dev server (kill current process and re-run)
-  const handleRestartServer = useCallback(async () => {
-    const terminalId = devServerTerminalIdRef.current
-    if (!terminalId) {
-      console.warn('[Workbench] Cannot restart server - no dev server terminal')
-      return
-    }
-
-    console.log('[Workbench] Restarting dev server...')
-
-    // Reset state
-    setPreviewUrl('')
-    setServerStatus('starting')
-    setExpoUrl('')
-    terminalOutputBuffer.current = ''
-
-    // Send Ctrl+C to kill the current process
-    terminal.write(terminalId, '\x03')
-
-    // Wait for interruption output to settle before sending a new start command.
-    terminalLastOutputAtRef.current.set(terminalId, Date.now())
-    const becameQuiet = await waitForTerminalQuiet(terminalId, 800, 5000)
-    if (!becameQuiet) {
-      console.warn('[Workbench] Terminal did not become quiet after Ctrl+C; applying fallback delay')
-      await new Promise(resolve => setTimeout(resolve, 1000))
-    }
-
-    // Find the project directory
-    const projectDir = tempDirPathRef.current || workbenchStore.projectPath.getState()
-    if (!projectDir) {
-      console.error('[Workbench] Cannot restart server - no project directory')
-      setServerStatus('error')
-      return
-    }
-
-    // Re-detect launch config
+  const resolveLaunchConfig = useCallback((): LaunchConfig => {
     let launchConfig = getLaunchConfig(files)
     if (!launchConfig) {
       launchConfig = detectLaunchConfig(files)
@@ -1151,6 +1128,58 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         ...DEFAULT_CONFIGS[appType],
       }
     }
+    return launchConfig
+  }, [files, appType])
+
+  const handleStopServer = useCallback(async () => {
+    const terminalId = devServerTerminalIdRef.current
+    if (!terminalId) {
+      console.warn('[Workbench] Cannot stop server - no dev server terminal')
+      return
+    }
+
+    console.log('[Workbench] Stopping dev server...')
+    setPreviewUrl('')
+    setExpoUrl('')
+    setServerStatus('error')
+    terminalOutputBuffer.current = ''
+
+    // Send Ctrl+C to interrupt the current process.
+    terminal.write(terminalId, '\x03')
+
+    // Wait for interruption output to settle before sending a new start command.
+    terminalLastOutputAtRef.current.set(terminalId, Date.now())
+    const becameQuiet = await waitForTerminalQuiet(terminalId, 800, 5000)
+    if (!becameQuiet) {
+      console.warn('[Workbench] Terminal did not become quiet after Ctrl+C; applying fallback delay')
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+  }, [waitForTerminalQuiet])
+
+  const handleStartServer = useCallback(async () => {
+    if (serverStatus === 'running') {
+      console.log('[Workbench] Start ignored - dev server already running')
+      return
+    }
+
+    const terminalId = devServerTerminalIdRef.current
+    if (!terminalId) {
+      console.warn('[Workbench] Cannot start server - no dev server terminal')
+      return
+    }
+
+    console.log('[Workbench] Starting dev server...')
+    setServerStatus('starting')
+
+    // Find the project directory
+    const projectDir = tempDirPathRef.current || workbenchStore.projectPath.getState()
+    if (!projectDir) {
+      console.error('[Workbench] Cannot start server - no project directory')
+      setServerStatus('error')
+      return
+    }
+
+    const launchConfig = resolveLaunchConfig()
 
     // Cache launch config in projects.json (fire-and-forget)
     window.conveyor?.localProjects?.updateLaunchConfig?.(project.id, launchConfig).catch(() => {})
@@ -1174,16 +1203,25 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
     // Build and run the command
     const command = buildFullCommand(launchConfig, projectDir, actualPort)
-    console.log('[Workbench] Restarting with command:', command)
+    console.log('[Workbench] Starting with command:', command)
 
     const result = await terminal.runCommand(terminalId, command)
     if (result && !result.success) {
-      console.error('[Workbench] Failed to restart dev server:', result.error)
+      console.error('[Workbench] Failed to start dev server:', result.error)
       setServerStatus('error')
     }
-  }, [files, appType, waitForTerminalQuiet])
+  }, [serverStatus, resolveLaunchConfig, project.id])
 
-  // Keep ref in sync so the IPC listener always calls the latest version
+  // Restart the dev server by reusing the same stop/start control paths.
+  const handleRestartServer = useCallback(async () => {
+    console.log('[Workbench] Restarting dev server...')
+    await handleStopServer()
+    await handleStartServer()
+  }, [handleStopServer, handleStartServer])
+
+  // Keep refs in sync so bridge listeners always call the latest versions
+  handleStartServerRef.current = handleStartServer
+  handleStopServerRef.current = handleStopServer
   handleRestartServerRef.current = handleRestartServer
 
   // Launch app in Android Emulator (sends 'a' to Expo dev server)

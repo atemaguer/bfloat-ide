@@ -263,6 +263,24 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     toast.success('Convex credentials updated.')
   }
 
+  const ensureConvexAuthEnvProvisioned = async (
+    convexSecrets: ReturnType<typeof getConvexSecretStatusFromSecrets>
+  ) => {
+    if (!project.id) return
+    if (!convexSecrets.hasUrl || !convexSecrets.hasDeployKey) return
+
+    try {
+      const result = await secretsApi.ensureConvexAuthEnv(project.id, normalizedAppType)
+      if (result.success) return
+
+      const warning = result.error || result.warning || 'Failed to provision Convex auth environment.'
+      toast.error(`Convex auth env provisioning failed: ${warning}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      toast.error(`Convex auth env provisioning failed: ${message}`)
+    }
+  }
+
   const handleSaveSecret = async (key: string, value: string) => {
     if (!project.id) return
 
@@ -293,6 +311,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       }
 
       const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
+      await ensureConvexAuthEnvProvisioned(convexSecrets)
       promptConvexIntentChoice(convexSecrets)
     }
 
@@ -379,6 +398,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       const nextSecrets = result.secrets || []
       const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
 
+      await ensureConvexAuthEnvProvisioned(convexSecrets)
       promptConvexIntentChoice(convexSecrets)
     }
 
