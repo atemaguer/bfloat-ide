@@ -241,7 +241,7 @@ export function parseEasOutput(data: string): ProgressUpdate | null {
     if (errorPattern.test(data)) {
       // Extract the error message
       const errorMatch = data.match(/(?:Error:|error:)\s*(.+)/i)
-      const errorMessage = errorMatch?.[1]?.trim() || 'An error occurred'
+      const errorMessage = sanitizeDeployError(errorMatch?.[1], 'An error occurred', 'eas-output-parser')
 
       return {
         step: 'error',
@@ -357,3 +357,4 @@ export function getDeploySteps(): Array<{ id: DeployStep; label: string; descrip
     { id: 'complete', label: 'Available on TestFlight' },
   ]
 }
+import { sanitizeDeployError } from './deploy-error'

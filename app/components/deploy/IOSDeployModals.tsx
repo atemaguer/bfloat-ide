@@ -14,6 +14,7 @@ import { runBackgroundDeployment, type DeploymentResult } from '@/app/utils/back
 import { setProjectOwner } from '@/app/utils/eas-accounts'
 import { getDefaultEasConfig } from '@/app/utils/eas-config'
 import { buildDeployErrorPrompt } from '@/app/utils/build-error-prompt'
+import { sanitizeDeployError, dumpDeployErrorPayload } from '@/app/utils/deploy-error'
 import { DeployProgressModal } from './DeployProgressModal'
 import { IOSSetupWizard } from './IOSSetupWizard'
 import { TwoFactorStep } from './TwoFactorStep'
@@ -110,6 +111,7 @@ async function prepareForDeployment(
     if (!appConfig.expo.ios.bundleIdentifier) {
       const owner = expoUsername?.toLowerCase().replace(/[^a-z0-9-]/g, '') || 'app'
       const projectSlug = projectTitle.toLowerCase().replace(/[^a-z0-9-]/g, '') || 'myapp'
+      const projectId = projectPath.split('/').pop() || ''
 
       // Add unique suffix from project ID to prevent bundle identifier collisions
       // Use first 4 characters of the project ID (UUID) for uniqueness
@@ -196,6 +198,14 @@ export function IOSDeployModals() {
   const isDeployingRef = useRef(false)
   const buildListenersRef = useRef<(() => void) | null>(null)
 
+  const normalizeAndDumpError = useCallback(
+    (rawError: string | null | undefined, fallback: string, context: string) => {
+      void dumpDeployErrorPayload({ rawError, context, projectPath: projectPath || undefined })
+      return sanitizeDeployError(rawError, fallback, context)
+    },
+    [projectPath]
+  )
+
   // Clean up event listeners on unmount
   useEffect(() => {
     return () => {
@@ -265,7 +275,9 @@ export function IOSDeployModals() {
                 if (result.success) {
                   deployStore.completeIOSDeployment(result.buildUrl)
                 } else {
-                  deployStore.failIOSDeployment(result.error || 'Deployment failed')
+                  deployStore.failIOSDeployment(
+                    normalizeAndDumpError(result.error, 'Deployment failed', 'ios-modals:triggered-bg-complete')
+                  )
                 }
               },
             },
@@ -277,11 +289,17 @@ export function IOSDeployModals() {
           cancelDeploymentRef.current = cancel
         } catch (error) {
           isDeployingRef.current = false
-          deployStore.failIOSDeployment(error instanceof Error ? error.message : 'Deployment failed')
+          deployStore.failIOSDeployment(
+            normalizeAndDumpError(
+              error instanceof Error ? error.message : 'Deployment failed',
+              'Deployment failed',
+              'ios-modals:triggered-bg-catch'
+            )
+          )
         }
       })()
     }
-  }, [shouldStartDeployment, projectPath, currentProject, tokens.expo?.username, credentialStatus, selectedEasAccount])
+  }, [shouldStartDeployment, projectPath, currentProject, tokens.expo?.username, credentialStatus, selectedEasAccount, normalizeAndDumpError])
 
   // Run the automated deployment
   const runAutomatedDeployment = useCallback(async () => {
@@ -342,7 +360,9 @@ export function IOSDeployModals() {
           if (result.success) {
             deployStore.completeIOSDeployment(result.buildUrl)
           } else {
-            deployStore.failIOSDeployment(result.error || 'Deployment failed')
+            deployStore.failIOSDeployment(
+              normalizeAndDumpError(result.error, 'Deployment failed', 'ios-modals:automated-bg-complete')
+            )
           }
         },
       },
@@ -352,7 +372,7 @@ export function IOSDeployModals() {
     )
 
     cancelDeploymentRef.current = cancel
-  }, [projectPath, currentProject, tokens.expo?.username])
+  }, [projectPath, currentProject, tokens.expo?.username, normalizeAndDumpError])
 
   /**
    * Run interactive deployment using the PTY-based infrastructure
@@ -398,7 +418,7 @@ export function IOSDeployModals() {
           percent: progress.percent,
           message: progress.message,
           buildUrl: progress.buildUrl,
-          error: progress.error,
+          error: normalizeAndDumpError(progress.error, 'Deployment failed', 'ios-modals:interactive-progress'),
         })
 
         // Handle completion
@@ -407,7 +427,9 @@ export function IOSDeployModals() {
           setShowTwoFactorInput(false)
           setTwoFactorError(null)
         } else if (progress.step === 'error') {
-          deployStore.failIOSDeployment(progress.error || 'Build failed')
+          deployStore.failIOSDeployment(
+            normalizeAndDumpError(progress.error, 'Build failed', 'ios-modals:interactive-progress-error')
+          )
           setShowTwoFactorInput(false)
           isDeployingRef.current = false
         }
@@ -458,7 +480,9 @@ export function IOSDeployModals() {
         }
 
         if (!result.success) {
-          deployStore.failIOSDeployment(result.error || 'Deployment failed')
+          deployStore.failIOSDeployment(
+            normalizeAndDumpError(result.error, 'Deployment failed', 'ios-modals:start-interactive-result')
+          )
           setShowTwoFactorInput(false)
           isDeployingRef.current = false
         }
@@ -471,12 +495,18 @@ export function IOSDeployModals() {
           buildListenersRef.current = null
         }
 
-        deployStore.failIOSDeployment(error instanceof Error ? error.message : 'Deployment failed')
+        deployStore.failIOSDeployment(
+          normalizeAndDumpError(
+            error instanceof Error ? error.message : 'Deployment failed',
+            'Deployment failed',
+            'ios-modals:start-interactive-catch'
+          )
+        )
         setShowTwoFactorInput(false)
         isDeployingRef.current = false
       }
     },
-    [projectPath, currentProject, tokens.expo?.username, selectedEasAccount]
+    [projectPath, currentProject, tokens.expo?.username, selectedEasAccount, normalizeAndDumpError]
   )
 
   /**
@@ -561,84 +591,98 @@ export function IOSDeployModals() {
     console.log('[IOSDeployModals] handleSetupComplete called')
     if (!projectPath) return
 
-    deployStore.closeIOSSetupWizard()
-    deployStore.closeModal() // Close the deploy modal too
-    console.log('[IOSDeployModals] Wizard closed, modal closed')
+    try {
+      deployStore.closeIOSSetupWizard()
+      deployStore.closeModal() // Close the deploy modal too
+      console.log('[IOSDeployModals] Wizard closed, modal closed')
 
-    // First, prepare the project (ensure app.json and eas.json exist)
-    // This must happen BEFORE setProjectOwner since it reads app.json
-    const projectTitle = currentProject?.title || 'myapp'
-    const expoUsername = tokens.expo?.username
-    const prepResult = await prepareForDeployment(projectPath, expoUsername, projectTitle)
-    if (!prepResult.success) {
-      console.error('[IOSDeployModals] Failed to prepare project:', prepResult.error)
-      return
-    }
-
-    // Set project owner based on selected account (for org builds)
-    // This now works because app.json exists from prepareForDeployment
-    const selectedAccount = deployStore.selectedEasAccount.getState()
-    if (selectedAccount) {
-      const ownerResult = await setProjectOwner(projectPath, selectedAccount)
-      if (!ownerResult.success) {
-        console.error('[IOSDeployModals] Failed to set owner:', ownerResult.error)
-      }
-    }
-
-    // Mark iOS setup as complete in eas.json so it persists across sessions
-    await markIOSSetupComplete(projectPath)
-
-    // Check if ASC API key is configured
-    const checkResult = await deploy.checkASCApiKey(projectPath)
-    console.log('[IOSDeployModals] ASC API key check result:', checkResult)
-
-    if (checkResult?.success && checkResult.configured) {
-      console.log('[IOSDeployModals] Has ASC key - using Claude Code (non-interactive)')
-      // Has ASC key - use Claude Code (non-interactive)
-      // Update credential status to indicate credentials are configured
-      const currentStatus = deployStore.iOSCredentialStatus.getState()
-      if (currentStatus) {
-        deployStore.setIOSCredentialStatus({
-          ...currentStatus,
-          hasDistributionCert: true,
-          hasAscApiKey: true,
-          isFirstBuild: false,
-          isFullyConfigured: true,
-        })
-      }
-
-      // Trigger Claude Code deployment
-      const deploymentPrompt = `/deploy-ios`
-      console.log('[IOSDeployModals] Triggering chat prompt with:', deploymentPrompt)
-      workbenchStore.triggerChatPrompt(deploymentPrompt)
-    } else {
-      console.log('[IOSDeployModals] No ASC key - using interactive deployment with Apple credentials')
-      // No ASC key - need interactive deployment with Apple credentials
-      // Update credential status
-      const currentStatus = deployStore.iOSCredentialStatus.getState()
-      if (currentStatus) {
-        deployStore.setIOSCredentialStatus({
-          ...currentStatus,
-          hasDistributionCert: true,
-          isFirstBuild: true,
-          isFullyConfigured: false,
-        })
-      }
-
-      // Get Apple credentials from deployStore
-      const credentials = deployStore.getPendingAppleCredentials()
-      console.log(
-        '[IOSDeployModals] Retrieved Apple credentials:',
-        credentials ? { appleId: credentials.appleId } : null
-      )
-      if (!credentials) {
-        console.error('[IOSDeployModals] No Apple credentials available after wizard completion')
+      // First, prepare the project (ensure app.json and eas.json exist)
+      // This must happen BEFORE setProjectOwner since it reads app.json
+      const projectTitle = currentProject?.title || 'myapp'
+      const expoUsername = tokens.expo?.username
+      console.log('[IOSDeployModals] Preparing project config...', { projectPath, projectTitle, expoUsername })
+      const prepResult = await prepareForDeployment(projectPath, expoUsername, projectTitle)
+      if (!prepResult.success) {
+        console.error('[IOSDeployModals] Failed to prepare project:', prepResult.error)
         return
       }
 
-      // Run interactive deployment with credentials
-      console.log('[IOSDeployModals] Calling runInteractiveDeployment with credentials...')
-      await runInteractiveDeployment(credentials)
+      // Set project owner based on selected account (for org builds)
+      // This now works because app.json exists from prepareForDeployment
+      const selectedAccount = deployStore.selectedEasAccount.getState()
+      if (selectedAccount) {
+        console.log('[IOSDeployModals] Setting project owner...', { selectedAccount })
+        const ownerResult = await setProjectOwner(projectPath, selectedAccount)
+        if (!ownerResult.success) {
+          console.error('[IOSDeployModals] Failed to set owner:', ownerResult.error)
+        }
+      }
+
+      // Mark iOS setup as complete in eas.json so it persists across sessions
+      await markIOSSetupComplete(projectPath)
+
+      // Check if ASC API key is configured
+      console.log('[IOSDeployModals] Checking ASC API key...')
+      const checkResult = await deploy.checkASCApiKey(projectPath)
+      console.log('[IOSDeployModals] ASC API key check result:', checkResult)
+
+      if (checkResult?.success && checkResult.configured) {
+        console.log('[IOSDeployModals] Has ASC key - using Claude Code (non-interactive)')
+        // Has ASC key - use Claude Code (non-interactive)
+        // Update credential status to indicate credentials are configured
+        const currentStatus = deployStore.iOSCredentialStatus.getState()
+        if (currentStatus) {
+          deployStore.setIOSCredentialStatus({
+            ...currentStatus,
+            hasDistributionCert: true,
+            hasAscApiKey: true,
+            isFirstBuild: false,
+            isFullyConfigured: true,
+          })
+        }
+
+        // Trigger Claude Code deployment
+        const deploymentPrompt = `/deploy-ios`
+        console.log('[IOSDeployModals] Triggering chat prompt with:', deploymentPrompt)
+        workbenchStore.triggerChatPrompt(deploymentPrompt)
+      } else {
+        console.log('[IOSDeployModals] No ASC key - using interactive deployment with Apple credentials')
+        // No ASC key - need interactive deployment with Apple credentials
+        // Update credential status
+        const currentStatus = deployStore.iOSCredentialStatus.getState()
+        if (currentStatus) {
+          deployStore.setIOSCredentialStatus({
+            ...currentStatus,
+            hasDistributionCert: true,
+            isFirstBuild: true,
+            isFullyConfigured: false,
+          })
+        }
+
+        // Get Apple credentials from deployStore
+        const credentials = deployStore.getPendingAppleCredentials()
+        console.log(
+          '[IOSDeployModals] Retrieved Apple credentials:',
+          credentials ? { appleId: credentials.appleId } : null
+        )
+        if (!credentials) {
+          console.error('[IOSDeployModals] No Apple credentials available after wizard completion')
+          return
+        }
+
+        // Run interactive deployment with credentials
+        console.log('[IOSDeployModals] Calling runInteractiveDeployment with credentials...')
+        await runInteractiveDeployment(credentials)
+      }
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error)
+      console.error('[IOSDeployModals] handleSetupComplete failed', error)
+      void dumpDeployErrorPayload({
+        rawError: raw,
+        context: 'ios-modals:handle-setup-complete',
+        projectPath,
+      })
+      throw error
     }
   }, [projectPath, currentProject, tokens.expo?.username, runInteractiveDeployment])
 

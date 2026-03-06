@@ -198,6 +198,14 @@ interface ActiveBuild {
 
 const activeBuilds = new Map<string, ActiveBuild>();
 
+function getLatestBuildId(): string | null {
+  let last: string | null = null;
+  for (const id of activeBuilds.keys()) {
+    last = id;
+  }
+  return last;
+}
+
 function emitBuildEvent(build: ActiveBuild, type: string, data: unknown): void {
   const event = { type, data };
   for (const listener of build.listeners) {
@@ -528,6 +536,55 @@ deployRouter.post("/submit-input", async (c) => {
 // ---------------------------------------------------------------------------
 // GET /api/deploy/stream/:buildId  (SSE)
 // ---------------------------------------------------------------------------
+deployRouter.get("/stream/current", async (c) => {
+  const latestBuildId = getLatestBuildId();
+  if (!latestBuildId) {
+    return c.json({ error: "No active build found" }, 404);
+  }
+
+  // Rewrite into the param route behavior by looking up the latest build.
+  const build = activeBuilds.get(latestBuildId);
+  if (!build) {
+    return c.json({ error: "Build not found" }, 404);
+  }
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+
+  function write(event: string, data: unknown): void {
+    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    writer.write(encoder.encode(payload)).catch(() => {});
+  }
+
+  const listener: BuildEventListener = ({ type, data }) => {
+    write(type, data);
+    if (type === "complete") {
+      writer.close().catch(() => {});
+    }
+  };
+
+  build.listeners.add(listener);
+
+  if (build.done && build.result) {
+    write("complete", build.result);
+    writer.close().catch(() => {});
+    build.listeners.delete(listener);
+  }
+
+  c.header("Content-Type", "text/event-stream");
+  c.header("Cache-Control", "no-cache");
+  c.header("Connection", "keep-alive");
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
+});
+
 deployRouter.get("/stream/:buildId", async (c) => {
   const buildId = c.req.param("buildId");
   const build = activeBuilds.get(buildId);

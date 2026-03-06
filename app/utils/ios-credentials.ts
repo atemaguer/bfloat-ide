@@ -6,7 +6,7 @@
  * - Automated deployment can proceed
  */
 
-import { deploy, provider } from '@/app/api/sidecar'
+import { deploy, filesystem } from '@/app/api/sidecar'
 
 export interface iOSCredentialStatus {
   /** Whether EXPO_TOKEN is available for authentication */
@@ -28,8 +28,9 @@ export interface iOSCredentialStatus {
  */
 async function checkEasProject(projectPath: string): Promise<boolean> {
   try {
+    if (!filesystem) return false
     const appJsonPath = `${projectPath}/app.json`
-    const readResult = await provider.filesystem.readFile(appJsonPath)
+    const readResult = await filesystem.readFile(appJsonPath)
 
     if (!readResult.success || !readResult.content) {
       return false
@@ -59,8 +60,9 @@ async function checkAscApiKey(projectPath: string): Promise<boolean> {
 
   // Fallback: check eas.json directly
   try {
+    if (!filesystem) return false
     const easJsonPath = `${projectPath}/eas.json`
-    const readResult = await provider.filesystem.readFile(easJsonPath)
+    const readResult = await filesystem.readFile(easJsonPath)
 
     if (!readResult.success || !readResult.content) {
       return false
@@ -102,8 +104,9 @@ async function checkDistributionCredentials(projectPath: string): Promise<boolea
     // For now, we'll check if the project has been built before by looking at eas.json
     // and checking if there are iOS-specific configurations
 
+    if (!filesystem) return false
     const easJsonPath = `${projectPath}/eas.json`
-    const readResult = await provider.filesystem.readFile(easJsonPath)
+    const readResult = await filesystem.readFile(easJsonPath)
 
     if (!readResult.success || !readResult.content) {
       return false

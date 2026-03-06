@@ -6,8 +6,9 @@
  * the raw terminal output to users.
  */
 
-import { deploy, terminal } from '@/app/api/sidecar'
+import { terminal, filesystem } from '@/app/api/sidecar'
 import { createProgressTracker, type ProgressUpdate, type DeployStep } from './eas-output-parser'
+import { sanitizeDeployError, dumpDeployErrorPayload } from './deploy-error'
 
 /**
  * Extract ASC App ID from build logs and save to eas.json
@@ -24,13 +25,14 @@ async function extractAndSaveAscAppId(projectPath: string, logs: string): Promis
   const ascAppId = ascAppIdMatch[1]
 
   try {
+    if (!filesystem) return
     const easJsonPath = `${projectPath}/eas.json`
 
     // Read current eas.json via the sidecar filesystem API
-    const easJsonContent = await deploy.filesystem.readFile(easJsonPath)
-    if (!easJsonContent) return
+    const readResult = await filesystem.readFile(easJsonPath)
+    if (!readResult.success || !readResult.content) return
 
-    const easConfig = JSON.parse(easJsonContent)
+    const easConfig = JSON.parse(readResult.content)
 
     // Check if ascAppId is already set
     if (easConfig.submit?.production?.ios?.ascAppId === ascAppId) {
@@ -44,7 +46,7 @@ async function extractAndSaveAscAppId(projectPath: string, logs: string): Promis
     easConfig.submit.production.ios.ascAppId = ascAppId
 
     // Write updated eas.json via the sidecar filesystem API
-    await deploy.filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
+    await filesystem.writeFile(easJsonPath, JSON.stringify(easConfig, null, 2))
     console.log(`[BackgroundDeploy] Saved ASC App ID to eas.json: ${ascAppId}`)
   } catch (error) {
     console.error('[BackgroundDeploy] Failed to save ASC App ID:', error)
@@ -132,7 +134,7 @@ export async function runBackgroundDeployment(
     await terminal.runCommand(terminalId, command)
 
     // Wait for completion with pattern detection
-    const result = await waitForCompletion(logs, () => logs, buildUrl)
+    const result = await waitForCompletion(logs, () => logs, buildUrl, projectPath)
 
     // Extract and save ASC App ID from build logs for future non-interactive deployments
     if (result.success && !hasError) {
@@ -149,10 +151,16 @@ export async function runBackgroundDeployment(
     }
   } catch (error) {
     if (!isCancelled) {
+      const rawError = error instanceof Error ? error.message : 'Unknown error'
       onComplete({
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: sanitizeDeployError(rawError, 'Unknown error', 'background-deploy:run-catch'),
         logs,
+      })
+      void dumpDeployErrorPayload({
+        rawError,
+        context: 'background-deploy:run-catch',
+        projectPath,
       })
     }
   } finally {
@@ -205,7 +213,8 @@ function buildDeployCommand(projectPath: string, isFirstBuild: boolean): string 
 async function waitForCompletion(
   initialLogs: string,
   getLogs: () => string,
-  initialBuildUrl?: string
+  initialBuildUrl?: string,
+  projectPath?: string
 ): Promise<{ success: boolean; buildUrl?: string; error?: string }> {
   return new Promise((resolve) => {
     const successPatterns = [
@@ -286,10 +295,16 @@ async function waitForCompletion(
         if (pattern.test(currentLogs)) {
           clearInterval(checkInterval)
           const errorMatch = currentLogs.match(/(?:Error:|error:)\s*(.+)/i)
+          const rawError = errorMatch?.[1] || 'Deployment failed'
           resolve({
             success: false,
             buildUrl,
-            error: errorMatch?.[1]?.trim() || 'Deployment failed',
+            error: sanitizeDeployError(rawError, 'Deployment failed', 'background-deploy:wait-completion'),
+          })
+          void dumpDeployErrorPayload({
+            rawError,
+            context: 'background-deploy:wait-completion',
+            projectPath,
           })
           return
         }

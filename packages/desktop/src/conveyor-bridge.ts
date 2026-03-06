@@ -659,18 +659,24 @@ export const terminalBridge = {
     return new Promise((resolve) => {
       const api = getSidecarApiSync()
       let output = ""
-      let commandStarted = false
       const marker = `__CMD_DONE_${Date.now()}__`
       const fullCommand = `${command}; echo "${marker}$?"`
 
       const ws = api.terminal.connect(terminalId)
 
       ws.on("message", (msg: unknown) => {
-        // Sidecar sends raw strings for PTY output, JSON objects for control frames.
+        // Sidecar sends raw strings for PTY output and JSON objects for control frames.
         let data: string | null = null
 
         if (typeof msg === "string") {
           data = msg
+        } else if (
+          msg &&
+          typeof msg === "object" &&
+          (msg as Record<string, unknown>).type === "data" &&
+          typeof (msg as Record<string, unknown>).data === "string"
+        ) {
+          data = (msg as Record<string, unknown>).data as string
         } else if (msg && typeof msg === "object" && (msg as Record<string, unknown>).type === "exit") {
           // Process exited while we were waiting — resolve with what we have
           const exitCode = ((msg as Record<string, unknown>).code as number) ?? 1
@@ -686,23 +692,21 @@ export const terminalBridge = {
         const existingCb = _termDataCallbacks.get(terminalId)
         if (existingCb) existingCb(terminalId, data)
 
-        if (!commandStarted) {
-          commandStarted = true
+        const markerPattern = new RegExp(`${marker}(\\d+)`)
+        const markerMatch = data.match(markerPattern)
+
+        // Only resolve when the completion marker is followed by a numeric
+        // exit code. This avoids matching the marker in the echoed command
+        // text (`... echo "__CMD_DONE...$?"`).
+        if (markerMatch && markerMatch.index !== undefined) {
+          output += data.substring(0, markerMatch.index)
+          const exitCode = parseInt(markerMatch[1], 10)
+          ws.close()
+          resolve({ output: output.trim(), exitCode })
           return
         }
 
-        if (data.includes(marker)) {
-          const markerIndex = data.indexOf(marker)
-          output += data.substring(0, markerIndex)
-          const exitCodeStr = data
-            .substring(markerIndex + marker.length)
-            .trim()
-          const exitCode = parseInt(exitCodeStr, 10) || 0
-          ws.close()
-          resolve({ output: output.trim(), exitCode })
-        } else {
-          output += data
-        }
+        output += data
       })
 
       ws.connect()
@@ -1836,10 +1840,11 @@ export const deployBridge = {
     }
   },
 
-  checkASCApiKey: async (): Promise<CheckASCApiKeyResult> => {
+  checkASCApiKey: async (projectPath: string): Promise<CheckASCApiKeyResult> => {
     try {
+      const query = new URLSearchParams({ projectPath }).toString()
       return await getSidecarApiSync().http.get<CheckASCApiKeyResult>(
-        "/api/deploy/check-asc-api-key",
+        `/api/deploy/check-asc-api-key?${query}`,
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.checkASCApiKey error:", err)
@@ -1891,10 +1896,14 @@ export const deployBridge = {
   },
 
   submit2FACode: async (code: string): Promise<{ success: boolean }> => {
+    if (!_currentBuildId) {
+      console.warn("[conveyor-bridge] deploy.submit2FACode: no active buildId")
+      return { success: false }
+    }
     try {
       return await getSidecarApiSync().http.post<{ success: boolean }>(
         "/api/deploy/submit-input",
-        { input: code },
+        { buildId: _currentBuildId, input: `${code}\n` },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.submit2FACode error:", err)
@@ -1903,10 +1912,14 @@ export const deployBridge = {
   },
 
   submitTerminalInput: async (input: string): Promise<{ success: boolean }> => {
+    if (!_currentBuildId) {
+      console.warn("[conveyor-bridge] deploy.submitTerminalInput: no active buildId")
+      return { success: false }
+    }
     try {
       return await getSidecarApiSync().http.post<{ success: boolean }>(
         "/api/deploy/submit-input",
-        { input },
+        { buildId: _currentBuildId, input },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.submitTerminalInput error:", err)
@@ -1914,23 +1927,23 @@ export const deployBridge = {
     }
   },
 
-  checkAppleSession: async (): Promise<AppleSessionInfo> => {
+  checkAppleSession: async (appleId: string): Promise<AppleSessionInfo> => {
     try {
-      const result = await getSidecarApiSync().http.get<AppleSessionsResult>(
-        "/api/deploy/apple-sessions",
+      const query = new URLSearchParams({ appleId }).toString()
+      return await getSidecarApiSync().http.get<AppleSessionInfo>(
+        `/api/deploy/check-apple-session?${query}`,
       )
-      // Return the first session or a default no-session result.
-      return result?.sessions?.[0] ?? { exists: false }
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.checkAppleSession error:", err)
       return { exists: false }
     }
   },
 
-  clearAppleSession: async (): Promise<{ success: boolean; cleared: number }> => {
+  clearAppleSession: async (appleId?: string): Promise<{ success: boolean; cleared: number }> => {
     try {
-      return await getSidecarApiSync().http.delete<{ success: boolean; cleared: number }>(
-        "/api/deploy/apple-sessions",
+      return await getSidecarApiSync().http.post<{ success: boolean; cleared: number }>(
+        "/api/deploy/clear-apple-session",
+        { appleId },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.clearAppleSession error:", err)
@@ -1949,11 +1962,11 @@ export const deployBridge = {
     }
   },
 
-  writeAppleCredsFile: async (creds: unknown): Promise<{ success: boolean }> => {
+  writeAppleCredsFile: async (args: { appleId: string; password: string; projectPath?: string }): Promise<{ success: boolean; path?: string }> => {
     try {
-      return await getSidecarApiSync().http.post<{ success: boolean }>(
+      return await getSidecarApiSync().http.post<{ success: boolean; path?: string }>(
         "/api/deploy/write-apple-creds",
-        creds,
+        args,
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.writeAppleCredsFile error:", err)
@@ -1961,10 +1974,11 @@ export const deployBridge = {
     }
   },
 
-  deleteCredsFile: async (): Promise<{ success: boolean }> => {
+  deleteCredsFile: async (path: string): Promise<{ success: boolean }> => {
     try {
-      return await getSidecarApiSync().http.delete<{ success: boolean }>(
-        "/api/deploy/delete-apple-creds",
+      return await getSidecarApiSync().http.post<{ success: boolean }>(
+        "/api/deploy/delete-creds-file",
+        { path },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.deleteCredsFile error:", err)
@@ -1982,6 +1996,7 @@ export const deployBridge = {
       : "/api/deploy/stream/current"
     try {
       const es = createAuthenticatedEventSource(streamPath)
+      let closedByUs = false
       _buildLogEs = es
       es.addEventListener("log", (e: MessageEvent) => {
         try {
@@ -1990,7 +2005,12 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onBuildLog callback error:", err)
         }
       })
+      es.addEventListener("complete", () => {
+        closedByUs = true
+        es.close()
+      })
       es.onerror = () => {
+        if (closedByUs || es.readyState === EventSource.CLOSED) return
         console.warn("[conveyor-bridge] deploy.onBuildLog EventSource error")
       }
     } catch (err) {
@@ -2014,6 +2034,7 @@ export const deployBridge = {
       : "/api/deploy/stream/current"
     try {
       const es = createAuthenticatedEventSource(streamPath)
+      let closedByUs = false
       _buildProgressEs = es
       es.addEventListener("progress", (e: MessageEvent) => {
         try {
@@ -2022,7 +2043,12 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onBuildProgress callback error:", err)
         }
       })
+      es.addEventListener("complete", () => {
+        closedByUs = true
+        es.close()
+      })
       es.onerror = () => {
+        if (closedByUs || es.readyState === EventSource.CLOSED) return
         console.warn("[conveyor-bridge] deploy.onBuildProgress EventSource error")
       }
     } catch (err) {
@@ -2046,6 +2072,7 @@ export const deployBridge = {
       : "/api/deploy/stream/current"
     try {
       const es = createAuthenticatedEventSource(streamPath)
+      let closedByUs = false
       _buildInteractiveEs = es
       es.addEventListener("interactive_auth", (e: MessageEvent) => {
         try {
@@ -2054,7 +2081,12 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onInteractiveAuth callback error:", err)
         }
       })
+      es.addEventListener("complete", () => {
+        closedByUs = true
+        es.close()
+      })
       es.onerror = () => {
+        if (closedByUs || es.readyState === EventSource.CLOSED) return
         console.warn("[conveyor-bridge] deploy.onInteractiveAuth EventSource error")
       }
     } catch (err) {
