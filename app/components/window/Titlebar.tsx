@@ -59,16 +59,11 @@ const ProjectTitlebarContent = ({
 
       const titlebarRect = titlebarEl.getBoundingClientRect()
       const controlsEl = titlebarEl.querySelector('.window-titlebar-controls-container') as HTMLElement | null
-      const projectActionsEl = titlebarEl.querySelector('.window-titlebar-project-actions') as HTMLElement | null
       const controlsRect = controlsEl?.getBoundingClientRect()
-      const projectActionsRect = projectActionsEl?.getBoundingClientRect()
       const maxRightByControls = controlsRect
-        ? controlsRect.left - titlebarRect.left - 8
+        ? controlsRect.left - titlebarRect.left - 6
         : Number.POSITIVE_INFINITY
-      const maxRightByActions = projectActionsRect
-        ? projectActionsRect.left - titlebarRect.left - 8
-        : Number.POSITIVE_INFINITY
-      const maxAllowedRight = Math.min(maxRightByControls, maxRightByActions)
+      const maxAllowedRight = maxRightByControls
 
       if (!isChatCollapsed) {
         const dividerEl = document.querySelector('.project-resize-handle') as HTMLElement | null
