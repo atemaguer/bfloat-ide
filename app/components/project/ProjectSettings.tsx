@@ -55,6 +55,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [gitOtpInput, setGitOtpInput] = useState('')
   const [gitConnectLogTail, setGitConnectLogTail] = useState('')
   const gitConnectUnsubscribeRef = useRef<(() => void) | null>(null)
+  const gitConnectSessionIdRef = useRef<string | null>(null)
 
   // Form state
   const [title, setTitle] = useState(project.title || '')
@@ -218,6 +219,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       const sessionId = startResult.sessionId
       console.log('[ProjectSettings] Git connect session created', { sessionId, remoteBranch: startResult.remoteBranch })
       setGitConnectSessionId(sessionId)
+      gitConnectSessionIdRef.current = sessionId
 
       await new Promise<void>((resolve, reject) => {
         const unsubscribe = projectFiles.streamGitConnect(sessionId, {
@@ -248,6 +250,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
             gitConnectUnsubscribeRef.current?.()
             gitConnectUnsubscribeRef.current = null
             setGitConnectSessionId(null)
+            gitConnectSessionIdRef.current = null
             setGitAuthPrompt(null)
             setGitAuthInput('')
             setGitOtpInput('')
@@ -334,6 +337,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     gitConnectUnsubscribeRef.current?.()
     gitConnectUnsubscribeRef.current = null
     setGitConnectSessionId(null)
+    gitConnectSessionIdRef.current = null
     setGitAuthPrompt(null)
     setGitAuthInput('')
     setGitOtpInput('')
@@ -343,14 +347,16 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
 
   useEffect(() => {
     return () => {
-      if (gitConnectSessionId) {
-        console.log('[ProjectSettings] Cleanup cancelling git connect', { sessionId: gitConnectSessionId })
-        projectFiles.cancelGitConnect(gitConnectSessionId).catch(() => {})
+      const sessionId = gitConnectSessionIdRef.current
+      if (sessionId) {
+        console.log('[ProjectSettings] Cleanup cancelling git connect', { sessionId })
+        projectFiles.cancelGitConnect(sessionId).catch(() => {})
       }
       gitConnectUnsubscribeRef.current?.()
       gitConnectUnsubscribeRef.current = null
+      gitConnectSessionIdRef.current = null
     }
-  }, [gitConnectSessionId])
+  }, [])
 
   // Load secrets
   const loadSecrets = async () => {
