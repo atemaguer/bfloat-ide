@@ -75,10 +75,12 @@ export async function runBackgroundDeployment(
   callbacks: DeploymentCallbacks,
   options: {
     isFirstBuild?: boolean
+    appleId?: string
+    applePassword?: string
   } = {}
 ): Promise<{ cancel: () => void }> {
   const { onProgress, onLog, onComplete } = callbacks
-  const { isFirstBuild = false } = options
+  const { isFirstBuild = false, appleId, applePassword } = options
 
   const terminalId = `deploy-ios-bg-${Date.now()}`
   let logs = ''
@@ -121,7 +123,7 @@ export async function runBackgroundDeployment(
     }
 
     // Build the deployment command
-    const command = buildDeployCommand(projectPath, isFirstBuild)
+    const command = buildDeployCommand(projectPath, isFirstBuild, appleId, applePassword)
 
     // Start the deployment
     onProgress({
@@ -188,7 +190,19 @@ export async function runBackgroundDeployment(
 /**
  * Build the deployment command based on project state
  */
-function buildDeployCommand(projectPath: string, isFirstBuild: boolean): string {
+function buildDeployCommand(
+  projectPath: string,
+  isFirstBuild: boolean,
+  appleId?: string,
+  applePassword?: string
+): string {
+  const escapedAppleId = appleId ? appleId.replace(/"/g, '\\"') : ''
+  const escapedApplePassword = applePassword ? applePassword.replace(/"/g, '\\"') : ''
+  const appleEnv =
+    appleId && applePassword
+      ? `EXPO_APPLE_ID="${escapedAppleId}" EXPO_APPLE_PASSWORD="${escapedApplePassword}" FASTLANE_USER="${escapedAppleId}" FASTLANE_PASSWORD="${escapedApplePassword}" `
+      : ''
+
   // Temporarily hide app.config.js so EAS can write to app.json
   // Keep it hidden until after build completes
   let command =
@@ -198,8 +212,10 @@ function buildDeployCommand(projectPath: string, isFirstBuild: boolean): string 
     `git add -A && ` +
     `git commit -m "Configure for deployment" --allow-empty || true`
 
+  command += ` && ${appleEnv}EAS_BUILD_NO_EXPO_GO_WARNING=true npx -y eas-cli init --non-interactive --force`
+
   // Use eas build directly with --non-interactive flag
-  command += ` && npx -y eas-cli build --platform ios --profile production --non-interactive --auto-submit`
+  command += ` && ${appleEnv}EAS_BUILD_NO_EXPO_GO_WARNING=true npx -y eas-cli build --platform ios --profile production --non-interactive --auto-submit`
 
   // Restore app.config.js after all EAS commands complete
   command += ` && mv app.config.js.bak app.config.js 2>/dev/null || true`

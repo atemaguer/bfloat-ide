@@ -164,6 +164,26 @@ interface IOSBuildInteractiveArgs {
   password: string
 }
 
+interface IOSBuildStatusResult {
+  success: boolean
+  exists: boolean
+  buildId?: string
+  done?: boolean
+  outputChunk?: string
+  nextOffset?: number
+  lastProgress?: IOSBuildProgress | null
+  result?: IOSBuildResult | null
+  error?: string
+}
+
+interface BuildStreamHandlers {
+  onLog?: (data: string) => void
+  onProgress?: (progress: IOSBuildProgress) => void
+  onInteractiveAuth?: (event: InteractiveAuthEvent) => void
+  onComplete?: (result: IOSBuildResult) => void
+  onError?: (error: string) => void
+}
+
 type PromptType = "apple_id" | "password" | "2fa" | "menu" | "yes_no" | "unknown"
 
 interface HumanizedPromptOption {
@@ -1927,6 +1947,111 @@ export const deployBridge = {
     }
   },
 
+  getBuildStatus: async (buildId: string, offset: number = 0): Promise<IOSBuildStatusResult> => {
+    try {
+      const query = new URLSearchParams({ offset: String(offset) }).toString()
+      return await getSidecarApiSync().http.get<IOSBuildStatusResult>(
+        `/api/deploy/status/${encodeURIComponent(buildId)}?${query}`,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] deploy.getBuildStatus error:", err)
+      return { success: false, exists: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  streamBuildEvents: (buildId: string, handlers: BuildStreamHandlers): UnsubscribeFn => {
+    const api = getSidecarApiSync()
+    const wsUrl = api.http.wsUrl(`/api/deploy/stream/${encodeURIComponent(buildId)}`)
+    const streamUrl = wsUrl.replace(/^ws:\/\//, "http://").replace(/^wss:\/\//, "https://")
+    const controller = new AbortController()
+    let cancelled = false
+
+    const parseEventBlock = (block: string) => {
+      let eventType = "message"
+      const dataLines: string[] = []
+
+      for (const rawLine of block.split("\n")) {
+        const line = rawLine.trimEnd()
+        if (!line) continue
+        if (line.startsWith("event:")) {
+          eventType = line.slice("event:".length).trim()
+          continue
+        }
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice("data:".length).trimStart())
+        }
+      }
+
+      const rawData = dataLines.join("\n")
+      if (!rawData) return
+
+      try {
+        if (eventType === "log") {
+          const parsed = JSON.parse(rawData) as { data?: unknown }
+          if (typeof parsed?.data === "string") {
+            handlers.onLog?.(parsed.data)
+          }
+          return
+        }
+        if (eventType === "progress") {
+          handlers.onProgress?.(JSON.parse(rawData) as IOSBuildProgress)
+          return
+        }
+        if (eventType === "interactive_auth") {
+          handlers.onInteractiveAuth?.(JSON.parse(rawData) as InteractiveAuthEvent)
+          return
+        }
+        if (eventType === "complete") {
+          handlers.onComplete?.(JSON.parse(rawData) as IOSBuildResult)
+          return
+        }
+      } catch (err) {
+        handlers.onError?.(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    void (async () => {
+      try {
+        const response = await fetch(streamUrl, {
+          method: "GET",
+          signal: controller.signal,
+          headers: { Accept: "text/event-stream" },
+        })
+        if (!response.ok || !response.body) {
+          handlers.onError?.(`Build stream failed with status ${response.status}`)
+          return
+        }
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
+
+        while (!cancelled) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          let splitIndex = buffer.indexOf("\n\n")
+          while (splitIndex !== -1) {
+            const block = buffer.slice(0, splitIndex)
+            buffer = buffer.slice(splitIndex + 2)
+            parseEventBlock(block)
+            splitIndex = buffer.indexOf("\n\n")
+          }
+        }
+      } catch (err) {
+        if (!cancelled) {
+          handlers.onError?.(err instanceof Error ? err.message : String(err))
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  },
+
   checkAppleSession: async (appleId: string): Promise<AppleSessionInfo> => {
     try {
       const query = new URLSearchParams({ appleId }).toString()
@@ -1986,13 +2111,14 @@ export const deployBridge = {
     }
   },
 
-  onBuildLog: (callback: BuildLogCallback): UnsubscribeFn => {
+  onBuildLog: (callback: BuildLogCallback, buildId?: string): UnsubscribeFn => {
     if (_buildLogEs) {
       _buildLogEs.close()
       _buildLogEs = null
     }
-    const streamPath = _currentBuildId
-      ? `/api/deploy/stream/${_currentBuildId}`
+    const streamBuildId = buildId ?? _currentBuildId
+    const streamPath = streamBuildId
+      ? `/api/deploy/stream/${streamBuildId}`
       : "/api/deploy/stream/current"
     try {
       const es = createAuthenticatedEventSource(streamPath)
@@ -2000,11 +2126,35 @@ export const deployBridge = {
       _buildLogEs = es
       es.addEventListener("log", (e: MessageEvent) => {
         try {
-          callback({ data: e.data })
+          // Sidecar emits log events as JSON payloads: { data: "<chunk>" }.
+          // Keep backward compatibility by falling back to raw event data.
+          let logData = String(e.data ?? "")
+          try {
+            const parsed = JSON.parse(logData) as { data?: unknown }
+            if (typeof parsed?.data === "string") {
+              logData = parsed.data
+            }
+          } catch {
+            // Non-JSON payload; use raw string.
+          }
+          callback({ data: logData })
         } catch (err) {
           console.warn("[conveyor-bridge] deploy.onBuildLog callback error:", err)
         }
       })
+      es.onmessage = (e: MessageEvent) => {
+        // Fallback path for environments that collapse custom SSE event names
+        // into plain "message" events.
+        try {
+          const parsed = JSON.parse(String(e.data ?? "")) as { data?: unknown }
+          if (typeof parsed?.data === "string") {
+            callback({ data: parsed.data })
+            return
+          }
+        } catch {
+          // Ignore non-log message payloads for this listener.
+        }
+      }
       es.addEventListener("complete", () => {
         closedByUs = true
         es.close()
@@ -2024,13 +2174,14 @@ export const deployBridge = {
     }
   },
 
-  onBuildProgress: (callback: BuildProgressCallback): UnsubscribeFn => {
+  onBuildProgress: (callback: BuildProgressCallback, buildId?: string): UnsubscribeFn => {
     if (_buildProgressEs) {
       _buildProgressEs.close()
       _buildProgressEs = null
     }
-    const streamPath = _currentBuildId
-      ? `/api/deploy/stream/${_currentBuildId}`
+    const streamBuildId = buildId ?? _currentBuildId
+    const streamPath = streamBuildId
+      ? `/api/deploy/stream/${streamBuildId}`
       : "/api/deploy/stream/current"
     try {
       const es = createAuthenticatedEventSource(streamPath)
@@ -2043,6 +2194,17 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onBuildProgress callback error:", err)
         }
       })
+      es.onmessage = (e: MessageEvent) => {
+        // Fallback for plain "message" event streams.
+        try {
+          const parsed = JSON.parse(String(e.data ?? "")) as Partial<IOSBuildProgress>
+          if (typeof parsed?.step === "string" && typeof parsed?.percent === "number") {
+            callback(parsed as IOSBuildProgress)
+          }
+        } catch {
+          // Ignore non-progress payloads for this listener.
+        }
+      }
       es.addEventListener("complete", () => {
         closedByUs = true
         es.close()
@@ -2062,13 +2224,14 @@ export const deployBridge = {
     }
   },
 
-  onInteractiveAuth: (callback: InteractiveAuthCallback): UnsubscribeFn => {
+  onInteractiveAuth: (callback: InteractiveAuthCallback, buildId?: string): UnsubscribeFn => {
     if (_buildInteractiveEs) {
       _buildInteractiveEs.close()
       _buildInteractiveEs = null
     }
-    const streamPath = _currentBuildId
-      ? `/api/deploy/stream/${_currentBuildId}`
+    const streamBuildId = buildId ?? _currentBuildId
+    const streamPath = streamBuildId
+      ? `/api/deploy/stream/${streamBuildId}`
       : "/api/deploy/stream/current"
     try {
       const es = createAuthenticatedEventSource(streamPath)
@@ -2081,6 +2244,17 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onInteractiveAuth callback error:", err)
         }
       })
+      es.onmessage = (e: MessageEvent) => {
+        // Fallback for plain "message" event streams.
+        try {
+          const parsed = JSON.parse(String(e.data ?? "")) as Partial<InteractiveAuthEvent>
+          if (typeof parsed?.type === "string") {
+            callback(parsed as InteractiveAuthEvent)
+          }
+        } catch {
+          // Ignore non-auth payloads for this listener.
+        }
+      }
       es.addEventListener("complete", () => {
         closedByUs = true
         es.close()

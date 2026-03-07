@@ -233,12 +233,13 @@ export async function setProjectOwner(
 
     appConfig.expo.owner = owner
 
-    // ALWAYS remove projectId when setting owner to ensure eas init links to correct account
-    // The projectId is account-specific, so it must be regenerated for a different owner
-    if (appConfig.expo.extra?.eas?.projectId) {
-      console.log('[setProjectOwner] Removing projectId to force re-link')
+    // Only remove projectId when owner actually changes.
+    // Keeping the existing projectId avoids unnecessary EAS relink prompts for
+    // the same owner during repeated deployments.
+    const ownerChanged = Boolean(currentOwner) && currentOwner !== owner
+    if (ownerChanged && appConfig.expo.extra?.eas?.projectId) {
+      console.log('[setProjectOwner] Removing projectId because owner changed')
       delete appConfig.expo.extra.eas.projectId
-      // Clean up empty objects
       if (Object.keys(appConfig.expo.extra.eas).length === 0) {
         delete appConfig.expo.extra.eas
       }

@@ -108,9 +108,24 @@ async function prepareForDeployment(
     if (!appConfig.expo) appConfig.expo = {}
     if (!appConfig.expo.ios) appConfig.expo.ios = {}
 
+    const normalizedSlug = projectTitle
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') || 'myapp'
+
+    // Avoid default template slug/name that can cause EAS to prompt for
+    // linking to an existing unrelated project.
+    if (!appConfig.expo.name || appConfig.expo.name === 'expo-template-default') {
+      appConfig.expo.name = projectTitle
+    }
+    if (!appConfig.expo.slug || appConfig.expo.slug === 'expo-template-default') {
+      appConfig.expo.slug = normalizedSlug
+    }
+
     if (!appConfig.expo.ios.bundleIdentifier) {
       const owner = expoUsername?.toLowerCase().replace(/[^a-z0-9-]/g, '') || 'app'
-      const projectSlug = projectTitle.toLowerCase().replace(/[^a-z0-9-]/g, '') || 'myapp'
+      const projectSlug = normalizedSlug.replace(/-/g, '') || 'myapp'
       const projectId = projectPath.split('/').pop() || ''
 
       // Add unique suffix from project ID to prevent bundle identifier collisions
@@ -410,60 +425,6 @@ export function IOSDeployModals() {
       setShowTwoFactorInput(false)
       setTwoFactorError(null)
 
-      // Set up event listeners for the PTY build
-      const unsubProgress = deploy.onBuildProgress((progress) => {
-        console.log('[IOSDeployModals] Build progress:', progress)
-        deployStore.updateIOSProgress({
-          step: progress.step as any,
-          percent: progress.percent,
-          message: progress.message,
-          buildUrl: progress.buildUrl,
-          error: normalizeAndDumpError(progress.error, 'Deployment failed', 'ios-modals:interactive-progress'),
-        })
-
-        // Handle completion
-        if (progress.step === 'complete') {
-          deployStore.completeIOSDeployment(progress.buildUrl)
-          setShowTwoFactorInput(false)
-          setTwoFactorError(null)
-        } else if (progress.step === 'error') {
-          deployStore.failIOSDeployment(
-            normalizeAndDumpError(progress.error, 'Build failed', 'ios-modals:interactive-progress-error')
-          )
-          setShowTwoFactorInput(false)
-          isDeployingRef.current = false
-        }
-      })
-
-      const unsubLogs = deploy.onBuildLog(({ data }) => {
-        deployStore.appendIOSLog(data)
-      })
-
-      // Subscribe to interactive auth events (for 2FA)
-      const unsubAuth = deploy.onInteractiveAuth((event) => {
-        console.log('[IOSDeployModals] Interactive auth event:', event.type)
-
-        if (event.type === '2fa') {
-          // Show 2FA input UI
-          setShowTwoFactorInput(true)
-          setTwoFactorError(null)
-        } else if (event.confidence > 0.5 && event.type !== 'yes_no' && event.type !== 'menu') {
-          // For unknown prompts that need user input, fall back to terminal
-          // But don't show terminal for routine yes_no or menu prompts (they're auto-handled)
-          console.log('[IOSDeployModals] Unknown prompt, showing terminal:', event.type)
-          deployStore.showTerminalFallback(event.type, event.context, event.suggestion, event.humanized)
-        }
-      })
-
-      // Store cleanup function
-      buildListenersRef.current = () => {
-        unsubProgress()
-        unsubLogs()
-        unsubAuth()
-      }
-
-      // Use the existing deploy:ios-build-interactive handler
-      // It handles prompt detection, auto-confirmation, and 2FA via PTY
       try {
         const result = await deploy.startInteractiveIOSBuild({
           projectPath,
@@ -473,18 +434,79 @@ export function IOSDeployModals() {
 
         console.log('[IOSDeployModals] Build result:', result)
 
-        // Clean up listeners
-        if (buildListenersRef.current) {
-          buildListenersRef.current()
-          buildListenersRef.current = null
-        }
-
         if (!result.success) {
           deployStore.failIOSDeployment(
             normalizeAndDumpError(result.error, 'Deployment failed', 'ios-modals:start-interactive-result')
           )
           setShowTwoFactorInput(false)
           isDeployingRef.current = false
+          return
+        }
+
+        const streamBuildId = (result as { buildId?: string }).buildId
+        if (!streamBuildId) {
+          deployStore.failIOSDeployment(
+            normalizeAndDumpError('Missing build ID from interactive deployment start.', 'Deployment failed', 'ios-modals:start-interactive-missing-build-id')
+          )
+          isDeployingRef.current = false
+          return
+        }
+
+        const unsubFetchStream = deploy.streamBuildEvents(streamBuildId, {
+          onLog: (data) => deployStore.appendIOSLog(data),
+          onProgress: (progress) => {
+            deployStore.updateIOSProgress({
+              step: progress.step as any,
+              percent: progress.percent,
+              message: progress.message,
+              buildUrl: progress.buildUrl,
+              error: progress.error
+                ? normalizeAndDumpError(progress.error, 'Deployment failed', 'ios-modals:interactive-stream-progress')
+                : undefined,
+            })
+          },
+          onInteractiveAuth: (event) => {
+            console.log('[IOSDeployModals] Interactive auth event:', event.type)
+            if (event.type === '2fa') {
+              setShowTwoFactorInput(true)
+              setTwoFactorError(null)
+            } else if (event.confidence > 0.5 && event.type !== 'yes_no' && event.type !== 'menu') {
+              deployStore.showTerminalFallback(event.type, event.context, event.suggestion, event.humanized)
+            }
+          },
+          onComplete: (completeResult) => {
+            if (completeResult.success) {
+              deployStore.completeIOSDeployment(completeResult.buildUrl)
+            } else {
+              deployStore.failIOSDeployment(
+                normalizeAndDumpError(completeResult.error, 'Deployment failed', 'ios-modals:interactive-stream-complete')
+              )
+            }
+            setShowTwoFactorInput(false)
+            setTwoFactorError(null)
+            isDeployingRef.current = false
+            if (buildListenersRef.current) {
+              buildListenersRef.current()
+              buildListenersRef.current = null
+            }
+          },
+          onError: (streamError) => {
+            deployStore.failIOSDeployment(
+              normalizeAndDumpError(streamError, 'Deployment stream failed', 'ios-modals:interactive-stream-error')
+            )
+            setShowTwoFactorInput(false)
+            setTwoFactorError(null)
+            isDeployingRef.current = false
+          },
+        })
+
+        buildListenersRef.current = () => {
+          unsubFetchStream()
+        }
+
+        cancelDeploymentRef.current = () => {
+          void deploy.cancelBuild()
+          unsubFetchStream()
         }
       } catch (error) {
         console.error('[IOSDeployModals] Build error:', error)
