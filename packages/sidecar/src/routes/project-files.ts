@@ -100,6 +100,20 @@ async function runGit(
   return { ok: exitCode === 0, stdout: stdout.trim(), stderr: stderr.trim() };
 }
 
+async function getConfiguredRemoteBranch(cwd: string): Promise<string> {
+  const configured = await runGit(["config", "--get", "bfloat.remoteBranch"], cwd);
+  if (configured.ok && configured.stdout) {
+    return configured.stdout.trim();
+  }
+
+  const currentBranch = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+  if (currentBranch.ok && currentBranch.stdout && currentBranch.stdout !== "HEAD") {
+    return currentBranch.stdout.trim();
+  }
+
+  return "main";
+}
+
 // ---------------------------------------------------------------------------
 // Tree walker
 // ---------------------------------------------------------------------------
@@ -192,6 +206,7 @@ const SyncAgentInstructionsSchema = z.object({
 const GitConnectStartSchema = z.object({
   projectId: z.string().min(1),
   remoteUrl: z.string().min(1),
+  remoteBranch: z.string().min(1).default("main"),
 });
 
 const GitConnectInputSchema = z.object({
@@ -223,6 +238,7 @@ interface GitConnectResult {
   projectId: string;
   projectPath: string;
   remoteUrl: string;
+  remoteBranch: string;
   error?: string;
 }
 
@@ -240,6 +256,7 @@ interface ActiveGitConnectSession {
   projectId: string;
   projectPath: string;
   remoteUrl: string;
+  remoteBranch: string;
   pty: IPty | null;
   proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null;
   stdinWrite: ((input: string) => Promise<void>) | null;
@@ -372,6 +389,7 @@ async function finishGitConnectSession(
     projectId: session.projectId,
     projectPath: session.projectPath,
     remoteUrl: session.remoteUrl,
+    remoteBranch: session.remoteBranch,
     ...(error ? { error } : {}),
   };
   emitGitConnectEvent(session, "complete", session.result);
@@ -382,10 +400,15 @@ async function runGitConnectSession(session: ActiveGitConnectSession): Promise<v
     "set -e",
     'if [ ! -d .git ]; then git init; fi',
     'if git remote get-url origin >/dev/null 2>&1; then git remote set-url origin \"$GIT_REMOTE_URL\"; else git remote add origin \"$GIT_REMOTE_URL\"; fi',
+    'git config bfloat.remoteBranch \"$GIT_REMOTE_BRANCH\"',
     "git ls-remote origin HEAD",
   ].join(" && ");
 
-  const env = { ...process.env, GIT_REMOTE_URL: session.remoteUrl };
+  const env = {
+    ...process.env,
+    GIT_REMOTE_URL: session.remoteUrl,
+    GIT_REMOTE_BRANCH: session.remoteBranch,
+  };
   let exitCode = 1;
 
   try {
@@ -465,13 +488,14 @@ projectFilesRouter.post("/git-connect/start", async (c) => {
     return c.json({ success: false, error: "Invalid request", details: parsed.error.flatten() }, 400);
   }
 
-  const { projectId, remoteUrl } = parsed.data;
+  const { projectId, remoteUrl, remoteBranch } = parsed.data;
   const sessionId = newGitConnectSessionId();
   const session: ActiveGitConnectSession = {
     sessionId,
     projectId,
     projectPath: projectRoot(projectId),
     remoteUrl: remoteUrl.trim(),
+    remoteBranch: remoteBranch.trim() || "main",
     pty: null,
     proc: null,
     stdinWrite: null,
@@ -495,7 +519,7 @@ projectFilesRouter.post("/git-connect/start", async (c) => {
       }, 5 * 60 * 1000);
     });
 
-  return c.json({ success: true, sessionId });
+  return c.json({ success: true, sessionId, remoteBranch: session.remoteBranch });
 });
 
 projectFilesRouter.post("/git-connect/input", async (c) => {
@@ -1033,7 +1057,8 @@ projectFilesRouter.post("/git-commit/:projectId", async (c) => {
 
     // Optionally push
     if (parsed.data.push) {
-      const pushResult = await runGit(["push"], root);
+      const remoteBranch = await getConfiguredRemoteBranch(root);
+      const pushResult = await runGit(["push", "-u", "origin", `HEAD:${remoteBranch}`], root);
       if (!pushResult.ok) {
         return c.json({ success: false, error: pushResult.stderr }, 500);
       }
@@ -1058,7 +1083,8 @@ projectFilesRouter.post("/git-push/:projectId", async (c) => {
   }
 
   try {
-    const result = await runGit(["push"], root);
+    const remoteBranch = await getConfiguredRemoteBranch(root);
+    const result = await runGit(["push", "-u", "origin", `HEAD:${remoteBranch}`], root);
     if (!result.ok) {
       return c.json({ success: false, error: result.stderr }, 500);
     }
@@ -1081,7 +1107,8 @@ projectFilesRouter.post("/git-pull/:projectId", async (c) => {
   }
 
   try {
-    const result = await runGit(["pull"], root);
+    const remoteBranch = await getConfiguredRemoteBranch(root);
+    const result = await runGit(["pull", "origin", remoteBranch], root);
     if (!result.ok) {
       return c.json({ success: false, error: result.stderr }, 500);
     }

@@ -93,10 +93,11 @@ export const projectFilesApiSchema = {
 
   // Git: start interactive remote connect flow
   'project:startGitConnect': {
-    args: z.tuple([z.string(), z.string()]), // projectId, remoteUrl
+    args: z.tuple([z.string(), z.string(), z.string()]), // projectId, remoteUrl, remoteBranch
     return: z.object({
       success: z.boolean(),
       sessionId: z.string().optional(),
+      remoteBranch: z.string().optional(),
       error: z.string().optional(),
     }),
   },

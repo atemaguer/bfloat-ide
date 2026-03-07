@@ -65,6 +65,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [isPublic, setIsPublic] = useState(project.isPublic || false)
   const [agentInstructions, setAgentInstructions] = useState(project.agentInstructions || '')
   const [gitRemoteUrl, setGitRemoteUrl] = useState(project.sourceUrl || '')
+  const [gitRemoteBranch, setGitRemoteBranch] = useState(project.sourceBranch || 'main')
   const [connectedGitRemoteUrl, setConnectedGitRemoteUrl] = useState(project.sourceUrl || '')
 
   // App icon state
@@ -131,6 +132,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     setIsPublic(project.isPublic || false)
     setAgentInstructions(project.agentInstructions || '')
     setGitRemoteUrl(project.sourceUrl || '')
+    setGitRemoteBranch(project.sourceBranch || 'main')
     setConnectedGitRemoteUrl(project.sourceUrl || '')
     setIosAppIconPreview(project.iosAppIconUrl || null)
     setAndroidAppIconPreview(project.androidAppIconUrl || null)
@@ -147,19 +149,34 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     return false
   }
 
-  const updateGitRemote = async (nextSourceUrl: string | null) => {
+  const isValidGitBranchName = (value: string): boolean => {
+    const trimmed = value.trim()
+    if (!trimmed) return false
+    if (trimmed.includes(' ')) return false
+    if (trimmed.startsWith('/') || trimmed.endsWith('/')) return false
+    if (trimmed.includes('..')) return false
+    return true
+  }
+
+  const updateGitRemote = async (nextSourceUrl: string | null, nextSourceBranch: string | null) => {
     const normalizedSourceUrl = nextSourceUrl?.trim() || null
+    const normalizedSourceBranch = nextSourceBranch?.trim() || null
 
     try {
-      await localProjectsStore.update(project.id, { sourceUrl: normalizedSourceUrl })
+      await localProjectsStore.update(project.id, {
+        sourceUrl: normalizedSourceUrl,
+        sourceBranch: normalizedSourceBranch,
+      })
       const updatedProject: Project = {
         ...project,
         sourceUrl: normalizedSourceUrl,
+        sourceBranch: normalizedSourceBranch,
         updatedAt: new Date().toISOString(),
       }
 
       workbenchStore.setProjectMetadata(updatedProject)
       setGitRemoteUrl(normalizedSourceUrl || '')
+      setGitRemoteBranch(normalizedSourceBranch || 'main')
       setConnectedGitRemoteUrl(normalizedSourceUrl || '')
 
       if (onProjectUpdate) {
@@ -170,9 +187,14 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
 
   const handleConnectGit = async () => {
     const nextUrl = gitRemoteUrl.trim()
+    const nextBranch = gitRemoteBranch.trim() || 'main'
 
     if (!isValidGitRemoteUrl(nextUrl)) {
       setGitConnectError('Enter a valid Git repository URL (HTTPS or SSH).')
+      return
+    }
+    if (!isValidGitBranchName(nextBranch)) {
+      setGitConnectError('Enter a valid branch name.')
       return
     }
 
@@ -185,7 +207,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     setGitConnectLogTail('')
 
     try {
-      const startResult = await projectFiles.startGitConnect(project.id, nextUrl)
+      const startResult = await projectFiles.startGitConnect(project.id, nextUrl, nextBranch)
       if (!startResult.success || !startResult.sessionId) {
         throw new Error(startResult.error || 'Failed to start Git connection flow')
       }
@@ -221,7 +243,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
             }
 
             try {
-              await updateGitRemote(nextUrl)
+              await updateGitRemote(nextUrl, nextBranch)
               resolve()
             } catch (error) {
               reject(error instanceof Error ? error : new Error('Failed to save Git connection metadata'))
@@ -248,7 +270,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     setGitConnectError(null)
     setGitConnectSuccess(null)
     try {
-      await updateGitRemote(null)
+      await updateGitRemote(null, null)
       setGitConnectSuccess('Git repository disconnected.')
       toast.success('Git repository disconnected')
     } catch (error) {
@@ -860,6 +882,21 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                     setGitAuthPrompt(null)
                   }}
                   placeholder="https://github.com/you/repo.git or git@github.com:you/repo.git"
+                />
+              </div>
+
+              <div className="settings-field">
+                <label htmlFor="gitRemoteBranch">Remote Branch</label>
+                <Input
+                  id="gitRemoteBranch"
+                  type="text"
+                  value={gitRemoteBranch}
+                  onChange={(e) => {
+                    setGitRemoteBranch(e.target.value)
+                    setGitConnectError(null)
+                    setGitConnectSuccess(null)
+                  }}
+                  placeholder="main"
                 />
               </div>
 

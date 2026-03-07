@@ -270,6 +270,7 @@ interface GitConnectResult {
   projectId: string
   projectPath: string
   remoteUrl: string
+  remoteBranch: string
   error?: string
 }
 
@@ -1659,11 +1660,11 @@ export const projectFilesBridge = {
     }
   },
 
-  startGitConnect: async (projectId: string, remoteUrl: string): Promise<{ success: boolean; sessionId?: string; error?: string }> => {
+  startGitConnect: async (projectId: string, remoteUrl: string, remoteBranch: string): Promise<{ success: boolean; sessionId?: string; remoteBranch?: string; error?: string }> => {
     try {
-      return await getSidecarApiSync().http.post<{ success: boolean; sessionId?: string; error?: string }>(
+      return await getSidecarApiSync().http.post<{ success: boolean; sessionId?: string; remoteBranch?: string; error?: string }>(
         "/api/project-files/git-connect/start",
-        { projectId, remoteUrl },
+        { projectId, remoteUrl, remoteBranch },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] projectFiles.startGitConnect error:", err)
@@ -1723,6 +1724,7 @@ export const projectFilesBridge = {
             projectId: "",
             projectPath: "",
             remoteUrl: "",
+            remoteBranch: "main",
             error: err instanceof Error ? err.message : String(err),
           })
         } finally {
