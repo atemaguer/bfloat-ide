@@ -114,6 +114,15 @@ async function getConfiguredRemoteBranch(cwd: string): Promise<string> {
   return "main";
 }
 
+function maskRemoteUrlForLog(remoteUrl: string): string {
+  try {
+    const parsed = new URL(remoteUrl);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return remoteUrl.replace(/\/\/[^@\s]*@/, "//***@");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tree walker
 // ---------------------------------------------------------------------------
@@ -396,6 +405,9 @@ async function finishGitConnectSession(
 }
 
 async function runGitConnectSession(session: ActiveGitConnectSession): Promise<void> {
+  console.log(
+    `[project-files] git-connect[${session.sessionId}] start project=${session.projectId} branch=${session.remoteBranch} remote=${maskRemoteUrlForLog(session.remoteUrl)}`
+  );
   const buildCommands = [
     "set -e",
     'if [ ! -d .git ]; then git init; fi',
@@ -419,6 +431,7 @@ async function runGitConnectSession(session: ActiveGitConnectSession): Promise<v
         cwd: session.projectPath,
         env,
       });
+      console.log(`[project-files] git-connect[${session.sessionId}] using PTY mode`);
       session.pty = ptyProc;
       session.proc = null;
       session.stdinWrite = async (input: string) => {
@@ -436,6 +449,7 @@ async function runGitConnectSession(session: ActiveGitConnectSession): Promise<v
       });
     } catch (ptyErr) {
       appendGitConnectOutput(session, `[git-connect] PTY unavailable, using subprocess fallback: ${String(ptyErr)}\n`);
+      console.log(`[project-files] git-connect[${session.sessionId}] PTY failed, using subprocess fallback`);
       session.pty = null;
       const proc = Bun.spawn(["bash", "-lc", buildCommands], {
         cwd: session.projectPath,
@@ -465,8 +479,10 @@ async function runGitConnectSession(session: ActiveGitConnectSession): Promise<v
   }
 
   if (exitCode === 0) {
+    console.log(`[project-files] git-connect[${session.sessionId}] completed successfully`);
     await finishGitConnectSession(session, true);
   } else {
+    console.warn(`[project-files] git-connect[${session.sessionId}] failed with exit code=${exitCode}`);
     await finishGitConnectSession(session, false, "Git remote validation failed. Check credentials and try again.");
   }
 }
@@ -507,14 +523,19 @@ projectFilesRouter.post("/git-connect/start", async (c) => {
   };
 
   gitConnectSessions.set(sessionId, session);
+  console.log(
+    `[project-files] git-connect[${sessionId}] session created project=${projectId} branch=${session.remoteBranch} remote=${maskRemoteUrlForLog(session.remoteUrl)}`
+  );
 
   runGitConnectSession(session)
     .catch(async (err) => {
       const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[project-files] git-connect[${sessionId}] unexpected error:`, msg);
       await finishGitConnectSession(session, false, msg);
     })
     .finally(() => {
       setTimeout(() => {
+        console.log(`[project-files] git-connect[${sessionId}] session evicted from memory`);
         gitConnectSessions.delete(sessionId);
       }, 5 * 60 * 1000);
     });
@@ -538,6 +559,9 @@ projectFilesRouter.post("/git-connect/input", async (c) => {
     return c.json({ success: false, error: "Session is not accepting input" }, 409);
   }
 
+  console.log(
+    `[project-files] git-connect[${parsed.data.sessionId}] received input length=${parsed.data.input.length}`
+  );
   await session.stdinWrite(parsed.data.input).catch(() => {});
   return c.json({ success: true });
 });
@@ -561,6 +585,7 @@ projectFilesRouter.post("/git-connect/cancel", async (c) => {
     // best effort
   }
 
+  console.log(`[project-files] git-connect[${parsed.data.sessionId}] cancelled by user`);
   await finishGitConnectSession(session, false, "Cancelled by user");
   return c.json({ success: true });
 });
@@ -584,11 +609,13 @@ projectFilesRouter.get("/git-connect/stream/:sessionId", async (c) => {
   const listener: GitConnectListener = ({ type, data }) => {
     write(type, data);
     if (type === "complete") {
+      console.log(`[project-files] git-connect[${sessionId}] streamed complete event`);
       writer.close().catch(() => {});
     }
   };
 
   session.listeners.add(listener);
+  console.log(`[project-files] git-connect[${sessionId}] stream attached listeners=${session.listeners.size}`);
 
   if (session.output) {
     write("log", { data: session.output.slice(-20_000) });
@@ -597,7 +624,15 @@ projectFilesRouter.get("/git-connect/stream/:sessionId", async (c) => {
     write("complete", session.result);
     writer.close().catch(() => {});
     session.listeners.delete(listener);
+    console.log(`[project-files] git-connect[${sessionId}] stream attached after completion`);
   }
+
+  const onAbort = () => {
+    session.listeners.delete(listener);
+    writer.close().catch(() => {});
+    console.log(`[project-files] git-connect[${sessionId}] stream disconnected listeners=${session.listeners.size}`);
+  };
+  c.req.raw.signal.addEventListener("abort", onAbort, { once: true });
 
   c.header("Content-Type", "text/event-stream");
   c.header("Cache-Control", "no-cache");

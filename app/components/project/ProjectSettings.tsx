@@ -205,21 +205,33 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     setGitConnectLogTail('')
 
     try {
+      console.log('[ProjectSettings] Git connect start', {
+        projectId: project.id,
+        remoteUrl: nextUrl.replace(/\/\/[^@\s]*@/, '//***@'),
+        remoteBranch: nextBranch,
+      })
       const startResult = await projectFiles.startGitConnect(project.id, nextUrl, nextBranch)
       if (!startResult.success || !startResult.sessionId) {
         throw new Error(startResult.error || 'Failed to start Git connection flow')
       }
 
       const sessionId = startResult.sessionId
+      console.log('[ProjectSettings] Git connect session created', { sessionId, remoteBranch: startResult.remoteBranch })
       setGitConnectSessionId(sessionId)
 
       await new Promise<void>((resolve, reject) => {
         const unsubscribe = projectFiles.streamGitConnect(sessionId, {
           onLog: (chunk: string) => {
             if (!chunk) return
+            console.log('[ProjectSettings] Git connect log chunk', { sessionId, chunkLength: chunk.length })
             setGitConnectLogTail((prev) => (prev + chunk).slice(-4000))
           },
           onInteractiveAuth: (event: GitAuthPrompt) => {
+            console.log('[ProjectSettings] Git connect interactive auth prompt', {
+              sessionId,
+              type: event.type,
+              confidence: event.confidence,
+            })
             setGitConnectError(null)
             setGitAuthPrompt(event)
             setGitAuthInput('')
@@ -228,6 +240,11 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
             }
           },
           onComplete: async (result: { success: boolean; error?: string }) => {
+            console.log('[ProjectSettings] Git connect complete event', {
+              sessionId,
+              success: result.success,
+              error: result.error,
+            })
             gitConnectUnsubscribeRef.current?.()
             gitConnectUnsubscribeRef.current = null
             setGitConnectSessionId(null)
@@ -241,6 +258,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
             }
 
             try {
+              console.log('[ProjectSettings] Persisting git remote metadata', { sessionId })
               await updateGitRemote(nextUrl, nextBranch)
               resolve()
             } catch (error) {
@@ -256,9 +274,11 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       toast.success('Git repository connected')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to connect Git repository'
+      console.error('[ProjectSettings] Git connect failed', { message })
       setGitConnectError(message)
       toast.error(message)
     } finally {
+      console.log('[ProjectSettings] Git connect flow finalized')
       setIsUpdatingGit(false)
     }
   }
@@ -285,8 +305,17 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     const trimmed = value.trim()
     if (!trimmed) return
 
+    console.log('[ProjectSettings] Submitting git auth input', {
+      sessionId: gitConnectSessionId,
+      promptType: gitAuthPrompt.type,
+      inputLength: trimmed.length,
+    })
     const result = await projectFiles.submitGitConnectInput(gitConnectSessionId, `${trimmed}\n`)
     if (!result.success) {
+      console.error('[ProjectSettings] Failed submitting git auth input', {
+        sessionId: gitConnectSessionId,
+        error: result.error,
+      })
       setGitConnectError(result.error || 'Failed to submit authentication input')
       return
     }
@@ -300,6 +329,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
 
   const cancelGitConnect = async () => {
     if (!gitConnectSessionId) return
+    console.log('[ProjectSettings] Cancelling git connect', { sessionId: gitConnectSessionId })
     await projectFiles.cancelGitConnect(gitConnectSessionId)
     gitConnectUnsubscribeRef.current?.()
     gitConnectUnsubscribeRef.current = null
@@ -314,6 +344,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   useEffect(() => {
     return () => {
       if (gitConnectSessionId) {
+        console.log('[ProjectSettings] Cleanup cancelling git connect', { sessionId: gitConnectSessionId })
         projectFiles.cancelGitConnect(gitConnectSessionId).catch(() => {})
       }
       gitConnectUnsubscribeRef.current?.()

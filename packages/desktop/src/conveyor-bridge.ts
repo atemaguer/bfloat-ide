@@ -1662,6 +1662,7 @@ export const projectFilesBridge = {
 
   startGitConnect: async (projectId: string, remoteUrl: string, remoteBranch: string): Promise<{ success: boolean; sessionId?: string; remoteBranch?: string; error?: string }> => {
     try {
+      console.log("[conveyor-bridge] projectFiles.startGitConnect", { projectId, remoteBranch })
       return await getSidecarApiSync().http.post<{ success: boolean; sessionId?: string; remoteBranch?: string; error?: string }>(
         "/api/project-files/git-connect/start",
         { projectId, remoteUrl, remoteBranch },
@@ -1674,6 +1675,7 @@ export const projectFilesBridge = {
 
   submitGitConnectInput: async (sessionId: string, input: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      console.log("[conveyor-bridge] projectFiles.submitGitConnectInput", { sessionId, length: input.length })
       return await getSidecarApiSync().http.post<{ success: boolean; error?: string }>(
         "/api/project-files/git-connect/input",
         { sessionId, input },
@@ -1686,6 +1688,7 @@ export const projectFilesBridge = {
 
   cancelGitConnect: async (sessionId: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      console.log("[conveyor-bridge] projectFiles.cancelGitConnect", { sessionId })
       return await getSidecarApiSync().http.post<{ success: boolean; error?: string }>(
         "/api/project-files/git-connect/cancel",
         { sessionId },
@@ -1699,10 +1702,14 @@ export const projectFilesBridge = {
   streamGitConnect: (sessionId: string, handlers: GitConnectStreamHandlers): UnsubscribeFn => {
     let es: EventSource | null = null
     try {
+      console.log("[conveyor-bridge] projectFiles.streamGitConnect attach", { sessionId })
       es = createAuthenticatedEventSource(`/api/project-files/git-connect/stream/${encodeURIComponent(sessionId)}`)
       es.addEventListener("log", (e: MessageEvent) => {
         try {
           const payload = JSON.parse(String(e.data ?? "")) as { data?: string }
+          if (payload?.data) {
+            console.log("[conveyor-bridge] projectFiles.streamGitConnect log", { sessionId, chunkLength: payload.data.length })
+          }
           handlers.onLog?.(payload?.data ?? "")
         } catch {
           // ignore malformed log payloads
@@ -1710,6 +1717,7 @@ export const projectFilesBridge = {
       })
       es.addEventListener("interactive_auth", (e: MessageEvent) => {
         try {
+          console.log("[conveyor-bridge] projectFiles.streamGitConnect interactive_auth", { sessionId })
           handlers.onInteractiveAuth?.(JSON.parse(e.data) as GitConnectAuthEvent)
         } catch (err) {
           console.warn("[conveyor-bridge] projectFiles.streamGitConnect interactive_auth parse error:", err)
@@ -1717,6 +1725,7 @@ export const projectFilesBridge = {
       })
       es.addEventListener("complete", (e: MessageEvent) => {
         try {
+          console.log("[conveyor-bridge] projectFiles.streamGitConnect complete", { sessionId })
           handlers.onComplete(JSON.parse(e.data) as GitConnectResult)
         } catch (err) {
           handlers.onComplete({
@@ -1733,7 +1742,7 @@ export const projectFilesBridge = {
       })
       es.onerror = () => {
         if (!es || es.readyState === EventSource.CLOSED) return
-        console.warn("[conveyor-bridge] projectFiles.streamGitConnect EventSource error")
+        console.warn("[conveyor-bridge] projectFiles.streamGitConnect EventSource error", { sessionId, readyState: es.readyState })
       }
     } catch (err) {
       console.warn("[conveyor-bridge] projectFiles.streamGitConnect setup error:", err)
@@ -1741,6 +1750,7 @@ export const projectFilesBridge = {
 
     return () => {
       if (es) {
+        console.log("[conveyor-bridge] projectFiles.streamGitConnect detach", { sessionId })
         es.close()
       }
     }
