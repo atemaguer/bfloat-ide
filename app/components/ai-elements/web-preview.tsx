@@ -86,7 +86,7 @@ export const WebPreviewNavigation = ({
 }: WebPreviewNavigationProps) => (
   <div
     className={cn(
-      "flex h-9 items-center gap-1.5 border-b border-transparent bg-[oklch(0.269_0_0)] px-2",
+      "flex h-9 items-center gap-1.5 border-b border-border bg-muted/40 px-2",
       className
     )}
     {...props}
@@ -112,7 +112,7 @@ export const WebPreviewNavigationButton = ({
       <TooltipTrigger asChild>
         <Button
           className={cn(
-            "h-7 w-7 p-0 text-[oklab(0.985_0_0_/_0.8)] hover:bg-muted/70 hover:text-[oklab(0.985_0_0_/_0.95)] focus-visible:ring-0 focus-visible:ring-offset-0 [&>svg]:text-[oklab(0.985_0_0_/_0.8)] hover:[&>svg]:text-[oklab(0.985_0_0_/_0.95)]",
+            "h-7 w-7 p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0 [&>svg]:text-muted-foreground hover:[&>svg]:text-foreground",
             disabled && "cursor-not-allowed text-muted-foreground/30 hover:bg-transparent hover:text-muted-foreground/30",
             className
           )}
@@ -167,7 +167,7 @@ export const WebPreviewUrl = ({
   return (
     <Input
       className={cn(
-        "h-8 flex-1 appearance-none rounded-lg border-0 bg-[oklch(0.227_0_0)] text-sm text-foreground shadow-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0",
+        "h-8 flex-1 appearance-none rounded-lg border border-border/70 bg-background text-sm text-foreground shadow-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0",
         className
       )}
       onChange={onChange ?? handleChange}
