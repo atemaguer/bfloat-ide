@@ -202,21 +202,20 @@ const ProjectTitlebarContent = ({
             {isDeploying ? <Loader2 size={11} className="animate-spin" /> : <Rocket size={11} />}
             <span>{isDeploying ? 'Publishing...' : 'Publish'}</span>
           </button>
+          {isGitConnected && (
+            <div className="window-titlebar-project-actions">
+              <button
+                className={`window-titlebar-icon-btn ${syncStatus === 'syncing' ? 'syncing' : ''} ${syncStatus === 'success' ? 'success' : ''} ${syncStatus === 'error' ? 'error' : ''}`}
+                title={syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'success' ? 'Synced!' : syncStatus === 'error' ? 'Sync failed' : 'Sync to remote'}
+                onClick={handleSync}
+                disabled={syncStatus === 'syncing'}
+              >
+                {syncStatus === 'success' ? <Check size={13} /> : <RefreshCw size={13} className={syncStatus === 'syncing' ? 'animate-spin' : ''} />}
+              </button>
+            </div>
+          )}
         </div>
       </div>
-
-      {isGitConnected && (
-        <div className="window-titlebar-project-actions">
-          <button
-            className={`window-titlebar-icon-btn ${syncStatus === 'syncing' ? 'syncing' : ''} ${syncStatus === 'success' ? 'success' : ''} ${syncStatus === 'error' ? 'error' : ''}`}
-            title={syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'success' ? 'Synced!' : syncStatus === 'error' ? 'Sync failed' : 'Sync to remote'}
-            onClick={handleSync}
-            disabled={syncStatus === 'syncing'}
-          >
-            {syncStatus === 'success' ? <Check size={13} /> : <RefreshCw size={13} className={syncStatus === 'syncing' ? 'animate-spin' : ''} />}
-          </button>
-        </div>
-      )}
       {/* Publish modal - rendered unconditionally, manages its own visibility */}
       <DeployModal anchorRef={deployButtonRef} />
     </>
