@@ -91,6 +91,34 @@ export const projectFilesApiSchema = {
     return: z.void(),
   },
 
+  // Git: start interactive remote connect flow
+  'project:startGitConnect': {
+    args: z.tuple([z.string(), z.string()]), // projectId, remoteUrl
+    return: z.object({
+      success: z.boolean(),
+      sessionId: z.string().optional(),
+      error: z.string().optional(),
+    }),
+  },
+
+  // Git: submit interactive auth input
+  'project:submitGitConnectInput': {
+    args: z.tuple([z.string(), z.string()]), // sessionId, input
+    return: z.object({
+      success: z.boolean(),
+      error: z.string().optional(),
+    }),
+  },
+
+  // Git: cancel interactive connect flow
+  'project:cancelGitConnect': {
+    args: z.tuple([z.string()]), // sessionId
+    return: z.object({
+      success: z.boolean(),
+      error: z.string().optional(),
+    }),
+  },
+
   // Git: check for changes
   'project:hasChanges': {
     args: z.tuple([]),

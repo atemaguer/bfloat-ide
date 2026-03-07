@@ -15,7 +15,12 @@
  *   POST /api/project-files/:projectId/git-add         – git add
  *   POST /api/project-files/:projectId/git-commit      – git commit (stages all first)
  *   POST /api/project-files/:projectId/git-push        – git push
+ *   POST /api/project-files/:projectId/git-pull        – git pull
  *   POST /api/project-files/:projectId/git-clone       – clone remote into project dir
+ *   POST /api/project-files/git-connect/start          – interactive git remote setup
+ *   GET  /api/project-files/git-connect/stream/:id     – git setup SSE events
+ *   POST /api/project-files/git-connect/input          – submit auth input
+ *   POST /api/project-files/git-connect/cancel         – cancel setup session
  *   GET  /api/project-files/:projectId/git-log         – recent git log
  *
  * All paths are resolved relative to the project root and validated to prevent
@@ -28,6 +33,8 @@ import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import type { IPty } from "bun-pty";
+import { spawn as bunPtySpawn } from "bun-pty";
 import { initializeFromTemplate } from "./template.ts";
 import { ensureSkillsInjected } from "../skills-injector.ts";
 import { getProjectById } from "./local-projects.ts";
@@ -182,11 +189,404 @@ const SyncAgentInstructionsSchema = z.object({
   agentInstructions: z.string().optional(),
 });
 
+const GitConnectStartSchema = z.object({
+  projectId: z.string().min(1),
+  remoteUrl: z.string().min(1),
+});
+
+const GitConnectInputSchema = z.object({
+  sessionId: z.string().min(1),
+  input: z.string().min(1),
+});
+
+const GitConnectCancelSchema = z.object({
+  sessionId: z.string().min(1),
+});
+
+type GitConnectPromptType =
+  | "https_username"
+  | "https_password"
+  | "ssh_passphrase"
+  | "otp"
+  | "yes_no"
+  | "unknown";
+
+interface GitConnectInteractiveAuthPayload {
+  type: GitConnectPromptType;
+  confidence: number;
+  context: string;
+  suggestion?: string;
+}
+
+interface GitConnectResult {
+  success: boolean;
+  projectId: string;
+  projectPath: string;
+  remoteUrl: string;
+  error?: string;
+}
+
+type GitConnectEventType = "log" | "interactive_auth" | "complete";
+
+interface GitConnectEvent {
+  type: GitConnectEventType;
+  data: unknown;
+}
+
+type GitConnectListener = (event: GitConnectEvent) => void;
+
+interface ActiveGitConnectSession {
+  sessionId: string;
+  projectId: string;
+  projectPath: string;
+  remoteUrl: string;
+  pty: IPty | null;
+  proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null;
+  stdinWrite: ((input: string) => Promise<void>) | null;
+  listeners: Set<GitConnectListener>;
+  output: string;
+  done: boolean;
+  result: GitConnectResult | null;
+  lastPromptKey: string | null;
+}
+
+const gitConnectSessions = new Map<string, ActiveGitConnectSession>();
+
+function newGitConnectSessionId(): string {
+  return `git-connect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function emitGitConnectEvent(session: ActiveGitConnectSession, type: GitConnectEventType, data: unknown): void {
+  const event = { type, data };
+  for (const listener of session.listeners) {
+    try {
+      listener(event);
+    } catch (err) {
+      console.warn("[project-files] git-connect listener error:", err);
+    }
+  }
+}
+
+export function detectGitConnectPrompt(rawChunk: string): GitConnectInteractiveAuthPayload | null {
+  const text = rawChunk.trim();
+  if (!text) return null;
+
+  if (/enter passphrase for key|passphrase.*private key|ssh key passphrase/i.test(text)) {
+    return {
+      type: "ssh_passphrase",
+      confidence: 0.95,
+      context: text,
+      suggestion: "Enter your SSH key passphrase.",
+    };
+  }
+
+  if (/username for ['"]?https?:\/\/|^username:\s*$/im.test(text)) {
+    return {
+      type: "https_username",
+      confidence: 0.95,
+      context: text,
+      suggestion: "Enter your Git username.",
+    };
+  }
+
+  if (/password for ['"]?https?:\/\/|^password:\s*$/im.test(text)) {
+    return {
+      type: "https_password",
+      confidence: 0.95,
+      context: text,
+      suggestion: "Enter your Git password or personal access token.",
+    };
+  }
+
+  if (/(verification code|one-time|otp|2fa|two[- ]factor|authenticator code)/i.test(text)) {
+    return {
+      type: "otp",
+      confidence: 0.9,
+      context: text,
+      suggestion: "Enter the verification code.",
+    };
+  }
+
+  if (/\((Y\/n|y\/N|y\/n|yes\/no)\)|are you sure|continue\?/i.test(text)) {
+    return {
+      type: "yes_no",
+      confidence: 0.8,
+      context: text,
+      suggestion: "Reply with y or n.",
+    };
+  }
+
+  if (/:\s*$|\?\s*$/.test(text)) {
+    return {
+      type: "unknown",
+      confidence: 0.6,
+      context: text,
+      suggestion: "Enter a response and submit.",
+    };
+  }
+
+  return null;
+}
+
+function maybeEmitGitConnectPrompt(session: ActiveGitConnectSession, chunk: string): void {
+  const prompt = detectGitConnectPrompt(chunk);
+  if (!prompt) return;
+
+  const promptKey = `${prompt.type}:${prompt.context.slice(0, 120)}`;
+  if (session.lastPromptKey === promptKey) return;
+  session.lastPromptKey = promptKey;
+  emitGitConnectEvent(session, "interactive_auth", prompt);
+}
+
+function appendGitConnectOutput(session: ActiveGitConnectSession, chunk: string): void {
+  if (!chunk) return;
+  session.output += chunk;
+  emitGitConnectEvent(session, "log", { data: chunk });
+  maybeEmitGitConnectPrompt(session, chunk);
+}
+
+async function streamReaderToOutput(
+  stream: ReadableStream<Uint8Array> | null,
+  onChunk: (chunk: string) => void
+): Promise<void> {
+  if (!stream) return;
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    onChunk(decoder.decode(value, { stream: true }));
+  }
+}
+
+async function finishGitConnectSession(
+  session: ActiveGitConnectSession,
+  success: boolean,
+  error?: string
+): Promise<void> {
+  if (session.done) return;
+  session.done = true;
+  session.result = {
+    success,
+    projectId: session.projectId,
+    projectPath: session.projectPath,
+    remoteUrl: session.remoteUrl,
+    ...(error ? { error } : {}),
+  };
+  emitGitConnectEvent(session, "complete", session.result);
+}
+
+async function runGitConnectSession(session: ActiveGitConnectSession): Promise<void> {
+  const buildCommands = [
+    "set -e",
+    'if [ ! -d .git ]; then git init; fi',
+    'if git remote get-url origin >/dev/null 2>&1; then git remote set-url origin \"$GIT_REMOTE_URL\"; else git remote add origin \"$GIT_REMOTE_URL\"; fi',
+    "git ls-remote origin HEAD",
+  ].join(" && ");
+
+  const env = { ...process.env, GIT_REMOTE_URL: session.remoteUrl };
+  let exitCode = 1;
+
+  try {
+    await fsp.mkdir(session.projectPath, { recursive: true });
+
+    try {
+      const ptyProc = bunPtySpawn("bash", ["-lc", buildCommands], {
+        cwd: session.projectPath,
+        env,
+      });
+      session.pty = ptyProc;
+      session.proc = null;
+      session.stdinWrite = async (input: string) => {
+        ptyProc.write(input);
+      };
+
+      await new Promise<void>((resolve) => {
+        ptyProc.onData((data) => {
+          appendGitConnectOutput(session, typeof data === "string" ? data : Buffer.from(data).toString("utf8"));
+        });
+        ptyProc.onExit(({ exitCode: code }) => {
+          exitCode = code;
+          resolve();
+        });
+      });
+    } catch (ptyErr) {
+      appendGitConnectOutput(session, `[git-connect] PTY unavailable, using subprocess fallback: ${String(ptyErr)}\n`);
+      session.pty = null;
+      const proc = Bun.spawn(["bash", "-lc", buildCommands], {
+        cwd: session.projectPath,
+        env,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      session.proc = proc;
+      session.stdinWrite = async (input: string) => {
+        if (!proc.stdin) throw new Error("git-connect stdin unavailable");
+        await proc.stdin.write(new TextEncoder().encode(input));
+      };
+
+      await Promise.all([
+        streamReaderToOutput(proc.stdout, (chunk) => appendGitConnectOutput(session, chunk)),
+        streamReaderToOutput(proc.stderr, (chunk) => appendGitConnectOutput(session, chunk)),
+      ]);
+      exitCode = await proc.exited;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await finishGitConnectSession(session, false, msg);
+    return;
+  } finally {
+    session.stdinWrite = null;
+  }
+
+  if (exitCode === 0) {
+    await finishGitConnectSession(session, true);
+  } else {
+    await finishGitConnectSession(session, false, "Git remote validation failed. Check credentials and try again.");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
 export const projectFilesRouter = new Hono();
+
+// ---------------------------------------------------------------------------
+// Git connect interactive session routes
+// ---------------------------------------------------------------------------
+
+projectFilesRouter.post("/git-connect/start", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = GitConnectStartSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ success: false, error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const { projectId, remoteUrl } = parsed.data;
+  const sessionId = newGitConnectSessionId();
+  const session: ActiveGitConnectSession = {
+    sessionId,
+    projectId,
+    projectPath: projectRoot(projectId),
+    remoteUrl: remoteUrl.trim(),
+    pty: null,
+    proc: null,
+    stdinWrite: null,
+    listeners: new Set(),
+    output: "",
+    done: false,
+    result: null,
+    lastPromptKey: null,
+  };
+
+  gitConnectSessions.set(sessionId, session);
+
+  runGitConnectSession(session)
+    .catch(async (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      await finishGitConnectSession(session, false, msg);
+    })
+    .finally(() => {
+      setTimeout(() => {
+        gitConnectSessions.delete(sessionId);
+      }, 5 * 60 * 1000);
+    });
+
+  return c.json({ success: true, sessionId });
+});
+
+projectFilesRouter.post("/git-connect/input", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = GitConnectInputSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ success: false, error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const session = gitConnectSessions.get(parsed.data.sessionId);
+  if (!session || session.done) {
+    return c.json({ success: false, error: "No active git connect session found" }, 404);
+  }
+
+  if (!session.stdinWrite) {
+    return c.json({ success: false, error: "Session is not accepting input" }, 409);
+  }
+
+  await session.stdinWrite(parsed.data.input).catch(() => {});
+  return c.json({ success: true });
+});
+
+projectFilesRouter.post("/git-connect/cancel", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = GitConnectCancelSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ success: false, error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const session = gitConnectSessions.get(parsed.data.sessionId);
+  if (!session) {
+    return c.json({ success: false, error: "Session not found" }, 404);
+  }
+
+  try {
+    if (session.pty) session.pty.kill();
+    if (session.proc) session.proc.kill();
+  } catch {
+    // best effort
+  }
+
+  await finishGitConnectSession(session, false, "Cancelled by user");
+  return c.json({ success: true });
+});
+
+projectFilesRouter.get("/git-connect/stream/:sessionId", async (c) => {
+  const sessionId = c.req.param("sessionId");
+  const session = gitConnectSessions.get(sessionId);
+  if (!session) {
+    return c.json({ success: false, error: "Session not found" }, 404);
+  }
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+
+  function write(event: string, data: unknown): void {
+    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    writer.write(encoder.encode(payload)).catch(() => {});
+  }
+
+  const listener: GitConnectListener = ({ type, data }) => {
+    write(type, data);
+    if (type === "complete") {
+      writer.close().catch(() => {});
+    }
+  };
+
+  session.listeners.add(listener);
+
+  if (session.output) {
+    write("log", { data: session.output.slice(-20_000) });
+  }
+  if (session.done && session.result) {
+    write("complete", session.result);
+    writer.close().catch(() => {});
+    session.listeners.delete(listener);
+  }
+
+  c.header("Content-Type", "text/event-stream");
+  c.header("Cache-Control", "no-cache");
+  c.header("Connection", "keep-alive");
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
+});
 
 // ---------------------------------------------------------------------------
 // POST /open – Open (or create) a project
@@ -659,6 +1059,29 @@ projectFilesRouter.post("/git-push/:projectId", async (c) => {
 
   try {
     const result = await runGit(["push"], root);
+    if (!result.ok) {
+      return c.json({ success: false, error: result.stderr }, 500);
+    }
+    return c.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ success: false, error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /git-clone/:projectId
+// ---------------------------------------------------------------------------
+projectFilesRouter.post("/git-pull/:projectId", async (c) => {
+  const projectId = c.req.param("projectId");
+  const root = projectRoot(projectId);
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ success: false, error: "No git repository in project" }, 400);
+  }
+
+  try {
+    const result = await runGit(["pull"], root);
     if (!result.ok) {
       return c.json({ success: false, error: result.stderr }, 500);
     }

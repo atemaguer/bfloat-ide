@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { AlertCircle, Eye, EyeOff, GitBranch, Globe, Key, Loader2, Lock, Pencil, Plus, Save, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -29,6 +29,15 @@ interface ProjectSettingsProps {
   onProjectUpdate?: (project: Project) => void
 }
 
+type GitAuthPromptType = 'https_username' | 'https_password' | 'ssh_passphrase' | 'otp' | 'yes_no' | 'unknown'
+
+interface GitAuthPrompt {
+  type: GitAuthPromptType
+  confidence: number
+  context: string
+  suggestion?: string
+}
+
 const REVENUECAT_API_KEY = 'REVENUECAT_API_KEY'
 const STRIPE_SETUP_PROMPT = 'Use the /add-stripe skill to set up Stripe payments integration for this project'
 const REVENUECAT_SETUP_PROMPT = 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project'
@@ -40,6 +49,12 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [isUpdatingGit, setIsUpdatingGit] = useState(false)
   const [gitConnectError, setGitConnectError] = useState<string | null>(null)
   const [gitConnectSuccess, setGitConnectSuccess] = useState<string | null>(null)
+  const [gitConnectSessionId, setGitConnectSessionId] = useState<string | null>(null)
+  const [gitAuthPrompt, setGitAuthPrompt] = useState<GitAuthPrompt | null>(null)
+  const [gitAuthInput, setGitAuthInput] = useState('')
+  const [gitOtpInput, setGitOtpInput] = useState('')
+  const [gitConnectLogTail, setGitConnectLogTail] = useState('')
+  const gitConnectUnsubscribeRef = useRef<(() => void) | null>(null)
 
   // Form state
   const [title, setTitle] = useState(project.title || '')
@@ -133,10 +148,6 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   }
 
   const updateGitRemote = async (nextSourceUrl: string | null) => {
-    setIsUpdatingGit(true)
-    setGitConnectError(null)
-    setGitConnectSuccess(null)
-
     const normalizedSourceUrl = nextSourceUrl?.trim() || null
 
     try {
@@ -154,8 +165,6 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       if (onProjectUpdate) {
         onProjectUpdate(updatedProject)
       }
-    } finally {
-      setIsUpdatingGit(false)
     }
   }
 
@@ -167,18 +176,77 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       return
     }
 
+    setIsUpdatingGit(true)
+    setGitConnectError(null)
+    setGitConnectSuccess(null)
+    setGitAuthPrompt(null)
+    setGitAuthInput('')
+    setGitOtpInput('')
+    setGitConnectLogTail('')
+
     try {
-      await updateGitRemote(nextUrl)
+      const startResult = await projectFiles.startGitConnect(project.id, nextUrl)
+      if (!startResult.success || !startResult.sessionId) {
+        throw new Error(startResult.error || 'Failed to start Git connection flow')
+      }
+
+      const sessionId = startResult.sessionId
+      setGitConnectSessionId(sessionId)
+
+      await new Promise<void>((resolve, reject) => {
+        const unsubscribe = projectFiles.streamGitConnect(sessionId, {
+          onLog: (chunk: string) => {
+            if (!chunk) return
+            setGitConnectLogTail((prev) => (prev + chunk).slice(-4000))
+          },
+          onInteractiveAuth: (event: GitAuthPrompt) => {
+            setGitConnectError(null)
+            setGitAuthPrompt(event)
+            setGitAuthInput('')
+            if (event.type !== 'otp') {
+              setGitOtpInput('')
+            }
+          },
+          onComplete: async (result: { success: boolean; error?: string }) => {
+            gitConnectUnsubscribeRef.current?.()
+            gitConnectUnsubscribeRef.current = null
+            setGitConnectSessionId(null)
+            setGitAuthPrompt(null)
+            setGitAuthInput('')
+            setGitOtpInput('')
+
+            if (!result.success) {
+              reject(new Error(result.error || 'Failed to connect Git repository'))
+              return
+            }
+
+            try {
+              await updateGitRemote(nextUrl)
+              resolve()
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error('Failed to save Git connection metadata'))
+            }
+          },
+        })
+
+        gitConnectUnsubscribeRef.current = unsubscribe
+      })
+
       setGitConnectSuccess('Git repository connected.')
       toast.success('Git repository connected')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to connect Git repository'
       setGitConnectError(message)
       toast.error(message)
+    } finally {
+      setIsUpdatingGit(false)
     }
   }
 
   const handleDisconnectGit = async () => {
+    setIsUpdatingGit(true)
+    setGitConnectError(null)
+    setGitConnectSuccess(null)
     try {
       await updateGitRemote(null)
       setGitConnectSuccess('Git repository disconnected.')
@@ -187,8 +255,51 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       const message = error instanceof Error ? error.message : 'Failed to disconnect Git repository'
       setGitConnectError(message)
       toast.error(message)
+    } finally {
+      setIsUpdatingGit(false)
     }
   }
+
+  const submitGitAuthInput = async (value: string) => {
+    if (!gitConnectSessionId || !gitAuthPrompt) return
+    const trimmed = value.trim()
+    if (!trimmed) return
+
+    const result = await projectFiles.submitGitConnectInput(gitConnectSessionId, `${trimmed}\n`)
+    if (!result.success) {
+      setGitConnectError(result.error || 'Failed to submit authentication input')
+      return
+    }
+
+    setGitAuthPrompt(null)
+    setGitAuthInput('')
+    if (gitAuthPrompt.type === 'otp') {
+      setGitOtpInput('')
+    }
+  }
+
+  const cancelGitConnect = async () => {
+    if (!gitConnectSessionId) return
+    await projectFiles.cancelGitConnect(gitConnectSessionId)
+    gitConnectUnsubscribeRef.current?.()
+    gitConnectUnsubscribeRef.current = null
+    setGitConnectSessionId(null)
+    setGitAuthPrompt(null)
+    setGitAuthInput('')
+    setGitOtpInput('')
+    setIsUpdatingGit(false)
+    setGitConnectError('Git connection cancelled.')
+  }
+
+  useEffect(() => {
+    return () => {
+      if (gitConnectSessionId) {
+        projectFiles.cancelGitConnect(gitConnectSessionId).catch(() => {})
+      }
+      gitConnectUnsubscribeRef.current?.()
+      gitConnectUnsubscribeRef.current = null
+    }
+  }, [gitConnectSessionId])
 
   // Load secrets
   const loadSecrets = async () => {
@@ -746,6 +857,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                     setGitRemoteUrl(e.target.value)
                     setGitConnectError(null)
                     setGitConnectSuccess(null)
+                    setGitAuthPrompt(null)
                   }}
                   placeholder="https://github.com/you/repo.git or git@github.com:you/repo.git"
                 />
@@ -762,6 +874,87 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                 </div>
               )}
 
+              {gitAuthPrompt && (
+                <div className="space-y-3 rounded-md border border-border/60 bg-muted/20 p-3">
+                  <div className="text-sm font-medium">Authentication required</div>
+                  <div className="text-xs text-muted-foreground whitespace-pre-wrap break-words font-mono">
+                    {gitAuthPrompt.context}
+                  </div>
+                  {gitAuthPrompt.suggestion && (
+                    <div className="text-xs text-muted-foreground">{gitAuthPrompt.suggestion}</div>
+                  )}
+
+                  {gitAuthPrompt.type === 'yes_no' ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => submitGitAuthInput('y')}
+                        disabled={!gitConnectSessionId}
+                      >
+                        Yes (y)
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => submitGitAuthInput('n')}
+                        disabled={!gitConnectSessionId}
+                      >
+                        No (n)
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type={gitAuthPrompt.type === 'https_password' || gitAuthPrompt.type === 'ssh_passphrase' ? 'password' : 'text'}
+                        value={gitAuthPrompt.type === 'otp' ? gitOtpInput : gitAuthInput}
+                        onChange={(e) => {
+                          if (gitAuthPrompt.type === 'otp') {
+                            setGitOtpInput(e.target.value.replace(/\D/g, '').slice(0, 8))
+                          } else {
+                            setGitAuthInput(e.target.value)
+                          }
+                        }}
+                        placeholder={gitAuthPrompt.type === 'otp' ? 'Enter verification code' : 'Enter response'}
+                        inputMode={gitAuthPrompt.type === 'otp' ? 'numeric' : undefined}
+                        autoFocus
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => submitGitAuthInput(gitAuthPrompt.type === 'otp' ? gitOtpInput : gitAuthInput)}
+                        disabled={!gitConnectSessionId}
+                      >
+                        Submit
+                      </Button>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={cancelGitConnect}
+                      disabled={!gitConnectSessionId}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {isUpdatingGit && gitConnectLogTail && (
+                <div className="rounded-md border border-border/60 bg-muted/20 p-3">
+                  <div className="text-xs font-medium text-muted-foreground mb-2">Git Connect Output</div>
+                  <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-xs font-mono text-muted-foreground">
+                    {gitConnectLogTail}
+                  </pre>
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
                 <Button
                   type="button"
@@ -772,6 +965,15 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                   {isUpdatingGit ? <Loader2 size={14} className="animate-spin" /> : <GitBranch size={14} />}
                   Connect Remote
                 </Button>
+                {gitConnectSessionId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={cancelGitConnect}
+                  >
+                    Cancel Connect
+                  </Button>
+                )}
                 {isGitConnected && (
                   <Button
                     type="button"

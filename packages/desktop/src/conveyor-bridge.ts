@@ -250,6 +250,35 @@ interface FileChangeEvent {
   projectId: string
 }
 
+type GitConnectPromptType =
+  | "https_username"
+  | "https_password"
+  | "ssh_passphrase"
+  | "otp"
+  | "yes_no"
+  | "unknown"
+
+interface GitConnectAuthEvent {
+  type: GitConnectPromptType
+  confidence: number
+  context: string
+  suggestion?: string
+}
+
+interface GitConnectResult {
+  success: boolean
+  projectId: string
+  projectPath: string
+  remoteUrl: string
+  error?: string
+}
+
+interface GitConnectStreamHandlers {
+  onLog?: (data: string) => void
+  onInteractiveAuth?: (event: GitConnectAuthEvent) => void
+  onComplete: (result: GitConnectResult) => void
+}
+
 // ProjectSyncApi types
 interface FileChange {
   type: "write" | "delete"
@@ -1521,9 +1550,8 @@ export const projectFilesBridge = {
   pull: async (): Promise<void> => {
     const pid = _activeProjectId
     if (!pid) throw new Error("No active project — call open() first")
-    // Note: the sidecar uses git-clone endpoint for pulling
     await getSidecarApiSync().http.post<void>(
-      `/api/project-files/git-clone/${pid}`,
+      `/api/project-files/git-pull/${pid}`,
     )
   },
 
@@ -1628,6 +1656,91 @@ export const projectFilesBridge = {
     } catch (err) {
       console.warn("[conveyor-bridge] projectFiles.syncAgentInstructions error:", err)
       return false
+    }
+  },
+
+  startGitConnect: async (projectId: string, remoteUrl: string): Promise<{ success: boolean; sessionId?: string; error?: string }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean; sessionId?: string; error?: string }>(
+        "/api/project-files/git-connect/start",
+        { projectId, remoteUrl },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.startGitConnect error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  submitGitConnectInput: async (sessionId: string, input: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean; error?: string }>(
+        "/api/project-files/git-connect/input",
+        { sessionId, input },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.submitGitConnectInput error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  cancelGitConnect: async (sessionId: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean; error?: string }>(
+        "/api/project-files/git-connect/cancel",
+        { sessionId },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.cancelGitConnect error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  streamGitConnect: (sessionId: string, handlers: GitConnectStreamHandlers): UnsubscribeFn => {
+    let es: EventSource | null = null
+    try {
+      es = createAuthenticatedEventSource(`/api/project-files/git-connect/stream/${encodeURIComponent(sessionId)}`)
+      es.addEventListener("log", (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(String(e.data ?? "")) as { data?: string }
+          handlers.onLog?.(payload?.data ?? "")
+        } catch {
+          // ignore malformed log payloads
+        }
+      })
+      es.addEventListener("interactive_auth", (e: MessageEvent) => {
+        try {
+          handlers.onInteractiveAuth?.(JSON.parse(e.data) as GitConnectAuthEvent)
+        } catch (err) {
+          console.warn("[conveyor-bridge] projectFiles.streamGitConnect interactive_auth parse error:", err)
+        }
+      })
+      es.addEventListener("complete", (e: MessageEvent) => {
+        try {
+          handlers.onComplete(JSON.parse(e.data) as GitConnectResult)
+        } catch (err) {
+          handlers.onComplete({
+            success: false,
+            projectId: "",
+            projectPath: "",
+            remoteUrl: "",
+            error: err instanceof Error ? err.message : String(err),
+          })
+        } finally {
+          es?.close()
+        }
+      })
+      es.onerror = () => {
+        if (!es || es.readyState === EventSource.CLOSED) return
+        console.warn("[conveyor-bridge] projectFiles.streamGitConnect EventSource error")
+      }
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.streamGitConnect setup error:", err)
+    }
+
+    return () => {
+      if (es) {
+        es.close()
+      }
     }
   },
 
