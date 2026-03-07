@@ -8,8 +8,12 @@ import { useWindowContext } from './WindowContext'
 import { useTitlebarContext } from './TitlebarContext'
 import { TitlebarMenu } from './TitlebarMenu'
 import { DeployModal } from '@/app/components/deploy/DeployModal'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/app/components/ui/dialog'
+import { Textarea } from '@/app/components/ui/input'
+import { Button } from '@/app/components/ui/button'
 import { deployStore } from '@/app/stores/deploy'
 import { window as windowApi } from '@/app/api/sidecar'
+import toast from 'react-hot-toast'
 import './titlebar.css'
 
 // Removed unused isDeployModalOpen - DeployModal manages its own visibility
@@ -29,6 +33,9 @@ const WORKBENCH_TABS: Array<{ id: WorkbenchTabType; label: string; icon: typeof 
   { id: 'settings', label: 'Settings', icon: Settings },
 ]
 
+const AGENT_COMMIT_MESSAGE_PROMPT =
+  'Draft a single git commit subject line for the current local changes. Return only one line, imperative mood, no quotes, max 72 chars.'
+
 // Project-specific titlebar content
 const ProjectTitlebarContent = ({
   titlebarRef,
@@ -41,6 +48,9 @@ const ProjectTitlebarContent = ({
   const [tabRailLeft, setTabRailLeft] = useState(0)
   const [tabRailWidth, setTabRailWidth] = useState<number | undefined>(undefined)
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle')
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false)
+  const [syncCommitMessage, setSyncCommitMessage] = useState('')
+  const [syncCommitError, setSyncCommitError] = useState<string | null>(null)
 
   // Subscribe to current project from workbench store (already loaded by ProjectPage)
   const currentProject = useStore(workbenchStore.currentProject)
@@ -113,31 +123,103 @@ const ProjectTitlebarContent = ({
     deployStore.toggleModal()
   }
 
+  const createDefaultSyncMessage = (): string => {
+    const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ')
+    return `Sync changes - ${timestamp}`
+  }
+
   const handleSync = async () => {
     if (syncStatus === 'syncing') return
 
+    console.log('[Titlebar] Sync requested', { syncStatus, isGitConnected })
     setSyncStatus('syncing')
     try {
       // Check if there are changes to commit
       const hasChanges = await projectStore.hasGitChanges()
+      console.log('[Titlebar] hasGitChanges result', { hasChanges })
       if (!hasChanges) {
-        console.log('[Titlebar] No changes to sync')
-        setSyncStatus('success')
-        setTimeout(() => setSyncStatus('idle'), 2000)
+        const syncState = await projectStore.getGitSyncStatus()
+        console.log('[Titlebar] getGitSyncStatus result', syncState)
+
+        if (syncState.success === false || syncState.error) {
+          throw new Error(syncState.error || 'Failed to compare local and remote heads')
+        }
+
+        const ahead = syncState.ahead ?? 0
+        const behind = syncState.behind ?? 0
+        const diverged = Boolean(syncState.diverged)
+
+        if (diverged || (ahead > 0 && behind > 0)) {
+          toast.error('Local and remote branches have diverged. Please pull/rebase manually.')
+          setSyncStatus('error')
+          setTimeout(() => setSyncStatus('idle'), 3000)
+          return
+        }
+
+        if (ahead > 0) {
+          console.log('[Titlebar] No working tree changes, pushing existing local commits', { ahead })
+          await projectStore.syncToRemote('')
+          toast.success(`Pushed ${ahead} local commit${ahead === 1 ? '' : 's'} to remote`)
+          setSyncStatus('success')
+          setTimeout(() => setSyncStatus('idle'), 2000)
+          return
+        }
+
+        if (behind > 0) {
+          console.log('[Titlebar] No working tree changes, pulling remote commits', { behind })
+          await projectStore.pull()
+          toast.success(`Pulled ${behind} remote commit${behind === 1 ? '' : 's'}`)
+          setSyncStatus('success')
+          setTimeout(() => setSyncStatus('idle'), 2000)
+          return
+        }
+
+        toast('No local changes to sync')
+        setSyncStatus('idle')
         return
       }
 
-      // Commit and push with a timestamp-based message
-      const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ')
-      await projectStore.commitAndPush(`Sync changes - ${timestamp}`)
+      const nextMessage = createDefaultSyncMessage()
+      setSyncCommitMessage(nextMessage)
+      setSyncCommitError(null)
+      setIsSyncModalOpen(true)
+      setSyncStatus('idle')
+    } catch (error) {
+      console.error('[Titlebar] Failed to sync:', error)
+      setSyncStatus('error')
+      setTimeout(() => setSyncStatus('idle'), 3000)
+      toast.error(error instanceof Error ? error.message : 'Sync failed')
+    }
+  }
+
+  const handleConfirmSync = async () => {
+    const message = syncCommitMessage.trim()
+    if (!message) {
+      setSyncCommitError('Commit message is required.')
+      return
+    }
+
+    setSyncCommitError(null)
+    setSyncStatus('syncing')
+    try {
+      console.log('[Titlebar] Starting commitAndPush', { message })
+      await projectStore.commitAndPush(message)
       console.log('[Titlebar] Changes synced successfully')
+      setIsSyncModalOpen(false)
+      toast.success('Synced changes to remote')
       setSyncStatus('success')
       setTimeout(() => setSyncStatus('idle'), 2000)
     } catch (error) {
       console.error('[Titlebar] Failed to sync:', error)
       setSyncStatus('error')
       setTimeout(() => setSyncStatus('idle'), 3000)
+      toast.error(error instanceof Error ? error.message : 'Failed to sync changes')
     }
+  }
+
+  const handleDraftMessageWithAgent = () => {
+    workbenchStore.triggerChatPrompt(AGENT_COMMIT_MESSAGE_PROMPT, { source: 'workbench' })
+    toast.success('Asked agent to draft a commit message')
   }
 
   return (
@@ -221,6 +303,39 @@ const ProjectTitlebarContent = ({
       </div>
       {/* Publish modal - rendered unconditionally, manages its own visibility */}
       <DeployModal anchorRef={deployButtonRef} />
+      <Dialog open={isSyncModalOpen} onOpenChange={setIsSyncModalOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Sync Changes</DialogTitle>
+            <DialogDescription>Review and edit the commit message before pushing to remote.</DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 space-y-2">
+            <div className="text-xs text-[hsl(var(--muted-foreground))]">Commit message</div>
+            <Textarea
+              value={syncCommitMessage}
+              onChange={(e) => {
+                setSyncCommitMessage(e.target.value)
+                if (syncCommitError) setSyncCommitError(null)
+              }}
+              placeholder="Describe your changes..."
+              className="min-h-[96px]"
+              error={syncCommitError || undefined}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={handleDraftMessageWithAgent} disabled={syncStatus === 'syncing'}>
+              Draft with Agent
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setIsSyncModalOpen(false)} disabled={syncStatus === 'syncing'}>
+              Cancel
+            </Button>
+            <Button type="button" variant="primary" onClick={handleConfirmSync} disabled={syncStatus === 'syncing'}>
+              {syncStatus === 'syncing' ? <Loader2 size={14} className="animate-spin" /> : null}
+              Sync
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

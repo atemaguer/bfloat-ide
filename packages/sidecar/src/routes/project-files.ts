@@ -1244,7 +1244,119 @@ projectFilesRouter.get("/git-status/:projectId", async (c) => {
         status: line.slice(0, 2).trim(),
         path: line.slice(3),
       }));
+    console.log("[project-files] git-status", {
+      projectId,
+      ok: result.ok,
+      changedFiles: files.length,
+    });
     return c.json({ isGitRepo: true, files, clean: files.length === 0 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[project-files] git-status error", { projectId, error: msg });
+    return c.json({ success: false, error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /git-sync-status/:projectId
+// ---------------------------------------------------------------------------
+projectFilesRouter.get("/git-sync-status/:projectId", async (c) => {
+  const projectId = c.req.param("projectId");
+  const root = projectRoot(projectId);
+
+  if (!fs.existsSync(root)) {
+    return c.json({ error: "Project not found" }, 404);
+  }
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ isGitRepo: false });
+  }
+
+  try {
+    const branch = await getConfiguredRemoteBranch(root);
+    const localHeadResult = await runGit(["rev-parse", "HEAD"], root);
+    const localHasCommits = localHeadResult.ok && Boolean(localHeadResult.stdout);
+
+    // Refresh remote tracking ref for accurate ahead/behind counts.
+    const fetchResult = await runGit(["fetch", "origin", branch], root);
+    const missingRemoteRef = /couldn't find remote ref/i.test(fetchResult.stderr || "");
+    if (!fetchResult.ok && !missingRemoteRef) {
+      return c.json({ success: false, error: fetchResult.stderr || "Failed to fetch remote branch" }, 500);
+    }
+
+    const remoteHeadResult = missingRemoteRef
+      ? { ok: false, stdout: "", stderr: fetchResult.stderr }
+      : await runGit(["rev-parse", `origin/${branch}`], root);
+    const remoteHasCommits = remoteHeadResult.ok && Boolean(remoteHeadResult.stdout);
+
+    if (!localHasCommits && !remoteHasCommits) {
+      return c.json({
+        isGitRepo: true,
+        branch,
+        localHead: null,
+        remoteHead: null,
+        ahead: 0,
+        behind: 0,
+        diverged: false,
+        inSync: true,
+        remoteMissing: true,
+      });
+    }
+
+    if (localHasCommits && !remoteHasCommits) {
+      const localCount = await runGit(["rev-list", "--count", "HEAD"], root);
+      const ahead = localCount.ok ? Number.parseInt(localCount.stdout || "0", 10) : 0;
+      return c.json({
+        isGitRepo: true,
+        branch,
+        localHead: localHeadResult.stdout.trim(),
+        remoteHead: null,
+        ahead,
+        behind: 0,
+        diverged: false,
+        inSync: false,
+        remoteMissing: true,
+      });
+    }
+
+    if (!localHasCommits && remoteHasCommits) {
+      const remoteCount = await runGit(["rev-list", "--count", `origin/${branch}`], root);
+      const behind = remoteCount.ok ? Number.parseInt(remoteCount.stdout || "0", 10) : 0;
+      return c.json({
+        isGitRepo: true,
+        branch,
+        localHead: null,
+        remoteHead: remoteHeadResult.stdout.trim(),
+        ahead: 0,
+        behind,
+        diverged: false,
+        inSync: behind === 0,
+        remoteMissing: false,
+      });
+    }
+
+    const countsResult = await runGit(["rev-list", "--left-right", "--count", `HEAD...origin/${branch}`], root);
+    if (!countsResult.ok || !countsResult.stdout) {
+      return c.json({ success: false, error: countsResult.stderr || "Failed to compute sync status" }, 500);
+    }
+
+    const [aheadRaw, behindRaw] = countsResult.stdout.trim().split(/\s+/);
+    const ahead = Number.parseInt(aheadRaw ?? "0", 10);
+    const behind = Number.parseInt(behindRaw ?? "0", 10);
+    const diverged = ahead > 0 && behind > 0;
+    const inSync = ahead === 0 && behind === 0;
+
+    return c.json({
+      isGitRepo: true,
+      branch,
+      localHead: localHeadResult.stdout.trim(),
+      remoteHead: remoteHeadResult.stdout.trim(),
+      ahead,
+      behind,
+      diverged,
+      inSync,
+      remoteMissing: false,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ success: false, error: msg }, 500);
@@ -1295,9 +1407,15 @@ projectFilesRouter.post("/git-commit/:projectId", async (c) => {
   }
 
   try {
+    console.log("[project-files] git-commit start", {
+      projectId,
+      push: parsed.data.push,
+      message: parsed.data.message,
+    });
     // Stage everything
     const addResult = await runGit(["add", "-A"], root);
     if (!addResult.ok) {
+      console.warn("[project-files] git-commit add failed", { projectId, error: addResult.stderr });
       return c.json({ success: false, error: addResult.stderr }, 500);
     }
 
@@ -1307,21 +1425,26 @@ projectFilesRouter.post("/git-commit/:projectId", async (c) => {
       root
     );
     if (!commitResult.ok) {
+      console.warn("[project-files] git-commit commit failed", { projectId, error: commitResult.stderr });
       return c.json({ success: false, error: commitResult.stderr }, 500);
     }
 
     // Optionally push
     if (parsed.data.push) {
       const remoteBranch = await getConfiguredRemoteBranch(root);
+      console.log("[project-files] git-commit pushing", { projectId, remoteBranch });
       const pushResult = await runGit(["push", "-u", "origin", `HEAD:${remoteBranch}`], root);
       if (!pushResult.ok) {
+        console.warn("[project-files] git-commit push failed", { projectId, remoteBranch, error: pushResult.stderr });
         return c.json({ success: false, error: pushResult.stderr }, 500);
       }
     }
 
+    console.log("[project-files] git-commit complete", { projectId });
     return c.json({ success: true, sha: commitResult.stdout });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[project-files] git-commit error", { projectId, error: msg });
     return c.json({ success: false, error: msg }, 500);
   }
 });
@@ -1339,13 +1462,17 @@ projectFilesRouter.post("/git-push/:projectId", async (c) => {
 
   try {
     const remoteBranch = await getConfiguredRemoteBranch(root);
+    console.log("[project-files] git-push start", { projectId, remoteBranch });
     const result = await runGit(["push", "-u", "origin", `HEAD:${remoteBranch}`], root);
     if (!result.ok) {
+      console.warn("[project-files] git-push failed", { projectId, remoteBranch, error: result.stderr });
       return c.json({ success: false, error: result.stderr }, 500);
     }
+    console.log("[project-files] git-push complete", { projectId, remoteBranch });
     return c.json({ success: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[project-files] git-push error", { projectId, error: msg });
     return c.json({ success: false, error: msg }, 500);
   }
 });

@@ -141,6 +141,23 @@ export const projectFilesApiSchema = {
     return: z.boolean(),
   },
 
+  // Git: compare local and remote branch heads
+  'project:getGitSyncStatus': {
+    args: z.tuple([]),
+    return: z.object({
+      isGitRepo: z.boolean().optional(),
+      branch: z.string().optional(),
+      localHead: z.string().optional(),
+      remoteHead: z.string().optional(),
+      ahead: z.number().optional(),
+      behind: z.number().optional(),
+      diverged: z.boolean().optional(),
+      inSync: z.boolean().optional(),
+      success: z.boolean().optional(),
+      error: z.string().optional(),
+    }),
+  },
+
   // Get current project path
   'project:getPath': {
     args: z.tuple([]),

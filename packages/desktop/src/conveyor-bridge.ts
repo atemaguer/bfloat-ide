@@ -1535,10 +1535,12 @@ export const projectFilesBridge = {
   commitAndPush: async (message: string): Promise<void> => {
     const pid = _activeProjectId
     if (!pid) throw new Error("No active project — call open() first")
+    console.log("[conveyor-bridge] projectFiles.commitAndPush start", { projectId: pid, message })
     await getSidecarApiSync().http.post<void>(
       `/api/project-files/git-commit/${pid}`,
       { message, push: true },
     )
+    console.log("[conveyor-bridge] projectFiles.commitAndPush complete", { projectId: pid })
   },
 
   syncToRemote: async (_authenticatedUrl?: string): Promise<void> => {
@@ -1562,15 +1564,72 @@ export const projectFilesBridge = {
     if (!pid) return false
     try {
       const result = await getSidecarApiSync().http.get<{
+        success?: boolean
+        error?: string
         isGitRepo?: boolean
         files?: unknown[]
         clean?: boolean
       }>(`/api/project-files/git-status/${pid}`)
+      if (result?.success === false || result?.error) {
+        throw new Error(result?.error || "Failed to read git status")
+      }
+      console.log("[conveyor-bridge] projectFiles.hasChanges status", {
+        projectId: pid,
+        isGitRepo: result?.isGitRepo ?? null,
+        clean: result?.clean ?? null,
+        files: result?.files?.length ?? 0,
+      })
       if (typeof result?.clean === "boolean") return !result.clean
       return (result?.files?.length ?? 0) > 0
     } catch (err) {
       console.warn("[conveyor-bridge] projectFiles.hasChanges error:", err)
-      return false
+      throw err instanceof Error ? err : new Error(String(err))
+    }
+  },
+
+  getGitSyncStatus: async (): Promise<{
+    isGitRepo?: boolean
+    branch?: string
+    localHead?: string
+    remoteHead?: string
+    ahead?: number
+    behind?: number
+    diverged?: boolean
+    inSync?: boolean
+    success?: boolean
+    error?: string
+  }> => {
+    const pid = _activeProjectId
+    if (!pid) {
+      return { success: false, error: "No active project — call open() first" }
+    }
+    try {
+      const result = await getSidecarApiSync().http.get<{
+        isGitRepo?: boolean
+        branch?: string
+        localHead?: string
+        remoteHead?: string
+        ahead?: number
+        behind?: number
+        diverged?: boolean
+        inSync?: boolean
+        success?: boolean
+        error?: string
+      }>(`/api/project-files/git-sync-status/${pid}`)
+      if (result?.success === false || result?.error) {
+        throw new Error(result?.error || "Failed to read git sync status")
+      }
+      console.log("[conveyor-bridge] projectFiles.getGitSyncStatus", {
+        projectId: pid,
+        branch: result?.branch ?? null,
+        ahead: result?.ahead ?? null,
+        behind: result?.behind ?? null,
+        inSync: result?.inSync ?? null,
+      })
+      return result
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.getGitSyncStatus error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
     }
   },
 
