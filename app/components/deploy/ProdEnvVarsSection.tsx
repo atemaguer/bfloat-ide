@@ -9,7 +9,7 @@ export function ProdEnvVarsSection({ projectId: _projectId }: ProdEnvVarsSection
   const [isExpanded, setIsExpanded] = useState(false)
 
   return (
-    <div className="border border-border rounded-[10px] overflow-hidden">
+    <div className="border-0 bg-background rounded-[10px] overflow-hidden">
       {/* Header - clickable to expand/collapse */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
@@ -23,7 +23,7 @@ export function ProdEnvVarsSection({ projectId: _projectId }: ProdEnvVarsSection
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="border-t border-border">
+        <div className="border-t border-transparent">
           <div className="flex flex-col items-center justify-center py-6 gap-2">
             <span className="text-xs text-muted-foreground">
               Production variables are managed locally via <code className="font-mono">.env.local</code>

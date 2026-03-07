@@ -47,6 +47,7 @@ import { TerminalFallbackStep } from './TerminalFallbackStep'
 import type { iOSCredentialStatus } from '@/app/utils/ios-credentials'
 import type { IOSBuildProgress, CheckASCApiKeyResult } from '@/lib/conveyor/schemas/deploy-schema'
 import { getDefaultEasConfig } from '@/app/utils/eas-config'
+import { sanitizeDeployError, dumpDeployErrorPayload } from '@/app/utils/deploy-error'
 import { deploy, filesystem } from '@/app/api/sidecar'
 
 type WizardStep =
@@ -223,6 +224,14 @@ export function IOSSetupWizard({
   const openRef = useRef(open)
   const expoConnected = tokens.expo !== null
 
+  const normalizeAndDumpError = useCallback(
+    (rawError: string | null | undefined, fallback: string, context: string) => {
+      void dumpDeployErrorPayload({ rawError, context, projectPath })
+      return sanitizeDeployError(rawError, fallback, context)
+    },
+    [projectPath]
+  )
+
   // Default credential status if null
   const status = credentialStatus ?? {
     hasExpoToken: false,
@@ -362,7 +371,7 @@ export function IOSSetupWizard({
         setCurrentStep('api-key-setup')
       }
     },
-    [expoConnected, projectPath, tokens.expo?.username, onComplete, hasExistingAppleSession]
+    [expoConnected, projectPath, tokens.expo?.username, onComplete, hasExistingAppleSession, projectTitle]
   )
 
   // Handle Apple credentials submission - immediately hand off to Claude Code
@@ -382,11 +391,17 @@ export function IOSSetupWizard({
         setIsAuthenticating(false)
         onComplete()
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to prepare deployment')
+        setError(
+          normalizeAndDumpError(
+            err instanceof Error ? err.message : 'Failed to prepare deployment',
+            'Failed to prepare deployment',
+            'ios-wizard:apple-credentials-submit'
+          )
+        )
         setIsAuthenticating(false)
       }
     },
-    [projectPath, tokens.expo?.username, onComplete]
+    [projectPath, tokens.expo?.username, onComplete, projectTitle, normalizeAndDumpError]
   )
 
   // Handle 2FA code submission
@@ -397,9 +412,15 @@ export function IOSSetupWizard({
       // Will return to build-progress via event
       deployStore.resetInteractiveAuth()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit code')
+      setError(
+        normalizeAndDumpError(
+          err instanceof Error ? err.message : 'Failed to submit code',
+          'Failed to submit code',
+          'ios-wizard:submit-2fa'
+        )
+      )
     }
-  }, [])
+  }, [normalizeAndDumpError])
 
   // Handle file upload for .p8 key
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -452,14 +473,20 @@ export function IOSSetupWizard({
         setIsSavingKey(false)
         onComplete()
       } else {
-        setError(result.error || 'Failed to save API key')
+        setError(normalizeAndDumpError(result.error, 'Failed to save API key', 'ios-wizard:save-api-key-result'))
         setIsSavingKey(false)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save API key')
+      setError(
+        normalizeAndDumpError(
+          err instanceof Error ? err.message : 'Failed to save API key',
+          'Failed to save API key',
+          'ios-wizard:save-api-key-catch'
+        )
+      )
       setIsSavingKey(false)
     }
-  }, [keyId, issuerId, keyContent, projectPath, tokens.expo?.username, onComplete])
+  }, [keyId, issuerId, keyContent, projectPath, tokens.expo?.username, onComplete, projectTitle, normalizeAndDumpError])
 
   // Handle continuing with existing key - trigger Claude Code
   const handleContinueWithExistingKey = useCallback(async () => {
@@ -502,13 +529,13 @@ export function IOSSetupWizard({
         }
       } else if (progress.step === 'error') {
         setIsBuilding(false)
-        setError(progress.error || 'Build failed')
+        setError(normalizeAndDumpError(progress.error, 'Build failed', 'ios-wizard:on-build-progress-error'))
         if (!openRef.current) {
           deployStore.showDeploymentNotification({
             id: `deploy-toast-${Date.now()}`,
             platform: 'ios',
             status: 'error',
-            message: progress.error || 'iOS build failed.',
+            message: normalizeAndDumpError(progress.error, 'iOS build failed.', 'ios-wizard:on-build-progress-toast'),
           })
         }
       }
@@ -549,11 +576,17 @@ export function IOSSetupWizard({
       })
 
       if (!result.success) {
-        setError(result.error || 'Build failed')
+        setError(normalizeAndDumpError(result.error, 'Build failed', 'ios-wizard:start-build-result'))
         setIsBuilding(false)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Build failed')
+      setError(
+        normalizeAndDumpError(
+          err instanceof Error ? err.message : 'Build failed',
+          'Build failed',
+          'ios-wizard:start-build-catch'
+        )
+      )
       setIsBuilding(false)
     }
   }

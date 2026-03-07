@@ -5,7 +5,7 @@
  * Uses CLI commands to get available accounts.
  */
 
-import { deploy, terminal, provider } from '@/app/api/sidecar'
+import { terminal, filesystem } from '@/app/api/sidecar'
 
 export interface EasAccount {
   name: string
@@ -18,6 +18,8 @@ export interface EasAccountsResult {
   currentUser?: string
   error?: string
 }
+
+let inFlightAccountsFetch: Promise<EasAccountsResult> | null = null
 
 /**
  * Parse the output of `eas whoami` to extract available accounts
@@ -37,7 +39,21 @@ export interface EasAccountsResult {
  * ```
  */
 function parseWhoamiOutput(output: string): EasAccountsResult {
-  const lines = output.split('\n').map((l) => l.trim())
+  const lines = output
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((line) => {
+      if (!line) return false
+      // Drop shell noise/prompt echoes that can appear in PTY captures.
+      if (
+        line.startsWith('➜') ||
+        line.startsWith('$ ') ||
+        line.startsWith('npx -y eas-cli whoami')
+      ) {
+        return false
+      }
+      return true
+    })
 
   if (lines.length === 0) {
     return { success: false, accounts: [], error: 'No output from eas whoami' }
@@ -52,15 +68,16 @@ function parseWhoamiOutput(output: string): EasAccountsResult {
   let currentUser: string | undefined
 
   // Parse account lines (format: "• account_name (Role: RoleName)")
-  const accountPattern = /^[•\-\*]\s*(\S+)\s*\(Role:\s*(\w+)\)/i
+  const accountPattern = /^[•*-]\s*(\S+)\s*\(Role:\s*(\w+)\)/i
 
   // Find the "Accounts:" section and parse accounts
   let inAccountsSection = false
 
   for (const line of lines) {
-    // Skip empty lines and version warning lines
+    // Skip empty lines and informational noise lines
     if (!line || line.startsWith('★') || line.startsWith('To upgrade') ||
-        line.startsWith('npm install') || line.startsWith('Proceeding with')) {
+        line.startsWith('npm install') || line.startsWith('Proceeding with') ||
+        line.startsWith('error: could not lock config file')) {
       continue
     }
 
@@ -89,6 +106,14 @@ function parseWhoamiOutput(output: string): EasAccountsResult {
   }
 
   if (accounts.length === 0) {
+    // Fallback: older/partial outputs may only include the active user.
+    if (currentUser) {
+      return {
+        success: true,
+        accounts: [{ name: currentUser, role: 'owner' }],
+        currentUser,
+      }
+    }
     return { success: false, accounts: [], error: 'No accounts found in output' }
   }
 
@@ -103,17 +128,22 @@ function parseWhoamiOutput(output: string): EasAccountsResult {
  * Fetch available EAS accounts using the CLI
  */
 export async function fetchEasAccounts(): Promise<EasAccountsResult> {
+  if (inFlightAccountsFetch) {
+    return inFlightAccountsFetch
+  }
+
+  inFlightAccountsFetch = fetchEasAccountsInternal()
+  try {
+    return await inFlightAccountsFetch
+  } finally {
+    inFlightAccountsFetch = null
+  }
+}
+
+async function fetchEasAccountsInternal(): Promise<EasAccountsResult> {
   const terminalId = `eas-whoami-${Date.now()}`
-  let output = ''
 
   try {
-    // Set up output listener
-    terminal.onData(terminalId, (id, data) => {
-      if (id === terminalId) {
-        output += data
-      }
-    })
-
     // Create terminal
     const result = await terminal.create(terminalId)
     if (!result.success) {
@@ -121,11 +151,9 @@ export async function fetchEasAccounts(): Promise<EasAccountsResult> {
       return { success: false, accounts: [], error: 'Failed to create terminal' }
     }
 
-    // Run whoami command
-    await terminal.runCommand(terminalId, 'npx -y eas-cli whoami 2>&1')
-
-    // Wait for output (eas-cli can be slow, especially first run)
-    await new Promise((resolve) => setTimeout(resolve, 8000))
+    // Execute and capture command output deterministically.
+    const execResult = await terminal.executeCommand(terminalId, 'npx -y eas-cli whoami 2>&1')
+    const output = execResult.output ?? ''
 
     console.log('[EasAccounts] Raw output:', output)
 
@@ -144,7 +172,7 @@ export async function fetchEasAccounts(): Promise<EasAccountsResult> {
   } finally {
     try {
       terminal.removeListeners(terminalId)
-      terminal.kill(terminalId)
+      await terminal.kill(terminalId)
     } catch {
       // Ignore cleanup errors
     }
@@ -157,7 +185,8 @@ export async function fetchEasAccounts(): Promise<EasAccountsResult> {
 export async function getProjectOwner(projectPath: string): Promise<string | null> {
   try {
     const appJsonPath = `${projectPath}/app.json`
-    const result = await provider.filesystem.readFile(appJsonPath)
+    if (!filesystem) return null
+    const result = await filesystem.readFile(appJsonPath)
 
     if (result.success && result.content) {
       const appConfig = JSON.parse(result.content)
@@ -180,7 +209,10 @@ export async function setProjectOwner(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const appJsonPath = `${projectPath}/app.json`
-    const result = await provider.filesystem.readFile(appJsonPath)
+    if (!filesystem) {
+      return { success: false, error: 'Filesystem API not available' }
+    }
+    const result = await filesystem.readFile(appJsonPath)
 
     if (!result.success || !result.content) {
       return { success: false, error: 'Could not read app.json' }
@@ -201,12 +233,13 @@ export async function setProjectOwner(
 
     appConfig.expo.owner = owner
 
-    // ALWAYS remove projectId when setting owner to ensure eas init links to correct account
-    // The projectId is account-specific, so it must be regenerated for a different owner
-    if (appConfig.expo.extra?.eas?.projectId) {
-      console.log('[setProjectOwner] Removing projectId to force re-link')
+    // Only remove projectId when owner actually changes.
+    // Keeping the existing projectId avoids unnecessary EAS relink prompts for
+    // the same owner during repeated deployments.
+    const ownerChanged = Boolean(currentOwner) && currentOwner !== owner
+    if (ownerChanged && appConfig.expo.extra?.eas?.projectId) {
+      console.log('[setProjectOwner] Removing projectId because owner changed')
       delete appConfig.expo.extra.eas.projectId
-      // Clean up empty objects
       if (Object.keys(appConfig.expo.extra.eas).length === 0) {
         delete appConfig.expo.extra.eas
       }
@@ -218,7 +251,7 @@ export async function setProjectOwner(
     const newContent = JSON.stringify(appConfig, null, 2)
     console.log('[setProjectOwner] Writing app.json with owner:', owner)
 
-    await provider.filesystem.writeFile(appJsonPath, newContent)
+    await filesystem.writeFile(appJsonPath, newContent)
 
     return { success: true }
   } catch (error) {
