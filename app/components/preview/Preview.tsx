@@ -736,7 +736,7 @@ export function Preview(props: PreviewProps) {
               onChange={(e) => setUrlInput(e.target.value)}
               onKeyDown={handleUrlSubmit}
               placeholder="Enter URL (e.g., localhost:9000)"
-              className="h-8 flex-1 appearance-none rounded-lg border-0 bg-[oklch(0.227_0_0)] px-3 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-0"
+              className="h-8 flex-1 appearance-none rounded-lg border-0 bg-black/10 px-3 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-0 dark:bg-black/28"
             />
 
             {!isTauri && (
