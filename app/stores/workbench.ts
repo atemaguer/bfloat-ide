@@ -33,6 +33,12 @@ export interface PendingPromptRequest {
   createdAt: number
 }
 
+export interface PendingCommitMessageDraftRequest {
+  id: string
+  createdAt: number
+  source?: string
+}
+
 // Store a reference to the workbench's runCommand function
 let workbenchRunCommand: ((command: string, terminalId?: string) => Promise<void>) | null = null
 
@@ -92,6 +98,10 @@ export class WorkbenchStore {
 
   // Pending screenshot from Preview — consumed by Chat to add as attachment
   pendingScreenshot = createStore<string | null>(() => null)
+
+  // Pending commit message draft request/result for sync modal
+  pendingCommitMessageDraftRequest = createStore<PendingCommitMessageDraftRequest | null>(() => null)
+  pendingCommitMessageDraft = createStore<string | null>(() => null)
 
   // Pending integration connect request - consumed by ProjectSettings
   pendingIntegrationConnect = createStore<PendingIntegrationConnectRequest | null>(() => null)
@@ -254,6 +264,37 @@ export class WorkbenchStore {
     console.log('[workbenchStore] pendingPrompt before:', this.pendingPrompt.getState())
     this.pendingPrompt.setState(null, true)
     console.log('[workbenchStore] pendingPrompt after: null')
+  }
+
+  /**
+   * Request a commit message draft from chat/agent.
+   * Returns a stable request id for correlating completion.
+   */
+  requestCommitMessageDraft(source: string = 'workbench'): string {
+    const request: PendingCommitMessageDraftRequest = {
+      id: `commit-draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: Date.now(),
+      source,
+    }
+    this.pendingCommitMessageDraftRequest.setState(request, true)
+    this.pendingCommitMessageDraft.setState(null, true)
+    this.isChatCollapsed.setState(false, true)
+    return request.id
+  }
+
+  /**
+   * Resolve a pending commit message draft request.
+   * Ignores stale request ids.
+   */
+  resolveCommitMessageDraft(requestId: string, draft: string): void {
+    const current = this.pendingCommitMessageDraftRequest.getState()
+    if (!current || current.id !== requestId) return
+    this.pendingCommitMessageDraft.setState(draft, true)
+    this.pendingCommitMessageDraftRequest.setState(null, true)
+  }
+
+  clearPendingCommitMessageDraft(): void {
+    this.pendingCommitMessageDraft.setState(null, true)
   }
 
   /**
@@ -714,6 +755,8 @@ export class WorkbenchStore {
     // Clear pending screenshot
     this.pendingPrompt.setState(null, true)
     this.pendingScreenshot.setState(null, true)
+    this.pendingCommitMessageDraftRequest.setState(null, true)
+    this.pendingCommitMessageDraft.setState(null, true)
     this.pendingIntegrationConnect.setState(null, true)
     this.pendingIntegrationChoice.setState(null, true)
     this.secretsVersion.setState(0, true)

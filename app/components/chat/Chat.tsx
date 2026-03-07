@@ -52,6 +52,25 @@ const FRONTEND_DESIGN_SKILL_PREFIX =
 const CONVEX_SETUP_PROMPT = 'Use the /convex-setup skill to set up Convex backend integration for this project'
 const CONVEX_AUTH_PROMPT = 'Use the /convex-auth skill to set up Convex Better Auth (email/password) for this project'
 
+function extractCommitDraftFromMessage(message: ChatMessage): string | null {
+  const content = (message.content || '').trim()
+  if (content) {
+    const firstLine = content.split('\n').map(line => line.trim()).find(Boolean)
+    return firstLine || null
+  }
+
+  for (const part of message.parts || []) {
+    if (part?.type === 'text') {
+      const text = (part.text || '').trim()
+      if (!text) continue
+      const firstLine = text.split('\n').map(line => line.trim()).find(Boolean)
+      if (firstLine) return firstLine
+    }
+  }
+
+  return null
+}
+
 function withFrontendDesignSkillPrompt(prompt: string): string {
   if (/\b\/frontend-design\b/i.test(prompt)) {
     return prompt
@@ -1625,6 +1644,7 @@ export function Chat({
 
   // Watch for pending prompts from external components (e.g., deployment)
   const pendingPromptRequest = useStore(workbenchStore.pendingPrompt)
+  const pendingCommitMessageDraftRequest = useStore(workbenchStore.pendingCommitMessageDraftRequest)
   useEffect(() => {
     if (!pendingIntegrationChoice || pendingIntegrationChoice.integrationId !== 'convex') {
       return
@@ -1816,6 +1836,26 @@ export function Chat({
 
     run()
   }, [pendingPromptRequest, isStreaming, usableProjectPath, handleSubmit, convexSecretStatus, waitForRequiredSecrets])
+
+  useEffect(() => {
+    if (!pendingCommitMessageDraftRequest || isStreaming) return
+
+    const requestCreatedAt = pendingCommitMessageDraftRequest.createdAt
+    const latestAssistantMessage = [...messages]
+      .reverse()
+      .find((msg) => msg.role === 'assistant' && new Date(msg.createdAt || 0).getTime() >= requestCreatedAt)
+
+    if (!latestAssistantMessage) return
+
+    const draft = extractCommitDraftFromMessage(latestAssistantMessage)
+    if (!draft) {
+      workbenchStore.resolveCommitMessageDraft(pendingCommitMessageDraftRequest.id, 'Update project changes')
+      return
+    }
+
+    workbenchStore.resolveCommitMessageDraft(pendingCommitMessageDraftRequest.id, draft)
+    toast.success('Commit message draft ready')
+  }, [pendingCommitMessageDraftRequest, isStreaming, messages])
 
   // Extract todos from messages (find most recent TodoWrite)
   const todos = useMemo(() => {
