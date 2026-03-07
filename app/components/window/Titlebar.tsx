@@ -54,6 +54,7 @@ const ProjectTitlebarContent = ({
 
   // Subscribe to current project from workbench store (already loaded by ProjectPage)
   const currentProject = useStore(workbenchStore.currentProject)
+  const pendingCommitMessageDraft = useStore(workbenchStore.pendingCommitMessageDraft)
   const activeTab = useStore(workbenchStore.activeTab)
   const isChatCollapsed = useStore(workbenchStore.isChatCollapsed)
   const activeDeployment = useStore(deployStore.activeDeployment)
@@ -218,9 +219,17 @@ const ProjectTitlebarContent = ({
   }
 
   const handleDraftMessageWithAgent = () => {
+    workbenchStore.requestCommitMessageDraft('workbench')
     workbenchStore.triggerChatPrompt(AGENT_COMMIT_MESSAGE_PROMPT, { source: 'workbench' })
     toast.success('Asked agent to draft a commit message')
   }
+
+  useEffect(() => {
+    if (!isSyncModalOpen || !pendingCommitMessageDraft) return
+    setSyncCommitMessage(pendingCommitMessageDraft)
+    setSyncCommitError(null)
+    workbenchStore.clearPendingCommitMessageDraft()
+  }, [isSyncModalOpen, pendingCommitMessageDraft])
 
   return (
     <>
