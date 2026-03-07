@@ -116,10 +116,15 @@ export async function getProjectById(projectId: string): Promise<Project | null>
 // Loose schema — we accept any extra fields so the sidecar stays compatible
 // with whatever shape the Tauri frontend sends.
 const AgentSessionSchema = z.object({
-  sessionId: z.string().min(1),
+  // Accept both modern and legacy shapes during full-project updates.
+  sessionId: z.string().min(1).optional(),
+  id: z.string().min(1).optional(),
   title: z.string().optional(),
-  createdAt: z.string(),
+  createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
+  lastUsedAt: z.string().optional(),
+  provider: z.string().optional(),
+  name: z.string().nullable().optional(),
   status: z.string().optional(),
   totalTokens: z.number().optional(),
   totalCostUsd: z.number().optional(),
@@ -273,6 +278,7 @@ localProjectsRouter.put("/:id", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const parsed = ProjectSchema.safeParse(body);
   if (!parsed.success) {
+    console.warn(`[LocalProjects] update rejected for ${id}:`, parsed.error.flatten());
     return c.json({ error: "Invalid project data", details: parsed.error.flatten() }, 400);
   }
 
