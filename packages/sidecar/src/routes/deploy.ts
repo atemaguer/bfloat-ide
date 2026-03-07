@@ -18,7 +18,7 @@
  *   POST /api/deploy/cancel               – cancel active build
  *   POST /api/deploy/save-asc-api-key     – save App Store Connect API key
  *   GET  /api/deploy/check-asc-api-key    – check ASC API key config
- *   GET  /api/deploy/apple-sessions       – list Apple sessions (filesystem-based)
+ *   GET  /api/deploy/apple-sessions       – list Apple sessions (Fastlane cookie-based)
  *   POST /api/deploy/clear-apple-session  – delete Apple session files
  *   POST /api/deploy/write-apple-creds    – write temp credentials file
  *   POST /api/deploy/delete-creds-file    – delete credentials file
@@ -42,7 +42,7 @@ function getASCKeysDir(): string {
 }
 
 function getAppleSessionsDir(): string {
-  return path.join(os.homedir(), ".bfloat-ide", "apple-sessions");
+  return path.join(os.homedir(), ".app-store", "auth");
 }
 
 // ---------------------------------------------------------------------------
@@ -90,8 +90,6 @@ function getEnhancedEnv(extra?: Record<string, string>): Record<string, string> 
     ...extra,
   };
 }
-
-console.log("[Deploy] bun-pty imported for deploy route");
 
 // ---------------------------------------------------------------------------
 // ANSI cleaner (mirrors deploy-handler cleanAnsi)
@@ -1006,44 +1004,40 @@ deployRouter.get("/check-asc-api-key", async (c) => {
 
 // ---------------------------------------------------------------------------
 // Apple session management
-// The Electron handler used the AppleSessionManager class which stored session
-// info in ~/.bfloat-ide/apple-sessions/. We replicate that filesystem format.
+// Fastlane stores Apple sessions at ~/.app-store/auth/<appleId>/cookie.
 // ---------------------------------------------------------------------------
-
-interface AppleSession {
-  appleId: string;
-  createdAt: string;
-  lastUsedAt: string;
-}
-
-async function readAppleSession(appleId: string): Promise<AppleSession | null> {
-  const sessDir = getAppleSessionsDir();
-  const sessFile = path.join(sessDir, `${appleId}.json`);
-  try {
-    const raw = await Bun.file(sessFile).text();
-    return JSON.parse(raw) as AppleSession;
-  } catch {
-    return null;
-  }
-}
 
 async function listAppleSessionFiles(): Promise<string[]> {
   const sessDir = getAppleSessionsDir();
   try {
-    const entries = await fsp.readdir(sessDir);
-    return entries.filter((e) => e.endsWith(".json")).map((e) => e.slice(0, -5));
+    const entries = await fsp.readdir(sessDir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
   } catch {
     return [];
   }
 }
 
-function sessionAgeInDays(session: AppleSession): number {
-  const created = new Date(session.createdAt).getTime();
-  return (Date.now() - created) / (1000 * 60 * 60 * 24);
+function getAppleCookiePath(appleId: string): string {
+  return path.join(getAppleSessionsDir(), appleId, "cookie");
 }
 
-function isSessionValid(session: AppleSession): boolean {
-  return sessionAgeInDays(session) < 30;
+async function getAppleCookieStat(appleId: string): Promise<fs.Stats | null> {
+  try {
+    return await fsp.stat(getAppleCookiePath(appleId));
+  } catch {
+    return null;
+  }
+}
+
+function sessionAgeInDaysFromStat(stat: fs.Stats): number {
+  const lastModified = stat.mtime.getTime();
+  return (Date.now() - lastModified) / (1000 * 60 * 60 * 24);
+}
+
+function isSessionValidFromStat(stat: fs.Stats): boolean {
+  return sessionAgeInDaysFromStat(stat) < 30;
 }
 
 // GET /api/deploy/apple-sessions
@@ -1051,15 +1045,31 @@ deployRouter.get("/apple-sessions", async (c) => {
   const appleIds = await listAppleSessionFiles();
   const sessions = await Promise.all(
     appleIds.map(async (appleId) => {
-      const sess = await readAppleSession(appleId);
-      if (!sess) return null;
-      const ageInDays = sessionAgeInDays(sess);
-      const valid = isSessionValid(sess);
-      return { appleId, ageInDays, exists: true, isValid: valid };
+      const stat = await getAppleCookieStat(appleId);
+      if (!stat || (!stat.isFile() && !stat.isSymbolicLink())) return null;
+      const ageInDays = Math.floor(sessionAgeInDaysFromStat(stat));
+      const valid = isSessionValidFromStat(stat);
+      return {
+        appleId,
+        ageInDays,
+        exists: true,
+        isValid: valid,
+        statusMessage: valid
+          ? `Last authenticated ${ageInDays === 0 ? "today" : `${ageInDays} day(s) ago`}`
+          : `Session expired (${ageInDays} day(s) old)`,
+        lastModified: stat.mtime.toISOString(),
+      };
     })
   );
 
-  const filtered = sessions.filter(Boolean);
+  const filtered = sessions
+    .filter(Boolean)
+    .sort((a, b) => {
+      const aTs = a?.lastModified ? new Date(a.lastModified).getTime() : 0;
+      const bTs = b?.lastModified ? new Date(b.lastModified).getTime() : 0;
+      return bTs - aTs;
+    });
+
   return c.json({
     sessions: filtered,
     hasValidSession: filtered.some((s) => s?.isValid),
@@ -1073,14 +1083,23 @@ deployRouter.get("/check-apple-session", async (c) => {
     return c.json({ error: "appleId query parameter is required" }, 400);
   }
 
-  const session = await readAppleSession(appleId);
-  if (!session) {
+  const stat = await getAppleCookieStat(appleId);
+  if (!stat || (!stat.isFile() && !stat.isSymbolicLink())) {
     return c.json({ exists: false, appleId, isValid: false });
   }
 
-  const ageInDays = sessionAgeInDays(session);
-  const valid = isSessionValid(session);
-  return c.json({ exists: true, appleId, ageInDays, isValid: valid });
+  const ageInDays = Math.floor(sessionAgeInDaysFromStat(stat));
+  const valid = isSessionValidFromStat(stat);
+  return c.json({
+    exists: true,
+    appleId,
+    ageInDays,
+    isValid: valid,
+    statusMessage: valid
+      ? `Last authenticated ${ageInDays === 0 ? "today" : `${ageInDays} day(s) ago`}`
+      : `Session expired (${ageInDays} day(s) old)`,
+    lastModified: stat.mtime.toISOString(),
+  });
 });
 
 // POST /api/deploy/clear-apple-session
@@ -1091,12 +1110,13 @@ deployRouter.post("/clear-apple-session", async (c) => {
     return c.json({ error: "Invalid request", details: parsed.error.flatten() }, 400);
   }
 
-  const sessDir = getAppleSessionsDir();
-
   if (parsed.data.appleId) {
-    const sessFile = path.join(sessDir, `${parsed.data.appleId}.json`);
+    const sessFile = getAppleCookiePath(parsed.data.appleId);
     try {
       await fsp.unlink(sessFile);
+      try {
+        await fsp.rmdir(path.dirname(sessFile));
+      } catch { /* ignore */ }
       return c.json({ success: true, cleared: 1 });
     } catch {
       return c.json({ success: true, cleared: 0 });
@@ -1108,7 +1128,11 @@ deployRouter.post("/clear-apple-session", async (c) => {
   let cleared = 0;
   for (const appleId of appleIds) {
     try {
-      await fsp.unlink(path.join(sessDir, `${appleId}.json`));
+      const cookiePath = getAppleCookiePath(appleId);
+      await fsp.unlink(cookiePath);
+      try {
+        await fsp.rmdir(path.dirname(cookiePath));
+      } catch { /* ignore */ }
       cleared++;
     } catch { /* ignore */ }
   }

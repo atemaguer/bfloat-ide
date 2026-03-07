@@ -2,7 +2,7 @@ import { createStore } from 'zustand/vanilla'
 import type { DeployStep } from '@/app/utils/eas-output-parser'
 import type { EasAccount } from '@/app/utils/eas-accounts'
 import type { PromptType, HumanizedPrompt } from '@/lib/conveyor/schemas/deploy-schema'
-import { cleanTerminalOutput } from '@/app/utils/clean-logs'
+import { appendCleanTerminalChunk } from '@/app/utils/clean-logs'
 
 export type DeploymentPlatform = 'web' | 'android' | 'ios'
 export type DeploymentStatus = 'idle' | 'running' | 'success' | 'error'
@@ -355,8 +355,7 @@ class DeployStore {
    */
   appendIOSLog(data: string): void {
     const current = this.iOSLogs.getState()
-    const cleaned = cleanTerminalOutput(data)
-    this.iOSLogs.setState(current + cleaned, true)
+    this.iOSLogs.setState(appendCleanTerminalChunk(current, data), true)
   }
 
   /**
@@ -478,8 +477,7 @@ class DeployStore {
    */
   appendBuildLog(data: string): void {
     const current = this.buildLogs.getState()
-    const cleaned = cleanTerminalOutput(data)
-    this.buildLogs.setState(current + cleaned, true)
+    this.buildLogs.setState(appendCleanTerminalChunk(current, data), true)
   }
 
   /**

@@ -182,6 +182,8 @@ const BUILD_STEPS: Record<string, { label: string; percent: number }> = {
   error: { label: 'Error', percent: 0 },
 }
 
+const APPLE_ID_STORAGE_KEY = 'bfloat_apple_id'
+
 export function IOSSetupWizard({
   open,
   onOpenChange,
@@ -211,7 +213,30 @@ export function IOSSetupWizard({
   // Apple credential state
   const [hasExistingAppleSession, setHasExistingAppleSession] = useState(false)
   const [existingAppleId, setExistingAppleId] = useState<string | null>(null)
-  const [checkedExistingSession, setCheckedExistingSession] = useState(false)
+
+  const getCachedAppleId = useCallback((): string | null => {
+    try {
+      return localStorage.getItem(APPLE_ID_STORAGE_KEY)
+    } catch {
+      return null
+    }
+  }, [])
+
+  const pickPreferredValidSession = useCallback(
+    (sessions: Array<{ appleId?: string; isValid?: boolean }>): string | null => {
+      const validSessions = sessions.filter((session) => session.isValid && session.appleId)
+      if (validSessions.length === 0) return null
+
+      const cachedAppleId = getCachedAppleId()
+      if (cachedAppleId) {
+        const cachedMatch = validSessions.find((session) => session.appleId === cachedAppleId)
+        if (cachedMatch?.appleId) return cachedMatch.appleId
+      }
+
+      return validSessions[0]?.appleId || null
+    },
+    [getCachedAppleId]
+  )
 
   // Build progress state
   const [buildProgress, setBuildProgress] = useState<IOSBuildProgress | null>(null)
@@ -328,37 +353,26 @@ export function IOSSetupWizard({
       if (!expoConnected) {
         setCurrentStep('expo')
       } else if (method === 'apple-id') {
-        // If user explicitly chose to use different account, skip session check and go directly to form
+        // If user explicitly chose "Use different account", skip auto-session and go to credentials form.
         if (!hasExistingAppleSession) {
-          // Check for any existing Apple sessions before prompting for credentials
           try {
             const sessionsResult = await deploy.listAppleSessions()
             console.log('[IOSSetupWizard] Apple sessions check:', sessionsResult)
 
-            if (sessionsResult.hasValidSession && sessionsResult.sessions.length > 0) {
-              // Use the most recent valid session
-              const latestSession = sessionsResult.sessions[0] // Sorted by age, oldest first
-              const appleId = latestSession.appleId || ''
+            const appleId = pickPreferredValidSession(sessionsResult.sessions || [])
+            if (appleId) {
+              console.log('[IOSSetupWizard] Using existing session for:', appleId)
 
-              if (appleId && latestSession.isValid) {
-                console.log('[IOSSetupWizard] Using existing session for:', appleId, latestSession.statusMessage)
-
-                // Cache the Apple ID for future use
-                const APPLE_ID_STORAGE_KEY = 'bfloat_apple_id'
-                try {
-                  localStorage.setItem(APPLE_ID_STORAGE_KEY, appleId)
-                } catch {
-                  // Ignore localStorage errors
-                }
-
-                // Use empty password - the session will handle authentication
-                deployStore.setPendingAppleCredentials(appleId, '')
-
-                // Prepare and proceed directly to deployment
-                await ensureProjectConfiguration(projectPath, tokens.expo?.username, projectTitle)
-                onComplete()
-                return
+              try {
+                localStorage.setItem(APPLE_ID_STORAGE_KEY, appleId)
+              } catch {
+                // Ignore localStorage errors
               }
+
+              deployStore.setPendingAppleCredentials(appleId, '')
+              await ensureProjectConfiguration(projectPath, tokens.expo?.username, projectTitle)
+              onComplete()
+              return
             }
           } catch (err) {
             console.log('[IOSSetupWizard] Session check failed, showing credentials form:', err)
@@ -371,7 +385,7 @@ export function IOSSetupWizard({
         setCurrentStep('api-key-setup')
       }
     },
-    [expoConnected, projectPath, tokens.expo?.username, onComplete, hasExistingAppleSession, projectTitle]
+    [expoConnected, projectPath, tokens.expo?.username, onComplete, hasExistingAppleSession, projectTitle, pickPreferredValidSession]
   )
 
   // Handle Apple credentials submission - immediately hand off to Claude Code
@@ -622,6 +636,7 @@ export function IOSSetupWizard({
     let textToCopy = ''
     if (logTail) {
       // Strip ANSI escape codes
+      // eslint-disable-next-line no-control-regex
       const stripped = logTail.replace(/\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07/g, '')
       // Split into lines and filter
       const lines = stripped
@@ -676,35 +691,22 @@ export function IOSSetupWizard({
       deployStore.clearBuildLogs()
 
       // Check for existing Apple session
-      setCheckedExistingSession(false)
       setHasExistingAppleSession(false)
       setExistingAppleId(null)
 
-      const APPLE_ID_STORAGE_KEY = 'bfloat_apple_id'
-      let cachedAppleId: string | null = null
-      try {
-        cachedAppleId = localStorage.getItem(APPLE_ID_STORAGE_KEY)
-      } catch {
-        // Ignore localStorage errors
-      }
-
-      if (cachedAppleId) {
-        deploy.checkAppleSession(cachedAppleId)
-          .then((sessionInfo) => {
-            if (sessionInfo.exists) {
-              setExistingAppleId(cachedAppleId)
-              setHasExistingAppleSession(true)
-            }
-            setCheckedExistingSession(true)
-          })
-          .catch(() => {
-            setCheckedExistingSession(true)
-          })
-      } else {
-        setCheckedExistingSession(true)
-      }
+      deploy.listAppleSessions()
+        .then((sessionsResult) => {
+          const appleId = pickPreferredValidSession(sessionsResult.sessions || [])
+          if (appleId) {
+            setExistingAppleId(appleId)
+            setHasExistingAppleSession(true)
+          }
+        })
+        .catch(() => {
+          // Ignore lookup errors and continue with credentials flow
+        })
     }
-  }, [open])
+  }, [open, pickPreferredValidSession])
 
   const renderStepContent = () => {
     switch (currentStep) {
