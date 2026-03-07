@@ -193,15 +193,6 @@ const ProjectTitlebarContent = ({
           })}
         </div>
         <div className="window-titlebar-tabs-secondary">
-          <button
-            ref={deployButtonRef}
-            className="window-titlebar-tab deploy"
-            onClick={handleDeployClick}
-            title="Publish app"
-          >
-            {isDeploying ? <Loader2 size={11} className="animate-spin" /> : <Rocket size={11} />}
-            <span>{isDeploying ? 'Publishing...' : 'Publish'}</span>
-          </button>
           <div className={`window-titlebar-project-actions ${isGitConnected ? 'connected' : 'disconnected'}`}>
             <button
               className={`window-titlebar-icon-btn ${syncStatus === 'syncing' ? 'syncing' : ''} ${syncStatus === 'success' ? 'success' : ''} ${syncStatus === 'error' ? 'error' : ''}`}
@@ -222,6 +213,15 @@ const ProjectTitlebarContent = ({
               {syncStatus === 'success' ? <Check size={13} /> : <RefreshCw size={13} className={syncStatus === 'syncing' ? 'animate-spin' : ''} />}
             </button>
           </div>
+          <button
+            ref={deployButtonRef}
+            className="window-titlebar-tab deploy"
+            onClick={handleDeployClick}
+            title="Publish app"
+          >
+            {isDeploying ? <Loader2 size={11} className="animate-spin" /> : <Rocket size={11} />}
+            <span>{isDeploying ? 'Publishing...' : 'Publish'}</span>
+          </button>
         </div>
       </div>
       {/* Publish modal - rendered unconditionally, manages its own visibility */}
