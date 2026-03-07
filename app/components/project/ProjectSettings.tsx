@@ -1028,15 +1028,17 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
               )}
 
               <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleConnectGit}
-                  disabled={isUpdatingGit}
-                >
-                  {isUpdatingGit ? <Loader2 size={14} className="animate-spin" /> : <GitBranch size={14} />}
-                  Connect Remote
-                </Button>
+                {!isGitConnected && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleConnectGit}
+                    disabled={isUpdatingGit}
+                  >
+                    {isUpdatingGit ? <Loader2 size={14} className="animate-spin" /> : <GitBranch size={14} />}
+                    Connect Remote
+                  </Button>
+                )}
                 {gitConnectSessionId && (
                   <Button
                     type="button"
