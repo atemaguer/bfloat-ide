@@ -74,6 +74,8 @@ export interface Project {
   importError?: string | null
   // Git remote URL for syncing (GitHub URL for imports, Gitea URL for regular projects)
   sourceUrl?: string | null
+  // Preferred remote branch for syncing (defaults to "main" when not set)
+  sourceBranch?: string | null
   // Shared custom instructions appended to AGENTS.md and CLAUDE.md
   agentInstructions?: string
   // Team sharing

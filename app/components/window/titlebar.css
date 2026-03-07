@@ -143,9 +143,15 @@
 .window-titlebar-project-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-right: 8px;
+  gap: 0;
+  margin-left: 6px;
+  margin-right: 0;
+  min-width: 26px;
   -webkit-app-region: no-drag;
+}
+
+.window-titlebar-project-actions.disconnected {
+  visibility: hidden;
 }
 
 .window-titlebar-icon-btn {
@@ -263,6 +269,7 @@
 .window-titlebar-tabs-secondary {
   display: flex;
   align-items: center;
+  gap: 6px;
   margin-left: 8px;
   flex-shrink: 0;
   -webkit-app-region: no-drag;

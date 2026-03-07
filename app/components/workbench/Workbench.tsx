@@ -1456,7 +1456,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
               {/* Settings Tab */}
               {activeTab === 'settings' && (
                 <div className="workbench-tab-panel settings">
-                  <ProjectSettings project={project} />
+                  <ProjectSettings key={project.id} project={project} />
                 </div>
               )}
             </div>

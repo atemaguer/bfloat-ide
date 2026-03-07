@@ -66,18 +66,19 @@ function ProjectPageContent() {
     const loadProject = async () => {
       setIsLoading(true)
       try {
-        // First try to get from memory
-        let proj = localProjectsStore.get(id)
-
-        // If not in memory, load from storage
-        if (!proj) {
-          await localProjectsStore.load()
-          proj = localProjectsStore.get(id)
-        }
+        // Always refresh from storage to avoid stale in-memory metadata
+        // (e.g., sourceUrl/sourceBranch updated in settings).
+        await localProjectsStore.load()
+        const proj = localProjectsStore.get(id)
 
         if (!proj) {
           setError(new Error('Project not found'))
         } else {
+          console.log('[ProjectPage] Loaded project metadata:', {
+            projectId: proj.id,
+            hasSourceUrl: !!proj.sourceUrl,
+            sourceBranch: proj.sourceBranch || null,
+          })
           setProject(proj)
         }
       } catch (err) {

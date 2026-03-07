@@ -15,7 +15,12 @@
  *   POST /api/project-files/:projectId/git-add         – git add
  *   POST /api/project-files/:projectId/git-commit      – git commit (stages all first)
  *   POST /api/project-files/:projectId/git-push        – git push
+ *   POST /api/project-files/:projectId/git-pull        – git pull
  *   POST /api/project-files/:projectId/git-clone       – clone remote into project dir
+ *   POST /api/project-files/git-connect/start          – interactive git remote setup
+ *   GET  /api/project-files/git-connect/stream/:id     – git setup SSE events
+ *   POST /api/project-files/git-connect/input          – submit auth input
+ *   POST /api/project-files/git-connect/cancel         – cancel setup session
  *   GET  /api/project-files/:projectId/git-log         – recent git log
  *
  * All paths are resolved relative to the project root and validated to prevent
@@ -28,6 +33,8 @@ import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import type { IPty } from "bun-pty";
+import { spawn as bunPtySpawn } from "bun-pty";
 import { initializeFromTemplate } from "./template.ts";
 import { ensureSkillsInjected } from "../skills-injector.ts";
 import { getProjectById } from "./local-projects.ts";
@@ -91,6 +98,76 @@ async function runGit(
   ]);
   const exitCode = await proc.exited;
   return { ok: exitCode === 0, stdout: stdout.trim(), stderr: stderr.trim() };
+}
+
+async function runGitProbe(
+  args: string[],
+  cwd: string,
+  timeoutMs = 12000
+): Promise<{ ok: boolean; stdout: string; stderr: string; timedOut: boolean }> {
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    env: {
+      ...process.env,
+      // Diagnostics must never block on interactive prompts.
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_ASKPASS: "echo",
+      // Prevent SSH from prompting for passwords/passphrases in diagnostics.
+      GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=5",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const stdoutPromise = new Response(proc.stdout).text();
+  const stderrPromise = new Response(proc.stderr).text();
+
+  let timedOut = false;
+  const exitCode = await Promise.race<number>([
+    proc.exited,
+    new Promise<number>((resolve) => {
+      setTimeout(() => {
+        timedOut = true;
+        try {
+          proc.kill();
+        } catch {
+          // best effort
+        }
+        resolve(124);
+      }, timeoutMs);
+    }),
+  ]);
+
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  return {
+    ok: !timedOut && exitCode === 0,
+    stdout: stdout.trim(),
+    stderr: timedOut ? `${stderr.trim()}\nDiagnostics probe timed out.`.trim() : stderr.trim(),
+    timedOut,
+  };
+}
+
+async function getConfiguredRemoteBranch(cwd: string): Promise<string> {
+  const configured = await runGit(["config", "--get", "bfloat.remoteBranch"], cwd);
+  if (configured.ok && configured.stdout) {
+    return configured.stdout.trim();
+  }
+
+  const currentBranch = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+  if (currentBranch.ok && currentBranch.stdout && currentBranch.stdout !== "HEAD") {
+    return currentBranch.stdout.trim();
+  }
+
+  return "main";
+}
+
+function maskRemoteUrlForLog(remoteUrl: string): string {
+  try {
+    const parsed = new URL(remoteUrl);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return remoteUrl.replace(/\/\/[^@\s]*@/, "//***@");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -182,11 +259,613 @@ const SyncAgentInstructionsSchema = z.object({
   agentInstructions: z.string().optional(),
 });
 
+const GitConnectStartSchema = z.object({
+  projectId: z.string().min(1),
+  remoteUrl: z.string().min(1),
+  remoteBranch: z.string().min(1).default("main"),
+});
+
+const GitConnectDiagnosticsSchema = z.object({
+  projectId: z.string().min(1),
+  remoteUrl: z.string().min(1),
+});
+
+const GitConnectInputSchema = z.object({
+  sessionId: z.string().min(1),
+  input: z.string().min(1),
+});
+
+const GitConnectCancelSchema = z.object({
+  sessionId: z.string().min(1),
+});
+
+type GitConnectPromptType =
+  | "https_username"
+  | "https_password"
+  | "ssh_passphrase"
+  | "otp"
+  | "yes_no"
+  | "unknown";
+
+interface GitConnectInteractiveAuthPayload {
+  type: GitConnectPromptType;
+  confidence: number;
+  context: string;
+  suggestion?: string;
+}
+
+interface GitConnectResult {
+  success: boolean;
+  projectId: string;
+  projectPath: string;
+  remoteUrl: string;
+  remoteBranch: string;
+  error?: string;
+}
+
+type GitConnectEventType = "log" | "interactive_auth" | "complete";
+
+interface GitConnectEvent {
+  type: GitConnectEventType;
+  data: unknown;
+}
+
+type GitConnectListener = (event: GitConnectEvent) => void;
+
+interface ActiveGitConnectSession {
+  sessionId: string;
+  projectId: string;
+  projectPath: string;
+  remoteUrl: string;
+  remoteBranch: string;
+  pty: IPty | null;
+  proc: Bun.Subprocess<"pipe", "pipe", "pipe"> | null;
+  stdinWrite: ((input: string) => Promise<void>) | null;
+  listeners: Set<GitConnectListener>;
+  output: string;
+  sshAgentHasIdentities: boolean | null;
+  done: boolean;
+  result: GitConnectResult | null;
+  lastPromptKey: string | null;
+}
+
+const gitConnectSessions = new Map<string, ActiveGitConnectSession>();
+
+function newGitConnectSessionId(): string {
+  return `git-connect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function emitGitConnectEvent(session: ActiveGitConnectSession, type: GitConnectEventType, data: unknown): void {
+  const event = { type, data };
+  for (const listener of session.listeners) {
+    try {
+      listener(event);
+    } catch (err) {
+      console.warn("[project-files] git-connect listener error:", err);
+    }
+  }
+}
+
+export function detectGitConnectPrompt(rawChunk: string): GitConnectInteractiveAuthPayload | null {
+  const text = rawChunk.trim();
+  if (!text) return null;
+
+  if (/enter passphrase for key|passphrase.*private key|ssh key passphrase/i.test(text)) {
+    return {
+      type: "ssh_passphrase",
+      confidence: 0.95,
+      context: text,
+      suggestion: "Enter your SSH key passphrase.",
+    };
+  }
+
+  if (/username for ['"]?https?:\/\/|^username:\s*$/im.test(text)) {
+    return {
+      type: "https_username",
+      confidence: 0.95,
+      context: text,
+      suggestion: "Enter your Git username.",
+    };
+  }
+
+  if (/password for ['"]?https?:\/\/|^password:\s*$/im.test(text)) {
+    return {
+      type: "https_password",
+      confidence: 0.95,
+      context: text,
+      suggestion: "Enter your Git password or personal access token.",
+    };
+  }
+
+  if (/(verification code|one-time|otp|2fa|two[- ]factor|authenticator code)/i.test(text)) {
+    return {
+      type: "otp",
+      confidence: 0.9,
+      context: text,
+      suggestion: "Enter the verification code.",
+    };
+  }
+
+  if (/\((Y\/n|y\/N|y\/n|yes\/no)\)|are you sure|continue\?/i.test(text)) {
+    return {
+      type: "yes_no",
+      confidence: 0.8,
+      context: text,
+      suggestion: "Reply with y or n.",
+    };
+  }
+
+  if (/:\s*$|\?\s*$/.test(text)) {
+    return {
+      type: "unknown",
+      confidence: 0.6,
+      context: text,
+      suggestion: "Enter a response and submit.",
+    };
+  }
+
+  return null;
+}
+
+function isSshRemoteUrl(remoteUrl: string): boolean {
+  const value = remoteUrl.trim();
+  return /^git@/i.test(value) || /^ssh:\/\//i.test(value);
+}
+
+async function checkSshAgentHasIdentities(): Promise<boolean | null> {
+  try {
+    const proc = Bun.spawn(["ssh-add", "-l"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const code = await proc.exited;
+    const output = `${stdout}\n${stderr}`.toLowerCase();
+    if (code === 0) return true;
+    if (output.includes("the agent has no identities")) return false;
+
+    // Could not determine reliably (no ssh-agent, command missing, etc).
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function sshNoIdentityGuidance(): string {
+  return [
+    "SSH authentication failed: no identities are loaded in ssh-agent.",
+    "Run `ssh-add ~/.ssh/<your-key>` (or switch to HTTPS remote URL) and try again.",
+  ].join(" ");
+}
+
+function sshRepoNotFoundGuidance(): string {
+  return [
+    "Repository not found or SSH authentication failed.",
+    "Verify the SSH URL and repository access, then run `ssh-add ~/.ssh/<your-key>` and try again (or use HTTPS with a token).",
+  ].join(" ");
+}
+
+interface GitConnectDiagnosticsResult {
+  success: boolean;
+  remoteUrl: string;
+  remoteType: "ssh" | "https" | "other";
+  sshAgentHasIdentities: boolean | null;
+  remoteReachable: boolean | null;
+  probeError?: string;
+  suggestedHttpsUrl?: string;
+}
+
+function toHttpsRemoteUrl(remoteUrl: string): string | null {
+  const trimmed = remoteUrl.trim();
+  const scpLikeMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
+  if (scpLikeMatch) {
+    const [, host, repoPath] = scpLikeMatch;
+    return `https://${host}/${repoPath}`;
+  }
+
+  const sshUrlMatch = trimmed.match(/^ssh:\/\/git@([^/]+)\/(.+)$/i);
+  if (sshUrlMatch) {
+    const [, host, repoPath] = sshUrlMatch;
+    return `https://${host}/${repoPath}`;
+  }
+
+  return null;
+}
+
+export function resolveGitConnectFailureReason(params: {
+  output: string;
+  remoteUrl: string;
+  sshAgentHasIdentities: boolean | null;
+}): string {
+  let reason = classifyGitConnectFailure(params.output);
+  const isSshRemote = isSshRemoteUrl(params.remoteUrl);
+  if (
+    isSshRemote &&
+    params.sshAgentHasIdentities === false &&
+    (reason === "Git remote validation failed. Check credentials and try again." ||
+      reason === "Repository not found. Verify the remote URL and your access permissions.")
+  ) {
+    reason = sshNoIdentityGuidance();
+  } else if (
+    isSshRemote &&
+    reason === "Repository not found. Verify the remote URL and your access permissions."
+  ) {
+    // GitHub private repos over SSH can report "repository not found" for auth failures.
+    reason = sshRepoNotFoundGuidance();
+  }
+  return reason;
+}
+
+export function classifyGitConnectFailure(output: string): string {
+  const text = output.toLowerCase();
+
+  if (text.includes("permission denied (publickey)") || text.includes("no such identity")) {
+    return "SSH authentication failed: no usable SSH key was found. Load your key with ssh-add and try again.";
+  }
+
+  if (text.includes("host key verification failed")) {
+    return "SSH host verification failed. Add the host to known_hosts and try again.";
+  }
+
+  if (text.includes("authentication failed") || text.includes("invalid username or password")) {
+    return "HTTPS authentication failed. Check your username/password or personal access token.";
+  }
+
+  if (text.includes("repository not found")) {
+    return "Repository not found. Verify the remote URL and your access permissions.";
+  }
+
+  return "Git remote validation failed. Check credentials and try again.";
+}
+
+function maybeEmitGitConnectPrompt(session: ActiveGitConnectSession, chunk: string): void {
+  const prompt = detectGitConnectPrompt(chunk);
+  if (!prompt) return;
+
+  const promptKey = `${prompt.type}:${prompt.context.slice(0, 120)}`;
+  if (session.lastPromptKey === promptKey) return;
+  session.lastPromptKey = promptKey;
+  emitGitConnectEvent(session, "interactive_auth", prompt);
+}
+
+function appendGitConnectOutput(session: ActiveGitConnectSession, chunk: string): void {
+  if (!chunk) return;
+  session.output += chunk;
+  emitGitConnectEvent(session, "log", { data: chunk });
+  maybeEmitGitConnectPrompt(session, chunk);
+}
+
+async function streamReaderToOutput(
+  stream: ReadableStream<Uint8Array> | null,
+  onChunk: (chunk: string) => void
+): Promise<void> {
+  if (!stream) return;
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    onChunk(decoder.decode(value, { stream: true }));
+  }
+}
+
+async function finishGitConnectSession(
+  session: ActiveGitConnectSession,
+  success: boolean,
+  error?: string
+): Promise<void> {
+  if (session.done) return;
+  session.done = true;
+  session.result = {
+    success,
+    projectId: session.projectId,
+    projectPath: session.projectPath,
+    remoteUrl: session.remoteUrl,
+    remoteBranch: session.remoteBranch,
+    ...(error ? { error } : {}),
+  };
+  emitGitConnectEvent(session, "complete", session.result);
+}
+
+async function runGitConnectSession(session: ActiveGitConnectSession): Promise<void> {
+  const buildCommands = [
+    "set -e",
+    'if [ ! -d .git ]; then git init; fi',
+    'if git remote get-url origin >/dev/null 2>&1; then git remote set-url origin \"$GIT_REMOTE_URL\"; else git remote add origin \"$GIT_REMOTE_URL\"; fi',
+    'git config bfloat.remoteBranch \"$GIT_REMOTE_BRANCH\"',
+    "git ls-remote origin HEAD",
+  ].join(" && ");
+
+  const env = {
+    ...process.env,
+    GIT_REMOTE_URL: session.remoteUrl,
+    GIT_REMOTE_BRANCH: session.remoteBranch,
+  };
+  let exitCode = 1;
+
+  try {
+    await fsp.mkdir(session.projectPath, { recursive: true });
+
+    const isSshRemote = isSshRemoteUrl(session.remoteUrl);
+
+    if (isSshRemote) {
+      const hasIdentities = await checkSshAgentHasIdentities();
+      session.sshAgentHasIdentities = hasIdentities;
+      if (hasIdentities === false) {
+        appendGitConnectOutput(
+          session,
+          "[git-connect] ssh-agent has no loaded identities; SSH auth may fail unless key files are otherwise configured.\n"
+        );
+      }
+    }
+
+    try {
+      const ptyProc = bunPtySpawn("bash", ["-lc", buildCommands], {
+        cwd: session.projectPath,
+        env,
+      });
+      session.pty = ptyProc;
+      session.proc = null;
+      session.stdinWrite = async (input: string) => {
+        ptyProc.write(input);
+      };
+
+      await new Promise<void>((resolve) => {
+        ptyProc.onData((data) => {
+          appendGitConnectOutput(session, typeof data === "string" ? data : Buffer.from(data).toString("utf8"));
+        });
+        ptyProc.onExit(({ exitCode: code }) => {
+          exitCode = code;
+          resolve();
+        });
+      });
+    } catch (ptyErr) {
+      appendGitConnectOutput(session, `[git-connect] PTY unavailable, using subprocess fallback: ${String(ptyErr)}\n`);
+      session.pty = null;
+      const proc = Bun.spawn(["bash", "-lc", buildCommands], {
+        cwd: session.projectPath,
+        env,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      session.proc = proc;
+      session.stdinWrite = async (input: string) => {
+        if (!proc.stdin) throw new Error("git-connect stdin unavailable");
+        await proc.stdin.write(new TextEncoder().encode(input));
+      };
+
+      await Promise.all([
+        streamReaderToOutput(proc.stdout, (chunk) => appendGitConnectOutput(session, chunk)),
+        streamReaderToOutput(proc.stderr, (chunk) => appendGitConnectOutput(session, chunk)),
+      ]);
+      exitCode = await proc.exited;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await finishGitConnectSession(session, false, msg);
+    return;
+  } finally {
+    session.stdinWrite = null;
+  }
+
+  if (exitCode === 0) {
+    await finishGitConnectSession(session, true);
+  } else {
+    const reason = resolveGitConnectFailureReason({
+      output: session.output,
+      remoteUrl: session.remoteUrl,
+      sshAgentHasIdentities: session.sshAgentHasIdentities,
+    });
+    await finishGitConnectSession(session, false, reason);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
 export const projectFilesRouter = new Hono();
+
+// ---------------------------------------------------------------------------
+// Git connect interactive session routes
+// ---------------------------------------------------------------------------
+
+projectFilesRouter.post("/git-connect/start", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = GitConnectStartSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ success: false, error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const { projectId, remoteUrl, remoteBranch } = parsed.data;
+  const sessionId = newGitConnectSessionId();
+  const session: ActiveGitConnectSession = {
+    sessionId,
+    projectId,
+    projectPath: projectRoot(projectId),
+    remoteUrl: remoteUrl.trim(),
+    remoteBranch: remoteBranch.trim() || "main",
+    pty: null,
+    proc: null,
+    stdinWrite: null,
+    listeners: new Set(),
+    output: "",
+    sshAgentHasIdentities: null,
+    done: false,
+    result: null,
+    lastPromptKey: null,
+  };
+
+  gitConnectSessions.set(sessionId, session);
+
+  runGitConnectSession(session)
+    .catch(async (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[project-files] git-connect[${sessionId}] unexpected error:`, msg);
+      await finishGitConnectSession(session, false, msg);
+    })
+    .finally(() => {
+      setTimeout(() => {
+        gitConnectSessions.delete(sessionId);
+      }, 5 * 60 * 1000);
+    });
+
+  return c.json({ success: true, sessionId, remoteBranch: session.remoteBranch });
+});
+
+projectFilesRouter.post("/git-connect/diagnostics", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = GitConnectDiagnosticsSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ success: false, error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const { projectId, remoteUrl } = parsed.data;
+  const root = projectRoot(projectId);
+  const isSsh = isSshRemoteUrl(remoteUrl);
+  const isHttps = /^https:\/\//i.test(remoteUrl.trim());
+
+  const result: GitConnectDiagnosticsResult = {
+    success: true,
+    remoteUrl: remoteUrl.trim(),
+    remoteType: isSsh ? "ssh" : isHttps ? "https" : "other",
+    sshAgentHasIdentities: null,
+    remoteReachable: null,
+    suggestedHttpsUrl: isSsh ? toHttpsRemoteUrl(remoteUrl) ?? undefined : undefined,
+  };
+
+  try {
+    await fsp.mkdir(root, { recursive: true });
+  } catch {
+    // best effort; ls-remote does not require a repo working tree
+  }
+
+  if (isSsh) {
+    result.sshAgentHasIdentities = await checkSshAgentHasIdentities();
+  }
+
+  try {
+    const probe = await runGitProbe(["ls-remote", remoteUrl.trim(), "HEAD"], root);
+    result.remoteReachable = probe.ok;
+    if (!probe.ok) {
+      if (probe.timedOut) {
+        result.probeError = "Diagnostics timed out while contacting remote. Check network/connectivity and try again.";
+      } else {
+        result.probeError = resolveGitConnectFailureReason({
+          output: [probe.stderr, probe.stdout].filter(Boolean).join("\n"),
+          remoteUrl: remoteUrl.trim(),
+          sshAgentHasIdentities: result.sshAgentHasIdentities,
+        });
+      }
+    }
+  } catch (err) {
+    result.remoteReachable = false;
+    result.probeError = err instanceof Error ? err.message : String(err);
+  }
+
+  return c.json(result);
+});
+
+projectFilesRouter.post("/git-connect/input", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = GitConnectInputSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ success: false, error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const session = gitConnectSessions.get(parsed.data.sessionId);
+  if (!session || session.done) {
+    return c.json({ success: false, error: "No active git connect session found" }, 404);
+  }
+
+  if (!session.stdinWrite) {
+    return c.json({ success: false, error: "Session is not accepting input" }, 409);
+  }
+
+  await session.stdinWrite(parsed.data.input).catch(() => {});
+  return c.json({ success: true });
+});
+
+projectFilesRouter.post("/git-connect/cancel", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = GitConnectCancelSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ success: false, error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const session = gitConnectSessions.get(parsed.data.sessionId);
+  if (!session) {
+    return c.json({ success: false, error: "Session not found" }, 404);
+  }
+
+  try {
+    if (session.pty) session.pty.kill();
+    if (session.proc) session.proc.kill();
+  } catch {
+    // best effort
+  }
+
+  await finishGitConnectSession(session, false, "Cancelled by user");
+  return c.json({ success: true });
+});
+
+projectFilesRouter.get("/git-connect/stream/:sessionId", async (c) => {
+  const sessionId = c.req.param("sessionId");
+  const session = gitConnectSessions.get(sessionId);
+  if (!session) {
+    return c.json({ success: false, error: "Session not found" }, 404);
+  }
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+
+  function write(event: string, data: unknown): void {
+    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    writer.write(encoder.encode(payload)).catch(() => {});
+  }
+
+  const listener: GitConnectListener = ({ type, data }) => {
+    write(type, data);
+    if (type === "complete") {
+      writer.close().catch(() => {});
+    }
+  };
+
+  session.listeners.add(listener);
+
+  if (session.output) {
+    write("log", { data: session.output.slice(-20_000) });
+  }
+  if (session.done && session.result) {
+    write("complete", session.result);
+    writer.close().catch(() => {});
+    session.listeners.delete(listener);
+  }
+
+  const onAbort = () => {
+    session.listeners.delete(listener);
+    writer.close().catch(() => {});
+  };
+  c.req.raw.signal.addEventListener("abort", onAbort, { once: true });
+
+  c.header("Content-Type", "text/event-stream");
+  c.header("Cache-Control", "no-cache");
+  c.header("Connection", "keep-alive");
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
+});
 
 // ---------------------------------------------------------------------------
 // POST /open – Open (or create) a project
@@ -565,7 +1244,119 @@ projectFilesRouter.get("/git-status/:projectId", async (c) => {
         status: line.slice(0, 2).trim(),
         path: line.slice(3),
       }));
+    console.log("[project-files] git-status", {
+      projectId,
+      ok: result.ok,
+      changedFiles: files.length,
+    });
     return c.json({ isGitRepo: true, files, clean: files.length === 0 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[project-files] git-status error", { projectId, error: msg });
+    return c.json({ success: false, error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /git-sync-status/:projectId
+// ---------------------------------------------------------------------------
+projectFilesRouter.get("/git-sync-status/:projectId", async (c) => {
+  const projectId = c.req.param("projectId");
+  const root = projectRoot(projectId);
+
+  if (!fs.existsSync(root)) {
+    return c.json({ error: "Project not found" }, 404);
+  }
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ isGitRepo: false });
+  }
+
+  try {
+    const branch = await getConfiguredRemoteBranch(root);
+    const localHeadResult = await runGit(["rev-parse", "HEAD"], root);
+    const localHasCommits = localHeadResult.ok && Boolean(localHeadResult.stdout);
+
+    // Refresh remote tracking ref for accurate ahead/behind counts.
+    const fetchResult = await runGit(["fetch", "origin", branch], root);
+    const missingRemoteRef = /couldn't find remote ref/i.test(fetchResult.stderr || "");
+    if (!fetchResult.ok && !missingRemoteRef) {
+      return c.json({ success: false, error: fetchResult.stderr || "Failed to fetch remote branch" }, 500);
+    }
+
+    const remoteHeadResult = missingRemoteRef
+      ? { ok: false, stdout: "", stderr: fetchResult.stderr }
+      : await runGit(["rev-parse", `origin/${branch}`], root);
+    const remoteHasCommits = remoteHeadResult.ok && Boolean(remoteHeadResult.stdout);
+
+    if (!localHasCommits && !remoteHasCommits) {
+      return c.json({
+        isGitRepo: true,
+        branch,
+        localHead: null,
+        remoteHead: null,
+        ahead: 0,
+        behind: 0,
+        diverged: false,
+        inSync: true,
+        remoteMissing: true,
+      });
+    }
+
+    if (localHasCommits && !remoteHasCommits) {
+      const localCount = await runGit(["rev-list", "--count", "HEAD"], root);
+      const ahead = localCount.ok ? Number.parseInt(localCount.stdout || "0", 10) : 0;
+      return c.json({
+        isGitRepo: true,
+        branch,
+        localHead: localHeadResult.stdout.trim(),
+        remoteHead: null,
+        ahead,
+        behind: 0,
+        diverged: false,
+        inSync: false,
+        remoteMissing: true,
+      });
+    }
+
+    if (!localHasCommits && remoteHasCommits) {
+      const remoteCount = await runGit(["rev-list", "--count", `origin/${branch}`], root);
+      const behind = remoteCount.ok ? Number.parseInt(remoteCount.stdout || "0", 10) : 0;
+      return c.json({
+        isGitRepo: true,
+        branch,
+        localHead: null,
+        remoteHead: remoteHeadResult.stdout.trim(),
+        ahead: 0,
+        behind,
+        diverged: false,
+        inSync: behind === 0,
+        remoteMissing: false,
+      });
+    }
+
+    const countsResult = await runGit(["rev-list", "--left-right", "--count", `HEAD...origin/${branch}`], root);
+    if (!countsResult.ok || !countsResult.stdout) {
+      return c.json({ success: false, error: countsResult.stderr || "Failed to compute sync status" }, 500);
+    }
+
+    const [aheadRaw, behindRaw] = countsResult.stdout.trim().split(/\s+/);
+    const ahead = Number.parseInt(aheadRaw ?? "0", 10);
+    const behind = Number.parseInt(behindRaw ?? "0", 10);
+    const diverged = ahead > 0 && behind > 0;
+    const inSync = ahead === 0 && behind === 0;
+
+    return c.json({
+      isGitRepo: true,
+      branch,
+      localHead: localHeadResult.stdout.trim(),
+      remoteHead: remoteHeadResult.stdout.trim(),
+      ahead,
+      behind,
+      diverged,
+      inSync,
+      remoteMissing: false,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ success: false, error: msg }, 500);
@@ -616,9 +1407,15 @@ projectFilesRouter.post("/git-commit/:projectId", async (c) => {
   }
 
   try {
+    console.log("[project-files] git-commit start", {
+      projectId,
+      push: parsed.data.push,
+      message: parsed.data.message,
+    });
     // Stage everything
     const addResult = await runGit(["add", "-A"], root);
     if (!addResult.ok) {
+      console.warn("[project-files] git-commit add failed", { projectId, error: addResult.stderr });
       return c.json({ success: false, error: addResult.stderr }, 500);
     }
 
@@ -628,20 +1425,26 @@ projectFilesRouter.post("/git-commit/:projectId", async (c) => {
       root
     );
     if (!commitResult.ok) {
+      console.warn("[project-files] git-commit commit failed", { projectId, error: commitResult.stderr });
       return c.json({ success: false, error: commitResult.stderr }, 500);
     }
 
     // Optionally push
     if (parsed.data.push) {
-      const pushResult = await runGit(["push"], root);
+      const remoteBranch = await getConfiguredRemoteBranch(root);
+      console.log("[project-files] git-commit pushing", { projectId, remoteBranch });
+      const pushResult = await runGit(["push", "-u", "origin", `HEAD:${remoteBranch}`], root);
       if (!pushResult.ok) {
+        console.warn("[project-files] git-commit push failed", { projectId, remoteBranch, error: pushResult.stderr });
         return c.json({ success: false, error: pushResult.stderr }, 500);
       }
     }
 
+    console.log("[project-files] git-commit complete", { projectId });
     return c.json({ success: true, sha: commitResult.stdout });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[project-files] git-commit error", { projectId, error: msg });
     return c.json({ success: false, error: msg }, 500);
   }
 });
@@ -658,7 +1461,36 @@ projectFilesRouter.post("/git-push/:projectId", async (c) => {
   }
 
   try {
-    const result = await runGit(["push"], root);
+    const remoteBranch = await getConfiguredRemoteBranch(root);
+    console.log("[project-files] git-push start", { projectId, remoteBranch });
+    const result = await runGit(["push", "-u", "origin", `HEAD:${remoteBranch}`], root);
+    if (!result.ok) {
+      console.warn("[project-files] git-push failed", { projectId, remoteBranch, error: result.stderr });
+      return c.json({ success: false, error: result.stderr }, 500);
+    }
+    console.log("[project-files] git-push complete", { projectId, remoteBranch });
+    return c.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[project-files] git-push error", { projectId, error: msg });
+    return c.json({ success: false, error: msg }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /git-clone/:projectId
+// ---------------------------------------------------------------------------
+projectFilesRouter.post("/git-pull/:projectId", async (c) => {
+  const projectId = c.req.param("projectId");
+  const root = projectRoot(projectId);
+
+  if (!fs.existsSync(path.join(root, ".git"))) {
+    return c.json({ success: false, error: "No git repository in project" }, 400);
+  }
+
+  try {
+    const remoteBranch = await getConfiguredRemoteBranch(root);
+    const result = await runGit(["pull", "origin", remoteBranch], root);
     if (!result.ok) {
       return c.json({ success: false, error: result.stderr }, 500);
     }
