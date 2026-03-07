@@ -2350,6 +2350,19 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onBuildLog callback error:", err)
         }
       })
+      es.onmessage = (e: MessageEvent) => {
+        // Fallback path for environments that collapse custom SSE event names
+        // into plain "message" events.
+        try {
+          const parsed = JSON.parse(String(e.data ?? "")) as { data?: unknown }
+          if (typeof parsed?.data === "string") {
+            callback({ data: parsed.data })
+            return
+          }
+        } catch {
+          // Ignore non-log message payloads for this listener.
+        }
+      }
       es.addEventListener("complete", () => {
         closedByUs = true
         es.close()
@@ -2389,6 +2402,17 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onBuildProgress callback error:", err)
         }
       })
+      es.onmessage = (e: MessageEvent) => {
+        // Fallback for plain "message" event streams.
+        try {
+          const parsed = JSON.parse(String(e.data ?? "")) as Partial<IOSBuildProgress>
+          if (typeof parsed?.step === "string" && typeof parsed?.percent === "number") {
+            callback(parsed as IOSBuildProgress)
+          }
+        } catch {
+          // Ignore non-progress payloads for this listener.
+        }
+      }
       es.addEventListener("complete", () => {
         closedByUs = true
         es.close()
@@ -2428,6 +2452,17 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onInteractiveAuth callback error:", err)
         }
       })
+      es.onmessage = (e: MessageEvent) => {
+        // Fallback for plain "message" event streams.
+        try {
+          const parsed = JSON.parse(String(e.data ?? "")) as Partial<InteractiveAuthEvent>
+          if (typeof parsed?.type === "string") {
+            callback(parsed as InteractiveAuthEvent)
+          }
+        } catch {
+          // Ignore non-auth payloads for this listener.
+        }
+      }
       es.addEventListener("complete", () => {
         closedByUs = true
         es.close()

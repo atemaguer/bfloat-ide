@@ -425,60 +425,6 @@ export function IOSDeployModals() {
       setShowTwoFactorInput(false)
       setTwoFactorError(null)
 
-      // Set up event listeners for the PTY build
-      const unsubProgress = deploy.onBuildProgress((progress) => {
-        console.log('[IOSDeployModals] Build progress:', progress)
-        deployStore.updateIOSProgress({
-          step: progress.step as any,
-          percent: progress.percent,
-          message: progress.message,
-          buildUrl: progress.buildUrl,
-          error: normalizeAndDumpError(progress.error, 'Deployment failed', 'ios-modals:interactive-progress'),
-        })
-
-        // Handle completion
-        if (progress.step === 'complete') {
-          deployStore.completeIOSDeployment(progress.buildUrl)
-          setShowTwoFactorInput(false)
-          setTwoFactorError(null)
-        } else if (progress.step === 'error') {
-          deployStore.failIOSDeployment(
-            normalizeAndDumpError(progress.error, 'Build failed', 'ios-modals:interactive-progress-error')
-          )
-          setShowTwoFactorInput(false)
-          isDeployingRef.current = false
-        }
-      })
-
-      const unsubLogs = deploy.onBuildLog(({ data }) => {
-        deployStore.appendIOSLog(data)
-      })
-
-      // Subscribe to interactive auth events (for 2FA)
-      const unsubAuth = deploy.onInteractiveAuth((event) => {
-        console.log('[IOSDeployModals] Interactive auth event:', event.type)
-
-        if (event.type === '2fa') {
-          // Show 2FA input UI
-          setShowTwoFactorInput(true)
-          setTwoFactorError(null)
-        } else if (event.confidence > 0.5 && event.type !== 'yes_no' && event.type !== 'menu') {
-          // For unknown prompts that need user input, fall back to terminal
-          // But don't show terminal for routine yes_no or menu prompts (they're auto-handled)
-          console.log('[IOSDeployModals] Unknown prompt, showing terminal:', event.type)
-          deployStore.showTerminalFallback(event.type, event.context, event.suggestion, event.humanized)
-        }
-      })
-
-      // Store cleanup function
-      buildListenersRef.current = () => {
-        unsubProgress()
-        unsubLogs()
-        unsubAuth()
-      }
-
-      // Use the existing deploy:ios-build-interactive handler
-      // It handles prompt detection, auto-confirmation, and 2FA via PTY
       try {
         const result = await deploy.startInteractiveIOSBuild({
           projectPath,

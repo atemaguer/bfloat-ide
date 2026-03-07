@@ -91,6 +91,8 @@ function getEnhancedEnv(extra?: Record<string, string>): Record<string, string> 
   };
 }
 
+console.log("[Deploy] bun-pty imported for deploy route");
+
 // ---------------------------------------------------------------------------
 // ANSI cleaner (mirrors deploy-handler cleanAnsi)
 // ---------------------------------------------------------------------------
