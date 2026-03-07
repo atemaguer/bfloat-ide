@@ -575,12 +575,22 @@ class DeployStore {
    * Set available EAS accounts
    */
   setEasAccounts(accounts: EasAccount[]): void {
-    this.easAccounts.setState(accounts, true)
+    const seen = new Set<string>()
+    const deduped = accounts.filter((account) => {
+      const key = account.name.trim().toLowerCase()
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+
+    this.easAccounts.setState(deduped, true)
 
     // Auto-select: prefer org account (non-owner role) as they're likely paid, otherwise first account
-    if (!this.selectedEasAccount.getState() && accounts.length > 0) {
-      const orgAccount = accounts.find((a) => a.role !== 'owner')
-      this.selectedEasAccount.setState(orgAccount?.name || accounts[0].name, true)
+    const selected = this.selectedEasAccount.getState()
+    const selectedStillExists = selected ? deduped.some((a) => a.name === selected) : false
+    if ((!selected || !selectedStillExists) && deduped.length > 0) {
+      const orgAccount = deduped.find((a) => a.role !== 'owner')
+      this.selectedEasAccount.setState(orgAccount?.name || deduped[0].name, true)
     }
   }
 

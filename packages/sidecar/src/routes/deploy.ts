@@ -7,7 +7,7 @@
  * Key differences from the Electron handler:
  * - Progress events that were sent via BrowserWindow.webContents.send() are
  *   delivered over SSE streams (GET /stream/:buildId).
- * - node-pty is replaced with Bun.spawn() + piped stdio.
+ * - Uses bun-pty for interactive parity, with Bun.spawn() fallback.
  * - electron.app.getPath() → os.homedir() + .bfloat-ide
  *
  * Routes:
@@ -30,6 +30,8 @@ import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import type { IPty } from "bun-pty";
+import { spawn as bunPtySpawn } from "bun-pty";
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -89,6 +91,8 @@ function getEnhancedEnv(extra?: Record<string, string>): Record<string, string> 
   };
 }
 
+console.log("[Deploy] bun-pty imported for deploy route");
+
 // ---------------------------------------------------------------------------
 // ANSI cleaner (mirrors deploy-handler cleanAnsi)
 // ---------------------------------------------------------------------------
@@ -99,7 +103,7 @@ function cleanAnsi(text: string): string {
     // eslint-disable-next-line no-control-regex
     .replace(/\x1b\[1G\x1b\[0K/g, "\n")
     .replace(/\[1G\[0K/g, "\n")
-    .replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⇇⠏⠇⠏⠋★⚙︎✓✗✔✖⚪⚫]+/g, "")
+    .replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⇇⠏⠇⠏⠋★⚙✓✗✔✖⚪⚫]+/g, "")
     // eslint-disable-next-line no-control-regex
     .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
     // eslint-disable-next-line no-control-regex
@@ -189,14 +193,25 @@ interface ActiveBuild {
   buildId: string;
   projectPath: string;
   proc: ReturnType<typeof Bun.spawn> | null;
+  pty: IPty | null;
   listeners: Set<BuildEventListener>;
-  stdinWriter: WritableStreamDefaultWriter<Uint8Array> | null;
+  stdinWrite: ((input: string) => Promise<void>) | null;
   output: string;
+  lastProgress: { step: string; message: string; percent: number; buildUrl?: string; error?: string } | null;
+  lastInteractivePrompt: string | null;
   done: boolean;
   result: { success: boolean; buildUrl?: string; error?: string } | null;
 }
 
 const activeBuilds = new Map<string, ActiveBuild>();
+
+function getLatestBuildId(): string | null {
+  let last: string | null = null;
+  for (const id of activeBuilds.keys()) {
+    last = id;
+  }
+  return last;
+}
 
 function emitBuildEvent(build: ActiveBuild, type: string, data: unknown): void {
   const event = { type, data };
@@ -204,6 +219,124 @@ function emitBuildEvent(build: ActiveBuild, type: string, data: unknown): void {
     try {
       listener(event);
     } catch { /* ignore dead listeners */ }
+  }
+}
+
+function detectAndHandleInteractivePrompt(
+  build: ActiveBuild,
+  cleanData: string,
+  ctx: {
+    hasAppleId: boolean;
+    getPendingPassword: () => string;
+    clearPendingPassword: () => void;
+  }
+): void {
+  const text = cleanData.trim();
+  if (!text) return;
+
+  const twoFaPattern =
+    /(6-digit|verification code|two[- ]factor|2fa|security code|one-time passcode|one-time password|apple.*code)/i;
+  if (twoFaPattern.test(text)) {
+    const key = `2fa:${text.slice(0, 120)}`;
+    if (build.lastInteractivePrompt !== key) {
+      build.lastInteractivePrompt = key;
+      emitBuildEvent(build, "interactive_auth", {
+        type: "2fa",
+        confidence: 0.95,
+        context: text,
+        suggestion: "Enter the verification code sent to your trusted device.",
+      });
+    }
+    return;
+  }
+
+  const yesNoPattern =
+    /(\(Y\/n\)|\(y\/N\)|Would you like|Do you want|Proceed\?|Continue\?|log in to your Apple account\?)/i;
+  if (yesNoPattern.test(text) && build.stdinWrite) {
+    const key = `yesno:${text.slice(0, 120)}`;
+    if (build.lastInteractivePrompt !== key) {
+      build.lastInteractivePrompt = key;
+      emitBuildEvent(build, "interactive_auth", {
+        type: "yes_no",
+        confidence: 0.9,
+        context: text,
+        suggestion: "y",
+      });
+      void build.stdinWrite("y\n").catch(() => {});
+    }
+    return;
+  }
+
+  const menuPattern =
+    /(^\s*›\s*.+$)|use arrow keys|select an option|choose.*from|pick.*option/i;
+  if (menuPattern.test(text) && build.stdinWrite) {
+    const key = `menu:${text.slice(0, 120)}`;
+    if (build.lastInteractivePrompt !== key) {
+      build.lastInteractivePrompt = key;
+      emitBuildEvent(build, "interactive_auth", {
+        type: "menu",
+        confidence: 0.85,
+        context: text,
+        suggestion: "Press enter to select the highlighted option.",
+      });
+      void build.stdinWrite("\n").catch(() => {});
+    }
+    return;
+  }
+
+  const appleIdPattern = /Apple ID:\s*$|^\s*Apple ID\s*›|enter.*apple\s*id/im;
+  if (appleIdPattern.test(text)) {
+    const key = `appleid:${text.slice(0, 120)}`;
+    if (build.lastInteractivePrompt !== key) {
+      build.lastInteractivePrompt = key;
+      if (ctx.hasAppleId && build.stdinWrite) {
+        void build.stdinWrite("\n").catch(() => {});
+      } else {
+        emitBuildEvent(build, "interactive_auth", {
+          type: "apple_id",
+          confidence: 0.95,
+          context: text,
+          suggestion: "Enter your Apple ID email.",
+        });
+      }
+    }
+    return;
+  }
+
+  const passwordPattern = /Password(\s*\[.*\])?\s*:\s*$|^\s*Password\s*›|enter.*password/im;
+  if (passwordPattern.test(text)) {
+    const key = `password:${text.slice(0, 120)}`;
+    if (build.lastInteractivePrompt !== key) {
+      build.lastInteractivePrompt = key;
+      const pendingPassword = ctx.getPendingPassword();
+      if (pendingPassword && build.stdinWrite) {
+        void build.stdinWrite(`${pendingPassword}\n`).catch(() => {});
+        ctx.clearPendingPassword();
+      } else {
+        emitBuildEvent(build, "interactive_auth", {
+          type: "password",
+          confidence: 0.95,
+          context: text,
+          suggestion: "Enter your Apple ID password.",
+        });
+      }
+    }
+  }
+}
+
+async function readConfiguredEasProjectId(projectPath: string): Promise<string | null> {
+  const appJsonPath = path.join(projectPath, "app.json");
+  if (!fs.existsSync(appJsonPath)) return null;
+
+  try {
+    const raw = await Bun.file(appJsonPath).text();
+    const parsed = JSON.parse(raw) as {
+      expo?: { extra?: { eas?: { projectId?: unknown } } };
+    };
+    const projectId = parsed?.expo?.extra?.eas?.projectId;
+    return typeof projectId === "string" && projectId.length > 0 ? projectId : null;
+  } catch {
+    return null;
   }
 }
 
@@ -269,19 +402,124 @@ async function startBuild(
 
   const ascConfig = await checkASCApiKeyConfig(projectPath);
   const useNonInteractive = ascConfig.configured;
+  const hasInteractiveCredentials = Boolean(
+    extraEnv?.EXPO_APPLE_ID || extraEnv?.EXPO_APPLE_PASSWORD || extraEnv?.FASTLANE_USER || extraEnv?.FASTLANE_PASSWORD
+  );
+  const usePty = !useNonInteractive || hasInteractiveCredentials;
+  const configuredEasProjectId = await readConfiguredEasProjectId(projectPath);
 
+  const initCommand = configuredEasProjectId
+    ? `npx -y eas-cli init --non-interactive --force --id ${configuredEasProjectId}`
+    : "npx -y eas-cli init --non-interactive --force";
   const buildCommands = [
     `cd ${projectPath.replace(/'/g, "'\\''")}`,
+    "echo \"[BIDE_DEPLOY_FLOW_V4]\"",
     "([ -d .git ] || git init)",
     "git add -A",
     'git commit -m "Configure for deployment" --allow-empty || true',
+    initCommand,
     useNonInteractive
       ? "npx -y eas-cli build --platform ios --non-interactive --auto-submit"
       : "npx -y eas-cli build --platform ios --auto-submit",
   ].join(" && ");
 
   const env = getEnhancedEnv({ EAS_NO_VCS: "1", ...extraEnv });
+  let pendingPassword = extraEnv?.EXPO_APPLE_PASSWORD ?? extraEnv?.FASTLANE_PASSWORD ?? "";
+  const hasAppleId = Boolean(extraEnv?.EXPO_APPLE_ID || extraEnv?.FASTLANE_USER);
+  let buildUrl: string | undefined;
+  let accOutput = "";
 
+  const handleChunk = (chunk: string): void => {
+    accOutput += chunk;
+    build.output += chunk;
+    emitBuildEvent(build, "log", { data: chunk });
+
+    const cleanData = cleanAnsi(chunk);
+    const cleanOutput = cleanAnsi(accOutput);
+    detectAndHandleInteractivePrompt(build, cleanData, {
+      hasAppleId,
+      getPendingPassword: () => pendingPassword,
+      clearPendingPassword: () => {
+        pendingPassword = "";
+      },
+    });
+
+    const urlMatch = cleanData.match(/https:\/\/expo\.dev\/.*\/builds\/[a-zA-Z0-9-]+/i);
+    if (urlMatch) buildUrl = urlMatch[0];
+
+    const ascMatch = cleanOutput.match(/ASC App ID:\s*(\d+)/);
+    if (ascMatch) {
+      extractAndSaveAscAppId(projectPath, cleanOutput).catch(() => {});
+    }
+
+    const progress = detectProgress(cleanData, cleanOutput, buildUrl);
+    if (progress) {
+      build.lastProgress = progress;
+      emitBuildEvent(build, "progress", progress);
+    }
+  };
+
+  const finalize = async (exitCode: number): Promise<void> => {
+    build.proc = null;
+    build.pty = null;
+    build.stdinWrite = null;
+    build.done = true;
+
+    const cleanOutput = cleanAnsi(accOutput);
+    const isSuccess =
+      exitCode === 0 ||
+      /available on TestFlight|Successfully submitted/i.test(cleanOutput);
+
+    if (isSuccess) {
+      await extractAndSaveAscAppId(projectPath, cleanOutput);
+      build.result = { success: true, buildUrl };
+      emitBuildEvent(build, "complete", { success: true, buildUrl });
+    } else {
+      const errMatch = cleanOutput.match(/(?:Error:|error:)\s*(.+)/i);
+      const errMsg = errMatch?.[1]?.trim() ?? "Build process failed";
+      build.result = { success: false, error: errMsg };
+      emitBuildEvent(build, "complete", { success: false, error: errMsg });
+    }
+  };
+
+  if (usePty) {
+    try {
+      emitBuildEvent(build, "log", { data: "[BIDE_DEPLOY_MODE] pty\n" });
+      const ptyProc = bunPtySpawn("bash", ["-lc", buildCommands], {
+        name: "xterm-256color",
+        cols: 120,
+        rows: 40,
+        cwd: projectPath,
+        env,
+      });
+      build.pty = ptyProc;
+      build.stdinWrite = async (input: string) => {
+        ptyProc.write(input);
+      };
+
+      const exitCode = await new Promise<number>((resolve) => {
+        ptyProc.onData((data) => {
+          const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+          handleChunk(text);
+        });
+        ptyProc.onExit(({ exitCode: code }) => resolve(code));
+      });
+
+      await finalize(exitCode);
+      return;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      emitBuildEvent(build, "log", {
+        data: `[BIDE_DEPLOY_MODE] pty_failed:${reason}\n`,
+      });
+      console.warn(
+        "[Deploy] PTY deploy failed, falling back to Bun.spawn:",
+        reason
+      );
+    }
+  }
+
+  emitBuildEvent(build, "log", { data: "[BIDE_DEPLOY_MODE] pipe_fallback\n" });
   const proc = Bun.spawn(["bash", "-c", buildCommands], {
     cwd: projectPath,
     env,
@@ -289,17 +527,26 @@ async function startBuild(
     stderr: "pipe",
     stdin: "pipe",
   });
-
   build.proc = proc;
 
   if (proc.stdin) {
-    build.stdinWriter = proc.stdin.getWriter();
+    const stdin = proc.stdin as unknown as {
+      getWriter?: () => WritableStreamDefaultWriter<Uint8Array>;
+      write?: (data: string | Uint8Array) => Promise<unknown> | unknown;
+    };
+    if (typeof stdin.getWriter === "function") {
+      const writer = stdin.getWriter();
+      build.stdinWrite = async (input: string) => {
+        const encoded = new TextEncoder().encode(input);
+        await writer.write(encoded);
+      };
+    } else if (typeof stdin.write === "function") {
+      build.stdinWrite = async (input: string) => {
+        await stdin.write!(input);
+      };
+    }
   }
 
-  let buildUrl: string | undefined;
-  let accOutput = "";
-
-  // Stream stdout
   const streamStdout = async () => {
     if (!proc.stdout) return;
     const reader = proc.stdout.getReader();
@@ -307,31 +554,9 @@ async function startBuild(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value);
-      accOutput += chunk;
-      build.output += chunk;
-
-      emitBuildEvent(build, "log", { data: chunk });
-
-      const cleanData = cleanAnsi(chunk);
-      const cleanOutput = cleanAnsi(accOutput);
-
-      const urlMatch = cleanData.match(/https:\/\/expo\.dev\/.*\/builds\/[a-zA-Z0-9-]+/i);
-      if (urlMatch) buildUrl = urlMatch[0];
-
-      const ascMatch = cleanOutput.match(/ASC App ID:\s*(\d+)/);
-      if (ascMatch) {
-        extractAndSaveAscAppId(projectPath, cleanOutput).catch(() => {});
-      }
-
-      const progress = detectProgress(cleanData, cleanOutput, buildUrl);
-      if (progress) {
-        emitBuildEvent(build, "progress", progress);
-      }
+      handleChunk(decoder.decode(value));
     }
   };
-
-  // Stream stderr into the same log
   const streamStderr = async () => {
     if (!proc.stderr) return;
     const reader = proc.stderr.getReader();
@@ -339,35 +564,12 @@ async function startBuild(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value);
-      accOutput += chunk;
-      build.output += chunk;
-      emitBuildEvent(build, "log", { data: chunk });
+      handleChunk(decoder.decode(value));
     }
   };
 
   await Promise.all([streamStdout(), streamStderr()]);
-
-  const exitCode = await proc.exited;
-  build.proc = null;
-  build.stdinWriter = null;
-  build.done = true;
-
-  const cleanOutput = cleanAnsi(accOutput);
-  const isSuccess =
-    exitCode === 0 ||
-    /available on TestFlight|Successfully submitted/i.test(cleanOutput);
-
-  if (isSuccess) {
-    await extractAndSaveAscAppId(projectPath, cleanOutput);
-    build.result = { success: true, buildUrl };
-    emitBuildEvent(build, "complete", { success: true, buildUrl });
-  } else {
-    const errMatch = cleanOutput.match(/(?:Error:|error:)\s*(.+)/i);
-    const errMsg = errMatch?.[1]?.trim() ?? "Build process failed";
-    build.result = { success: false, error: errMsg };
-    emitBuildEvent(build, "complete", { success: false, error: errMsg });
-  }
+  await finalize(await proc.exited);
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +589,17 @@ const IOSBuildInteractiveSchema = z.object({
 const SubmitInputSchema = z.object({
   buildId: z.string().min(1),
   input: z.string(),
+});
+
+const BuildStatusQuerySchema = z.object({
+  offset: z
+    .string()
+    .optional()
+    .transform((value) => {
+      if (!value) return 0;
+      const parsed = parseInt(value, 10);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    }),
 });
 
 const SaveASCKeySchema = z.object({
@@ -433,9 +646,12 @@ deployRouter.post("/ios-build", async (c) => {
     buildId,
     projectPath,
     proc: null,
+    pty: null,
     listeners: new Set(),
-    stdinWriter: null,
+    stdinWrite: null,
     output: "",
+    lastProgress: null,
+    lastInteractivePrompt: null,
     done: false,
     result: null,
   };
@@ -470,9 +686,12 @@ deployRouter.post("/ios-build-interactive", async (c) => {
     buildId,
     projectPath,
     proc: null,
+    pty: null,
     listeners: new Set(),
-    stdinWriter: null,
+    stdinWrite: null,
     output: "",
+    lastProgress: null,
+    lastInteractivePrompt: null,
     done: false,
     result: null,
   };
@@ -516,9 +735,8 @@ deployRouter.post("/submit-input", async (c) => {
     return c.json({ success: false, error: "No active build found" }, 404);
   }
 
-  if (build.stdinWriter) {
-    const encoded = new TextEncoder().encode(input);
-    await build.stdinWriter.write(encoded).catch(() => {});
+  if (build.stdinWrite) {
+    await build.stdinWrite(input).catch(() => {});
     return c.json({ success: true });
   }
 
@@ -526,8 +744,96 @@ deployRouter.post("/submit-input", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/deploy/status/:buildId?offset=<number>
+// ---------------------------------------------------------------------------
+deployRouter.get("/status/:buildId", async (c) => {
+  const buildId = c.req.param("buildId");
+  const build = activeBuilds.get(buildId);
+
+  if (!build) {
+    return c.json({ success: false, exists: false, error: "Build not found" }, 404);
+  }
+
+  const query = BuildStatusQuerySchema.parse({
+    offset: c.req.query("offset"),
+  });
+
+  const start = Math.min(query.offset, build.output.length);
+  const outputChunk = build.output.slice(start);
+  const nextOffset = build.output.length;
+
+  return c.json({
+    success: true,
+    exists: true,
+    buildId,
+    done: build.done,
+    outputChunk,
+    nextOffset,
+    lastProgress: build.lastProgress,
+    result: build.result,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/deploy/stream/:buildId  (SSE)
 // ---------------------------------------------------------------------------
+deployRouter.get("/stream/current", async (c) => {
+  const latestBuildId = getLatestBuildId();
+  if (!latestBuildId) {
+    return c.json({ error: "No active build found" }, 404);
+  }
+
+  // Rewrite into the param route behavior by looking up the latest build.
+  const build = activeBuilds.get(latestBuildId);
+  if (!build) {
+    return c.json({ error: "Build not found" }, 404);
+  }
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+
+  function write(event: string, data: unknown): void {
+    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    writer.write(encoder.encode(payload)).catch(() => {});
+  }
+
+  const listener: BuildEventListener = ({ type, data }) => {
+    write(type, data);
+    if (type === "complete") {
+      writer.close().catch(() => {});
+    }
+  };
+
+  build.listeners.add(listener);
+
+  // Replay buffered state so late subscribers still get immediate context.
+  if (build.output) {
+    write("log", { data: build.output.slice(-20_000) });
+  }
+  if (build.lastProgress) {
+    write("progress", build.lastProgress);
+  }
+
+  if (build.done && build.result) {
+    write("complete", build.result);
+    writer.close().catch(() => {});
+    build.listeners.delete(listener);
+  }
+
+  c.header("Content-Type", "text/event-stream");
+  c.header("Cache-Control", "no-cache");
+  c.header("Connection", "keep-alive");
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
+});
+
 deployRouter.get("/stream/:buildId", async (c) => {
   const buildId = c.req.param("buildId");
   const build = activeBuilds.get(buildId);
@@ -553,6 +859,14 @@ deployRouter.get("/stream/:buildId", async (c) => {
   };
 
   build.listeners.add(listener);
+
+  // Replay buffered state so late subscribers still get immediate context.
+  if (build.output) {
+    write("log", { data: build.output.slice(-20_000) });
+  }
+  if (build.lastProgress) {
+    write("progress", build.lastProgress);
+  }
 
   // If already done, immediately emit result and close
   if (build.done && build.result) {
@@ -586,6 +900,11 @@ deployRouter.post("/cancel", async (c) => {
     for (const [id, build] of activeBuilds) {
       if (!build.done && build.proc) {
         build.proc.kill();
+      }
+      if (!build.done && build.pty) {
+        build.pty.kill();
+      }
+      if (!build.done) {
         build.done = true;
         build.result = { success: false, error: "Cancelled" };
         emitBuildEvent(build, "complete", build.result);
@@ -598,6 +917,7 @@ deployRouter.post("/cancel", async (c) => {
   const build = activeBuilds.get(buildId);
   if (build) {
     if (build.proc) build.proc.kill();
+    if (build.pty) build.pty.kill();
     build.done = true;
     build.result = { success: false, error: "Cancelled" };
     emitBuildEvent(build, "complete", build.result);

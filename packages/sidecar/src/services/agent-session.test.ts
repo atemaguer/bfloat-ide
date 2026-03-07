@@ -166,9 +166,176 @@ class CaptureMcpServersProvider implements AgentProvider {
   }
 }
 
+class CaptureSystemPromptProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Capture System Prompt Provider";
+  readonly seenSystemPrompts: Array<string | undefined> = [];
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    this.seenSystemPrompts.push(options.systemPrompt);
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-system-prompt",
+      model: "stub-model",
+      availableTools: [],
+    };
+    yield {
+      kind: "done",
+      interrupted: false,
+    };
+  }
+}
+
+class MutatingWithoutVerificationProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Mutating Without Verification Provider";
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-no-verify",
+      model: "stub-model",
+      availableTools: [],
+    };
+
+    yield {
+      kind: "tool_call",
+      callId: "bash-1",
+      name: "Bash",
+      input: { command: "npm install left-pad" },
+      status: "running",
+    };
+
+    yield {
+      kind: "done",
+      interrupted: false,
+    };
+  }
+}
+
+class MutatingWithSuccessfulVerificationProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Mutating With Successful Verification Provider";
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-with-verify",
+      model: "stub-model",
+      availableTools: [],
+    };
+
+    yield {
+      kind: "tool_call",
+      callId: "write-1",
+      name: "Write",
+      input: { file_path: "app.ts", content: "export {};" },
+      status: "running",
+    };
+
+    yield {
+      kind: "tool_call",
+      callId: "verify-1",
+      name: "workbench.verify_app_state",
+      input: { include_logs: true, include_screenshot: true },
+      status: "running",
+    };
+
+    yield {
+      kind: "tool_result",
+      callId: "verify-1",
+      name: "workbench.verify_app_state",
+      output: JSON.stringify({
+        checkedAt: "2026-03-06T10:00:00.000Z",
+        status: "ok",
+        evidence: {
+          logs: { text: "ready", chars: 5 },
+          screenshot: { success: true },
+        },
+        failures: [],
+      }),
+      isError: false,
+    };
+
+    yield {
+      kind: "done",
+      interrupted: false,
+    };
+  }
+}
+
+class MutatingInterruptedProvider implements AgentProvider {
+  readonly id: AgentProviderId = "claude";
+  readonly name = "Mutating Interrupted Provider";
+
+  async isAuthenticated(): Promise<boolean> {
+    return true;
+  }
+
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    return [{ id: "stub-model", name: "Stub Model" }];
+  }
+
+  async *streamMessage(
+    _message: string,
+    options: SessionCreateOptions & { abortController: AbortController },
+  ): AsyncIterable<ProviderStreamEvent> {
+    yield {
+      kind: "init",
+      realSessionId: options.resumeSessionId || "real-session-interrupted",
+      model: "stub-model",
+      availableTools: [],
+    };
+
+    yield {
+      kind: "tool_call",
+      callId: "bash-1",
+      name: "Bash",
+      input: { command: "npm install left-pad" },
+      status: "running",
+    };
+
+    // Intentionally end stream without "done"
+    return;
+  }
+}
+
 async function waitForSessionStatus(
   sessionId: string,
-  targetStatus: "completed" | "error",
+  targetStatus: "completed" | "error" | "interrupted",
   timeoutMs = 1000,
 ): Promise<void> {
   const start = Date.now();
@@ -400,5 +567,113 @@ describe("agent-session auto MCP server wiring", () => {
     const mcpServers = provider.seenMcpServers[0] || {};
     expect(mcpServers.stripe).toBeDefined();
     expect(mcpServers.revenuecat).toBeDefined();
+  });
+});
+
+describe("agent-session completion verification policy", () => {
+  it("injects verification directive into system prompt", async () => {
+    const provider = new CaptureSystemPromptProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "test");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "completed");
+
+    expect(provider.seenSystemPrompts).toHaveLength(1);
+    const prompt = provider.seenSystemPrompts[0] || "";
+    expect(prompt).toContain("Verification Before Completion");
+    expect(prompt).toContain("workbench.verify_app_state");
+    expect(prompt).toContain("completion gate");
+    expect(prompt).toContain("workbench.get_app_logs");
+    expect(prompt).toContain("workbench.get_terminal_output");
+    expect(prompt).toContain("workbench.stop_app");
+    expect(prompt).toContain("workbench.start_app");
+  });
+
+  it("pauses completion when mutating actions cannot be auto-verified", async () => {
+    const provider = new MutatingWithoutVerificationProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      projectId: "test-project-gate-block",
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "Make changes");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "interrupted");
+
+    const replay = getBackgroundMessages(created.sessionId);
+    expect(replay.success).toBe(true);
+    const textFrames = replay.messages.filter((f) => f.type === "text");
+    const joinedText = textFrames
+      .map((frame) => String((frame.payload as { delta?: string })?.delta || ""))
+      .join("\n");
+    expect(joinedText).toContain("Completion verification gate paused this turn");
+    expect(joinedText).toContain("Run workbench.verify_app_state");
+    const doneFrame = replay.messages.find((f) => f.type === "done");
+    expect(doneFrame).toBeUndefined();
+    const cancelledFrame = replay.messages.find((f) => f.type === "cancelled");
+    expect(cancelledFrame).toBeDefined();
+  });
+
+  it("allows completion when verify_app_state succeeds after mutating actions", async () => {
+    const provider = new MutatingWithSuccessfulVerificationProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      projectId: "test-project-gate-pass",
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "Make changes");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "completed");
+
+    const replay = getBackgroundMessages(created.sessionId);
+    expect(replay.success).toBe(true);
+    const doneFrame = replay.messages.find((f) => f.type === "done");
+    expect(doneFrame).toBeDefined();
+    const errorFrame = replay.messages.find((f) => f.type === "error");
+    expect(errorFrame).toBeUndefined();
+  });
+
+  it("queues verification guidance as a user prompt when stream stops before completion verification", async () => {
+    const provider = new MutatingInterruptedProvider();
+    registerProvider(provider);
+
+    const created = createSession("claude", {
+      cwd: process.cwd(),
+      projectId: "test-project-gate-interrupted",
+    });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+
+    const send = sendMessage(created.sessionId, "Make changes");
+    expect(send.success).toBe(true);
+    await waitForSessionStatus(created.sessionId, "interrupted");
+
+    const replay = getBackgroundMessages(created.sessionId);
+    expect(replay.success).toBe(true);
+    const queueFrame = replay.messages.find((f) => f.type === "queue_user_prompt");
+    expect(queueFrame).toBeDefined();
+    const queuedPrompt = String(
+      (queueFrame?.payload as { prompt?: string } | undefined)?.prompt ?? "",
+    );
+    expect(queuedPrompt).toContain("stream stopped before completion verification");
+    expect(queuedPrompt).toContain("run workbench.verify_app_state");
+
+    const cancelledFrame = replay.messages.find((f) => f.type === "cancelled");
+    expect(cancelledFrame).toBeDefined();
   });
 });

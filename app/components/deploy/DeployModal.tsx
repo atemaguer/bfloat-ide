@@ -190,7 +190,7 @@ export function DeployModal({ anchorRef }: DeployPopoverProps) {
   return (
     <div
       ref={popoverRef}
-      className="absolute top-full right-0 mt-2 w-[400px] max-h-[80vh] overflow-y-auto bg-card border border-input rounded-2xl shadow-2xl z-[1000] flex flex-col"
+      className="absolute top-full right-0 mt-2 w-[400px] max-h-[80vh] overflow-y-auto bg-[oklch(0.227_0_0)] border-0 rounded-2xl shadow-2xl z-[1000] flex flex-col"
       style={{
         animation: 'popoverIn 100ms ease-out',
       }}
@@ -208,7 +208,7 @@ export function DeployModal({ anchorRef }: DeployPopoverProps) {
 
       {/* App Preview Card */}
       <div className="px-4 pt-4">
-        <div className="flex items-center gap-3 p-3 border border-border rounded-[10px]">
+        <div className="flex items-center gap-3 p-3 border-0 bg-background rounded-[10px]">
           {currentProject?.iosAppIconUrl && !isWebProject ? (
             <img
               src={currentProject.iosAppIconUrl}
@@ -271,7 +271,7 @@ export function DeployModal({ anchorRef }: DeployPopoverProps) {
 
         {/* Expo Connect Form */}
         {!expoConnected && showExpoConnect && (
-          <div className="mx-4 mt-3 p-3 rounded-lg bg-secondary border border-input">
+          <div className="mx-4 mt-3 p-3 rounded-lg bg-background border-0">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-5 h-5 flex-shrink-0">
                 <ExpoLogo />

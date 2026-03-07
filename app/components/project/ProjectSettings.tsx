@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { AlertCircle, Eye, EyeOff, Globe, Key, Loader2, Lock, Pencil, Plus, Save, Trash2 } from 'lucide-react'
+import { AlertCircle, Eye, EyeOff, GitBranch, Globe, Key, Loader2, Lock, Pencil, Plus, Save, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { MobileOnly } from '@/app/components/common/FeatureGate'
@@ -37,6 +37,9 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [isSaving, setIsSaving] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [isUpdatingGit, setIsUpdatingGit] = useState(false)
+  const [gitConnectError, setGitConnectError] = useState<string | null>(null)
+  const [gitConnectSuccess, setGitConnectSuccess] = useState<string | null>(null)
 
   // Form state
   const [title, setTitle] = useState(project.title || '')
@@ -46,6 +49,8 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [androidPackageName, setAndroidPackageName] = useState(project.androidPackageName || '')
   const [isPublic, setIsPublic] = useState(project.isPublic || false)
   const [agentInstructions, setAgentInstructions] = useState(project.agentInstructions || '')
+  const [gitRemoteUrl, setGitRemoteUrl] = useState(project.sourceUrl || '')
+  const [connectedGitRemoteUrl, setConnectedGitRemoteUrl] = useState(project.sourceUrl || '')
 
   // App icon state
   const [iosAppIcon, setIosAppIcon] = useState<File | null>(null)
@@ -110,9 +115,80 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     setAndroidPackageName(project.androidPackageName || '')
     setIsPublic(project.isPublic || false)
     setAgentInstructions(project.agentInstructions || '')
+    setGitRemoteUrl(project.sourceUrl || '')
+    setConnectedGitRemoteUrl(project.sourceUrl || '')
     setIosAppIconPreview(project.iosAppIconUrl || null)
     setAndroidAppIconPreview(project.androidAppIconUrl || null)
   }, [project])
+
+  const isGitConnected = Boolean(connectedGitRemoteUrl.trim())
+
+  const isValidGitRemoteUrl = (value: string): boolean => {
+    const trimmed = value.trim()
+    if (!trimmed) return false
+    if (/^https?:\/\/\S+$/i.test(trimmed)) return true
+    if (/^git@\S+:\S+$/i.test(trimmed)) return true
+    if (/^ssh:\/\/\S+$/i.test(trimmed)) return true
+    return false
+  }
+
+  const updateGitRemote = async (nextSourceUrl: string | null) => {
+    setIsUpdatingGit(true)
+    setGitConnectError(null)
+    setGitConnectSuccess(null)
+
+    const normalizedSourceUrl = nextSourceUrl?.trim() || null
+
+    try {
+      await localProjectsStore.update(project.id, { sourceUrl: normalizedSourceUrl })
+      const updatedProject: Project = {
+        ...project,
+        sourceUrl: normalizedSourceUrl,
+        updatedAt: new Date().toISOString(),
+      }
+
+      workbenchStore.setProjectMetadata(updatedProject)
+      setGitRemoteUrl(normalizedSourceUrl || '')
+      setConnectedGitRemoteUrl(normalizedSourceUrl || '')
+
+      if (onProjectUpdate) {
+        onProjectUpdate(updatedProject)
+      }
+    } finally {
+      setIsUpdatingGit(false)
+    }
+  }
+
+  const handleConnectGit = async () => {
+    const nextUrl = gitRemoteUrl.trim()
+
+    if (!isValidGitRemoteUrl(nextUrl)) {
+      setGitConnectError('Enter a valid Git repository URL (HTTPS or SSH).')
+      return
+    }
+
+    try {
+      await updateGitRemote(nextUrl)
+      setGitConnectSuccess('Git repository connected.')
+      toast.success('Git repository connected')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to connect Git repository'
+      setGitConnectError(message)
+      toast.error(message)
+    }
+  }
+
+  const handleDisconnectGit = async () => {
+    try {
+      await updateGitRemote(null)
+      setGitConnectSuccess('Git repository disconnected.')
+      toast.success('Git repository disconnected')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to disconnect Git repository'
+      setGitConnectError(message)
+      toast.error(message)
+    }
+  }
 
   // Load secrets
   const loadSecrets = async () => {
@@ -187,6 +263,24 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     toast.success('Convex credentials updated.')
   }
 
+  const ensureConvexAuthEnvProvisioned = async (
+    convexSecrets: ReturnType<typeof getConvexSecretStatusFromSecrets>
+  ) => {
+    if (!project.id) return
+    if (!convexSecrets.hasUrl || !convexSecrets.hasDeployKey) return
+
+    try {
+      const result = await secretsApi.ensureConvexAuthEnv(project.id, normalizedAppType)
+      if (result.success) return
+
+      const warning = result.error || result.warning || 'Failed to provision Convex auth environment.'
+      toast.error(`Convex auth env provisioning failed: ${warning}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      toast.error(`Convex auth env provisioning failed: ${message}`)
+    }
+  }
+
   const handleSaveSecret = async (key: string, value: string) => {
     if (!project.id) return
 
@@ -217,6 +311,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       }
 
       const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
+      await ensureConvexAuthEnvProvisioned(convexSecrets)
       promptConvexIntentChoice(convexSecrets)
     }
 
@@ -303,6 +398,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       const nextSecrets = result.secrets || []
       const convexSecrets = getConvexSecretStatusFromSecrets(nextSecrets, normalizedAppType)
 
+      await ensureConvexAuthEnvProvisioned(convexSecrets)
       promptConvexIntentChoice(convexSecrets)
     }
 
@@ -628,6 +724,72 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
 
         <Card className="settings-card">
           <CardHeader>
+            <CardTitle>Git</CardTitle>
+            <CardDescription>Connect this project to your own Git repository remote</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-sm">
+                <GitBranch size={14} className={isGitConnected ? 'text-emerald-500' : 'text-muted-foreground'} />
+                <span className={isGitConnected ? 'text-emerald-500' : 'text-muted-foreground'}>
+                  {isGitConnected ? 'Remote connected' : 'No remote connected'}
+                </span>
+              </div>
+
+              <div className="settings-field">
+                <label htmlFor="gitRemoteUrl">Repository URL</label>
+                <Input
+                  id="gitRemoteUrl"
+                  type="text"
+                  value={gitRemoteUrl}
+                  onChange={(e) => {
+                    setGitRemoteUrl(e.target.value)
+                    setGitConnectError(null)
+                    setGitConnectSuccess(null)
+                  }}
+                  placeholder="https://github.com/you/repo.git or git@github.com:you/repo.git"
+                />
+              </div>
+
+              {gitConnectError && (
+                <div className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                  {gitConnectError}
+                </div>
+              )}
+              {gitConnectSuccess && (
+                <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                  {gitConnectSuccess}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleConnectGit}
+                  disabled={isUpdatingGit}
+                >
+                  {isUpdatingGit ? <Loader2 size={14} className="animate-spin" /> : <GitBranch size={14} />}
+                  Connect Remote
+                </Button>
+                {isGitConnected && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleDisconnectGit}
+                    disabled={isUpdatingGit}
+                  >
+                    {isUpdatingGit ? <Loader2 size={14} className="animate-spin" /> : <GitBranch size={14} />}
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="settings-card">
+          <CardHeader>
             <div className="flex items-center justify-between">
               <div>
                 <CardTitle>Development Variables</CardTitle>
@@ -647,7 +809,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
           </CardHeader>
           <CardContent>
             {secretsError && (
-              <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive mb-4">
+              <div className="mb-4 rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-300">
                 {secretsError}
               </div>
             )}

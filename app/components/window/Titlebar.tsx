@@ -48,6 +48,7 @@ const ProjectTitlebarContent = ({
   const isChatCollapsed = useStore(workbenchStore.isChatCollapsed)
   const activeDeployment = useStore(deployStore.activeDeployment)
   const projectTitle = currentProject?.title || 'Loading...'
+  const isGitConnected = Boolean(currentProject?.sourceUrl)
   const isLoading = !currentProject
   const isDeploying = activeDeployment?.status === 'running' && activeDeployment?.projectId === id
 
@@ -204,16 +205,18 @@ const ProjectTitlebarContent = ({
         </div>
       </div>
 
-      <div className="window-titlebar-project-actions">
-        <button
-          className={`window-titlebar-icon-btn ${syncStatus === 'syncing' ? 'syncing' : ''} ${syncStatus === 'success' ? 'success' : ''} ${syncStatus === 'error' ? 'error' : ''}`}
-          title={syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'success' ? 'Synced!' : syncStatus === 'error' ? 'Sync failed' : 'Sync to remote'}
-          onClick={handleSync}
-          disabled={syncStatus === 'syncing'}
-        >
-          {syncStatus === 'success' ? <Check size={13} /> : <RefreshCw size={13} className={syncStatus === 'syncing' ? 'animate-spin' : ''} />}
-        </button>
-      </div>
+      {isGitConnected && (
+        <div className="window-titlebar-project-actions">
+          <button
+            className={`window-titlebar-icon-btn ${syncStatus === 'syncing' ? 'syncing' : ''} ${syncStatus === 'success' ? 'success' : ''} ${syncStatus === 'error' ? 'error' : ''}`}
+            title={syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'success' ? 'Synced!' : syncStatus === 'error' ? 'Sync failed' : 'Sync to remote'}
+            onClick={handleSync}
+            disabled={syncStatus === 'syncing'}
+          >
+            {syncStatus === 'success' ? <Check size={13} /> : <RefreshCw size={13} className={syncStatus === 'syncing' ? 'animate-spin' : ''} />}
+          </button>
+        </div>
+      )}
       {/* Publish modal - rendered unconditionally, manages its own visibility */}
       <DeployModal anchorRef={deployButtonRef} />
     </>

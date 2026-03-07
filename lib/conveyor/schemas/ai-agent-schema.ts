@@ -74,6 +74,7 @@ export const messageTypeSchema = z.enum([
   'reasoning',
   'tool_call',
   'tool_result',
+  'queue_user_prompt',
   'error',
   'done',
 ])
@@ -99,6 +100,13 @@ export const errorContentSchema = z.object({
   code: z.string(),
   message: z.string(),
   recoverable: z.boolean(),
+})
+
+// Queue-user-prompt content schema
+export const queueUserPromptContentSchema = z.object({
+  prompt: z.string(),
+  reason: z.string().optional(),
+  source: z.string().optional(),
 })
 
 // Init content schema
@@ -130,6 +138,7 @@ export const agentMessageSchema = z.object({
     z.string(),
     toolCallContentSchema,
     toolResultContentSchema,
+    queueUserPromptContentSchema,
     errorContentSchema,
     initContentSchema,
     doneContentSchema,

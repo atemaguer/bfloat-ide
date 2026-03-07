@@ -38,6 +38,27 @@ interface TerminalSession {
 
 const MAX_OUTPUT_BUFFER = 20_000;
 
+export interface TerminalSessionSnapshot {
+  id: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+  createdAt: number;
+  isPty: boolean;
+  outputTail: string;
+}
+
+export interface TerminalSessionInfo {
+  id: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+  createdAt: number;
+  isPty: boolean;
+  subscriberCount: number;
+  pid: number | null;
+}
+
 /**
  * Global registry of active terminal sessions.
  * Exported so that server.ts can wire WebSocket events to it.
@@ -132,6 +153,62 @@ function buildEnv(overrides?: Record<string, string>): Record<string, string> {
 
 function appendOutput(session: TerminalSession, data: string): void {
   session.outputBuffer = (session.outputBuffer + data).slice(-MAX_OUTPUT_BUFFER);
+}
+
+function toSnapshot(
+  session: TerminalSession,
+  maxChars: number = MAX_OUTPUT_BUFFER
+): TerminalSessionSnapshot {
+  const bounded = Math.max(1, Math.min(maxChars, MAX_OUTPUT_BUFFER));
+  return {
+    id: session.id,
+    cwd: session.cwd,
+    cols: session.cols,
+    rows: session.rows,
+    createdAt: session.createdAt,
+    isPty: session.isPty,
+    outputTail: session.outputBuffer.slice(-bounded),
+  };
+}
+
+export function getTerminalSessionSnapshot(
+  id: string,
+  maxChars: number = MAX_OUTPUT_BUFFER
+): TerminalSessionSnapshot | null {
+  const session = terminalSessions.get(id);
+  if (!session) return null;
+  return toSnapshot(session, maxChars);
+}
+
+export function getLatestTerminalSessionSnapshotForCwd(
+  cwd: string,
+  maxChars: number = MAX_OUTPUT_BUFFER
+): TerminalSessionSnapshot | null {
+  let latest: TerminalSession | null = null;
+  for (const session of terminalSessions.values()) {
+    if (session.cwd !== cwd) continue;
+    if (!latest || session.createdAt > latest.createdAt) {
+      latest = session;
+    }
+  }
+  if (!latest) return null;
+  return toSnapshot(latest, maxChars);
+}
+
+export function listTerminalSessionsForCwd(cwd: string): TerminalSessionInfo[] {
+  return Array.from(terminalSessions.values())
+    .filter((session) => session.cwd === cwd)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((session) => ({
+      id: session.id,
+      cwd: session.cwd,
+      cols: session.cols,
+      rows: session.rows,
+      createdAt: session.createdAt,
+      isPty: session.isPty,
+      subscriberCount: session.subscribers.size,
+      pid: session.pty?.pid ?? session.fallbackProc?.pid ?? null,
+    }));
 }
 
 // ---------------------------------------------------------------------------

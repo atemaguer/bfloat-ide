@@ -10,8 +10,13 @@ import authConfig from "./auth.config";
 export const authComponent = createClient<DataModel>(components.betterAuth);
 
 export const createAuth = (ctx: GenericCtx<DataModel>) => {
+  const siteUrl = process.env.SITE_URL;
+  if (!siteUrl) {
+    throw new Error("Missing SITE_URL in Convex environment");
+  }
+
   return betterAuth({
-    baseURL: process.env.SITE_URL,
+    baseURL: siteUrl,
     trustedOrigins: ["*"],
     database: authComponent.adapter(ctx),
     emailAndPassword: {
@@ -22,7 +27,7 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
     plugins: [
       expo(),
       crossDomain({
-        siteUrl: process.env.SITE_URL!,
+        siteUrl,
       }),
       convex({ authConfig }),
     ],

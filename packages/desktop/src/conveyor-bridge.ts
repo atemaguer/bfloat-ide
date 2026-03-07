@@ -164,6 +164,26 @@ interface IOSBuildInteractiveArgs {
   password: string
 }
 
+interface IOSBuildStatusResult {
+  success: boolean
+  exists: boolean
+  buildId?: string
+  done?: boolean
+  outputChunk?: string
+  nextOffset?: number
+  lastProgress?: IOSBuildProgress | null
+  result?: IOSBuildResult | null
+  error?: string
+}
+
+interface BuildStreamHandlers {
+  onLog?: (data: string) => void
+  onProgress?: (progress: IOSBuildProgress) => void
+  onInteractiveAuth?: (event: InteractiveAuthEvent) => void
+  onComplete?: (result: IOSBuildResult) => void
+  onError?: (error: string) => void
+}
+
 type PromptType = "apple_id" | "password" | "2fa" | "menu" | "yes_no" | "unknown"
 
 interface HumanizedPromptOption {
@@ -266,6 +286,16 @@ interface SecretOperationResult {
   projectId?: string
   readPath?: string
   writePath?: string
+}
+
+interface EnsureConvexAuthEnvResult {
+  success: boolean
+  status: "already_configured" | "provisioned" | "skipped_missing_prereqs" | "failed"
+  projectId: string
+  updatedKeys: string[]
+  siteUrl: string | null
+  warning?: string
+  error?: string
 }
 
 // LocalProjectsApi types  — use `unknown` for Project/AgentSession since we
@@ -556,6 +586,8 @@ const _terminalWriteQueues = new Map<string, Promise<TerminalWriteResult>>()
 // Agent terminal event emitters (no native Tauri equivalent yet — stubbed).
 const _agentTerminalCreatedListeners = new Set<(id: string) => void>()
 const _agentTerminalClosedListeners = new Set<(id: string) => void>()
+const _startDevServerListeners = new Set<() => void>()
+const _stopDevServerListeners = new Set<() => void>()
 const _restartDevServerListeners = new Set<() => void>()
 
 export const terminalBridge = {
@@ -647,18 +679,24 @@ export const terminalBridge = {
     return new Promise((resolve) => {
       const api = getSidecarApiSync()
       let output = ""
-      let commandStarted = false
       const marker = `__CMD_DONE_${Date.now()}__`
       const fullCommand = `${command}; echo "${marker}$?"`
 
       const ws = api.terminal.connect(terminalId)
 
       ws.on("message", (msg: unknown) => {
-        // Sidecar sends raw strings for PTY output, JSON objects for control frames.
+        // Sidecar sends raw strings for PTY output and JSON objects for control frames.
         let data: string | null = null
 
         if (typeof msg === "string") {
           data = msg
+        } else if (
+          msg &&
+          typeof msg === "object" &&
+          (msg as Record<string, unknown>).type === "data" &&
+          typeof (msg as Record<string, unknown>).data === "string"
+        ) {
+          data = (msg as Record<string, unknown>).data as string
         } else if (msg && typeof msg === "object" && (msg as Record<string, unknown>).type === "exit") {
           // Process exited while we were waiting — resolve with what we have
           const exitCode = ((msg as Record<string, unknown>).code as number) ?? 1
@@ -674,23 +712,21 @@ export const terminalBridge = {
         const existingCb = _termDataCallbacks.get(terminalId)
         if (existingCb) existingCb(terminalId, data)
 
-        if (!commandStarted) {
-          commandStarted = true
+        const markerPattern = new RegExp(`${marker}(\\d+)`)
+        const markerMatch = data.match(markerPattern)
+
+        // Only resolve when the completion marker is followed by a numeric
+        // exit code. This avoids matching the marker in the echoed command
+        // text (`... echo "__CMD_DONE...$?"`).
+        if (markerMatch && markerMatch.index !== undefined) {
+          output += data.substring(0, markerMatch.index)
+          const exitCode = parseInt(markerMatch[1], 10)
+          ws.close()
+          resolve({ output: output.trim(), exitCode })
           return
         }
 
-        if (data.includes(marker)) {
-          const markerIndex = data.indexOf(marker)
-          output += data.substring(0, markerIndex)
-          const exitCodeStr = data
-            .substring(markerIndex + marker.length)
-            .trim()
-          const exitCode = parseInt(exitCodeStr, 10) || 0
-          ws.close()
-          resolve({ output: output.trim(), exitCode })
-        } else {
-          output += data
-        }
+        output += data
       })
 
       ws.connect()
@@ -748,6 +784,22 @@ export const terminalBridge = {
   onAgentTerminalClosed: (callback: (terminalId: string) => void): UnsubscribeFn => {
     _agentTerminalClosedListeners.add(callback)
     return () => _agentTerminalClosedListeners.delete(callback)
+  },
+
+  /**
+   * onStartDevServer
+   */
+  onStartDevServer: (callback: () => void): UnsubscribeFn => {
+    _startDevServerListeners.add(callback)
+    return () => _startDevServerListeners.delete(callback)
+  },
+
+  /**
+   * onStopDevServer
+   */
+  onStopDevServer: (callback: () => void): UnsubscribeFn => {
+    _stopDevServerListeners.add(callback)
+    return () => _stopDevServerListeners.delete(callback)
   },
 
   /**
@@ -844,6 +896,71 @@ export const filesystemBridge = {
 // multiple subscribers.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _agentStreams = new Map<string, { ws: any; callbacks: Set<(msg: any) => void> }>()
+const _agentToolCalls = new Map<string, Map<string, string>>()
+
+function _normalizeToolName(raw: unknown): string {
+  if (typeof raw !== "string") return ""
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+}
+
+function _isWorkbenchRestartToolName(raw: unknown): boolean {
+  const normalizedToolName = _normalizeToolName(raw)
+  if (!normalizedToolName) return false
+
+  const isRestartAlias =
+    normalizedToolName === "restart_app" ||
+    normalizedToolName.endsWith("_restart_app")
+  const isWorkbenchScoped = normalizedToolName.includes("workbench")
+
+  return normalizedToolName === "restart_app" || (isWorkbenchScoped && isRestartAlias)
+}
+
+function _resolveWorkbenchLifecycleTool(raw: unknown): "start" | "stop" | "restart" | null {
+  const normalizedToolName = _normalizeToolName(raw)
+  if (!normalizedToolName) return null
+
+  const isWorkbenchScoped = normalizedToolName.includes("workbench")
+
+  const isStartAlias =
+    normalizedToolName === "start_app" ||
+    normalizedToolName.endsWith("_start_app")
+  if (normalizedToolName === "start_app" || (isWorkbenchScoped && isStartAlias)) {
+    return "start"
+  }
+
+  const isStopAlias =
+    normalizedToolName === "stop_app" ||
+    normalizedToolName.endsWith("_stop_app")
+  if (normalizedToolName === "stop_app" || (isWorkbenchScoped && isStopAlias)) {
+    return "stop"
+  }
+
+  if (_isWorkbenchRestartToolName(normalizedToolName)) {
+    return "restart"
+  }
+
+  return null
+}
+
+function _emitWorkbenchLifecycle(tool: "start" | "stop" | "restart"): void {
+  const listeners =
+    tool === "start"
+      ? _startDevServerListeners
+      : tool === "stop"
+        ? _stopDevServerListeners
+        : _restartDevServerListeners
+
+  for (const listener of listeners) {
+    try {
+      listener()
+    } catch (err) {
+      console.warn(`[conveyor-bridge] ${tool} listener error:`, err)
+    }
+  }
+}
 
 /**
  * Translate a sidecar AgentFrame into the AgentMessage shape expected by
@@ -902,6 +1019,15 @@ function _translateAgentFrame(raw: unknown, sessionId: string): any {
         name: payload.name ?? "",
         output: payload.output ?? "",
         isError: payload.isError ?? false,
+      }
+      break
+
+    case "queue_user_prompt":
+      // payload: { prompt, reason?, source? }
+      content = {
+        prompt: (payload.prompt as string) ?? "",
+        reason: (payload.reason as string | undefined) ?? undefined,
+        source: (payload.source as string | undefined) ?? undefined,
       }
       break
 
@@ -1022,34 +1148,45 @@ export const aiAgentBridge = {
         //   { type, content, metadata?: { seq, timestamp, tokens, cost } }
         // Translate here so the rest of the app works unchanged.
         const translated = _translateAgentFrame(msg, sessionId)
+        const translatedType = (translated as { type?: string }).type
 
-        // Bridge successful workbench restart tool results to restart listeners.
-        if ((translated as { type?: string }).type === "tool_result") {
-          const resultPayload = (translated as { content?: unknown }).content as
-            | { name?: unknown; isError?: unknown }
+        // Track tool_call ids so tool_result frames without name can still be resolved.
+        if (translatedType === "tool_call") {
+          const toolCallPayload = (translated as { content?: unknown }).content as
+            | { id?: unknown; name?: unknown }
             | undefined
-          const toolNameRaw = resultPayload?.name
-          const toolName = typeof toolNameRaw === "string" ? toolNameRaw.toLowerCase() : ""
-          const normalizedToolName = toolName
-            .replace(/[^a-z0-9]+/g, "_")
-            .replace(/^_+|_+$/g, "")
-          const isError = resultPayload?.isError === true
-          const isRestartAlias =
-            normalizedToolName === "restart_app" ||
-            normalizedToolName.endsWith("_restart_app")
-          const isWorkbenchScoped = normalizedToolName.includes("workbench")
-          const isWorkbenchRestartTool =
-            normalizedToolName === "restart_app" ||
-            (isWorkbenchScoped && isRestartAlias)
+          const callId = typeof toolCallPayload?.id === "string" ? toolCallPayload.id : ""
+          const toolName = _normalizeToolName(toolCallPayload?.name)
+          if (callId && toolName) {
+            const callMap = _agentToolCalls.get(sessionId) ?? new Map<string, string>()
+            callMap.set(callId, toolName)
+            _agentToolCalls.set(sessionId, callMap)
+          }
+        }
 
-          if (isWorkbenchRestartTool && !isError) {
-            for (const listener of _restartDevServerListeners) {
-              try {
-                listener()
-              } catch (err) {
-                console.warn("[conveyor-bridge] restart listener error:", err)
-              }
-            }
+        // Bridge successful workbench lifecycle tool results to local listeners.
+        if (translatedType === "tool_result") {
+          const resultPayload = (translated as { content?: unknown }).content as
+            | { callId?: unknown; name?: unknown; isError?: unknown }
+            | undefined
+          const callId = typeof resultPayload?.callId === "string" ? resultPayload.callId : ""
+          const callMap = _agentToolCalls.get(sessionId)
+          const toolNameRaw =
+            typeof resultPayload?.name === "string" && resultPayload.name.length > 0
+              ? resultPayload.name
+              : callId
+                ? callMap?.get(callId)
+                : undefined
+          const isError = resultPayload?.isError === true
+          const lifecycleTool = _resolveWorkbenchLifecycleTool(toolNameRaw)
+
+          if (lifecycleTool && !isError) {
+            _emitWorkbenchLifecycle(lifecycleTool)
+          }
+
+          if (callId && callMap) {
+            callMap.delete(callId)
+            if (callMap.size === 0) _agentToolCalls.delete(sessionId)
           }
         }
 
@@ -1065,13 +1202,15 @@ export const aiAgentBridge = {
         }
 
         // Clean up when the stream ends
-        if ((translated as { type?: string }).type === "stream_end") {
+        if (translatedType === "stream_end") {
+          _agentToolCalls.delete(sessionId)
           _agentStreams.delete(sessionId)
         }
       })
 
       ws.on("error", (err: unknown) => {
         console.warn(`[conveyor-bridge] agent stream error (${sessionId}):`, err)
+        _agentToolCalls.delete(sessionId)
         _agentStreams.delete(sessionId)
       })
 
@@ -1086,6 +1225,7 @@ export const aiAgentBridge = {
       e.callbacks.delete(callback)
       if (e.callbacks.size === 0) {
         e.ws.close()
+        _agentToolCalls.delete(sessionId)
         _agentStreams.delete(sessionId)
       }
     }
@@ -1720,10 +1860,11 @@ export const deployBridge = {
     }
   },
 
-  checkASCApiKey: async (): Promise<CheckASCApiKeyResult> => {
+  checkASCApiKey: async (projectPath: string): Promise<CheckASCApiKeyResult> => {
     try {
+      const query = new URLSearchParams({ projectPath }).toString()
       return await getSidecarApiSync().http.get<CheckASCApiKeyResult>(
-        "/api/deploy/check-asc-api-key",
+        `/api/deploy/check-asc-api-key?${query}`,
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.checkASCApiKey error:", err)
@@ -1775,10 +1916,14 @@ export const deployBridge = {
   },
 
   submit2FACode: async (code: string): Promise<{ success: boolean }> => {
+    if (!_currentBuildId) {
+      console.warn("[conveyor-bridge] deploy.submit2FACode: no active buildId")
+      return { success: false }
+    }
     try {
       return await getSidecarApiSync().http.post<{ success: boolean }>(
         "/api/deploy/submit-input",
-        { input: code },
+        { buildId: _currentBuildId, input: `${code}\n` },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.submit2FACode error:", err)
@@ -1787,10 +1932,14 @@ export const deployBridge = {
   },
 
   submitTerminalInput: async (input: string): Promise<{ success: boolean }> => {
+    if (!_currentBuildId) {
+      console.warn("[conveyor-bridge] deploy.submitTerminalInput: no active buildId")
+      return { success: false }
+    }
     try {
       return await getSidecarApiSync().http.post<{ success: boolean }>(
         "/api/deploy/submit-input",
-        { input },
+        { buildId: _currentBuildId, input },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.submitTerminalInput error:", err)
@@ -1798,23 +1947,128 @@ export const deployBridge = {
     }
   },
 
-  checkAppleSession: async (): Promise<AppleSessionInfo> => {
+  getBuildStatus: async (buildId: string, offset: number = 0): Promise<IOSBuildStatusResult> => {
     try {
-      const result = await getSidecarApiSync().http.get<AppleSessionsResult>(
-        "/api/deploy/apple-sessions",
+      const query = new URLSearchParams({ offset: String(offset) }).toString()
+      return await getSidecarApiSync().http.get<IOSBuildStatusResult>(
+        `/api/deploy/status/${encodeURIComponent(buildId)}?${query}`,
       )
-      // Return the first session or a default no-session result.
-      return result?.sessions?.[0] ?? { exists: false }
+    } catch (err) {
+      console.warn("[conveyor-bridge] deploy.getBuildStatus error:", err)
+      return { success: false, exists: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  streamBuildEvents: (buildId: string, handlers: BuildStreamHandlers): UnsubscribeFn => {
+    const api = getSidecarApiSync()
+    const wsUrl = api.http.wsUrl(`/api/deploy/stream/${encodeURIComponent(buildId)}`)
+    const streamUrl = wsUrl.replace(/^ws:\/\//, "http://").replace(/^wss:\/\//, "https://")
+    const controller = new AbortController()
+    let cancelled = false
+
+    const parseEventBlock = (block: string) => {
+      let eventType = "message"
+      const dataLines: string[] = []
+
+      for (const rawLine of block.split("\n")) {
+        const line = rawLine.trimEnd()
+        if (!line) continue
+        if (line.startsWith("event:")) {
+          eventType = line.slice("event:".length).trim()
+          continue
+        }
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice("data:".length).trimStart())
+        }
+      }
+
+      const rawData = dataLines.join("\n")
+      if (!rawData) return
+
+      try {
+        if (eventType === "log") {
+          const parsed = JSON.parse(rawData) as { data?: unknown }
+          if (typeof parsed?.data === "string") {
+            handlers.onLog?.(parsed.data)
+          }
+          return
+        }
+        if (eventType === "progress") {
+          handlers.onProgress?.(JSON.parse(rawData) as IOSBuildProgress)
+          return
+        }
+        if (eventType === "interactive_auth") {
+          handlers.onInteractiveAuth?.(JSON.parse(rawData) as InteractiveAuthEvent)
+          return
+        }
+        if (eventType === "complete") {
+          handlers.onComplete?.(JSON.parse(rawData) as IOSBuildResult)
+          return
+        }
+      } catch (err) {
+        handlers.onError?.(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    void (async () => {
+      try {
+        const response = await fetch(streamUrl, {
+          method: "GET",
+          signal: controller.signal,
+          headers: { Accept: "text/event-stream" },
+        })
+        if (!response.ok || !response.body) {
+          handlers.onError?.(`Build stream failed with status ${response.status}`)
+          return
+        }
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
+
+        while (!cancelled) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          let splitIndex = buffer.indexOf("\n\n")
+          while (splitIndex !== -1) {
+            const block = buffer.slice(0, splitIndex)
+            buffer = buffer.slice(splitIndex + 2)
+            parseEventBlock(block)
+            splitIndex = buffer.indexOf("\n\n")
+          }
+        }
+      } catch (err) {
+        if (!cancelled) {
+          handlers.onError?.(err instanceof Error ? err.message : String(err))
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  },
+
+  checkAppleSession: async (appleId: string): Promise<AppleSessionInfo> => {
+    try {
+      const query = new URLSearchParams({ appleId }).toString()
+      return await getSidecarApiSync().http.get<AppleSessionInfo>(
+        `/api/deploy/check-apple-session?${query}`,
+      )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.checkAppleSession error:", err)
       return { exists: false }
     }
   },
 
-  clearAppleSession: async (): Promise<{ success: boolean; cleared: number }> => {
+  clearAppleSession: async (appleId?: string): Promise<{ success: boolean; cleared: number }> => {
     try {
-      return await getSidecarApiSync().http.delete<{ success: boolean; cleared: number }>(
-        "/api/deploy/apple-sessions",
+      return await getSidecarApiSync().http.post<{ success: boolean; cleared: number }>(
+        "/api/deploy/clear-apple-session",
+        { appleId },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.clearAppleSession error:", err)
@@ -1833,11 +2087,11 @@ export const deployBridge = {
     }
   },
 
-  writeAppleCredsFile: async (creds: unknown): Promise<{ success: boolean }> => {
+  writeAppleCredsFile: async (args: { appleId: string; password: string; projectPath?: string }): Promise<{ success: boolean; path?: string }> => {
     try {
-      return await getSidecarApiSync().http.post<{ success: boolean }>(
+      return await getSidecarApiSync().http.post<{ success: boolean; path?: string }>(
         "/api/deploy/write-apple-creds",
-        creds,
+        args,
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.writeAppleCredsFile error:", err)
@@ -1845,10 +2099,11 @@ export const deployBridge = {
     }
   },
 
-  deleteCredsFile: async (): Promise<{ success: boolean }> => {
+  deleteCredsFile: async (path: string): Promise<{ success: boolean }> => {
     try {
-      return await getSidecarApiSync().http.delete<{ success: boolean }>(
-        "/api/deploy/delete-apple-creds",
+      return await getSidecarApiSync().http.post<{ success: boolean }>(
+        "/api/deploy/delete-creds-file",
+        { path },
       )
     } catch (err) {
       console.warn("[conveyor-bridge] deploy.deleteCredsFile error:", err)
@@ -1856,25 +2111,56 @@ export const deployBridge = {
     }
   },
 
-  onBuildLog: (callback: BuildLogCallback): UnsubscribeFn => {
+  onBuildLog: (callback: BuildLogCallback, buildId?: string): UnsubscribeFn => {
     if (_buildLogEs) {
       _buildLogEs.close()
       _buildLogEs = null
     }
-    const streamPath = _currentBuildId
-      ? `/api/deploy/stream/${_currentBuildId}`
+    const streamBuildId = buildId ?? _currentBuildId
+    const streamPath = streamBuildId
+      ? `/api/deploy/stream/${streamBuildId}`
       : "/api/deploy/stream/current"
     try {
       const es = createAuthenticatedEventSource(streamPath)
+      let closedByUs = false
       _buildLogEs = es
       es.addEventListener("log", (e: MessageEvent) => {
         try {
-          callback({ data: e.data })
+          // Sidecar emits log events as JSON payloads: { data: "<chunk>" }.
+          // Keep backward compatibility by falling back to raw event data.
+          let logData = String(e.data ?? "")
+          try {
+            const parsed = JSON.parse(logData) as { data?: unknown }
+            if (typeof parsed?.data === "string") {
+              logData = parsed.data
+            }
+          } catch {
+            // Non-JSON payload; use raw string.
+          }
+          callback({ data: logData })
         } catch (err) {
           console.warn("[conveyor-bridge] deploy.onBuildLog callback error:", err)
         }
       })
+      es.onmessage = (e: MessageEvent) => {
+        // Fallback path for environments that collapse custom SSE event names
+        // into plain "message" events.
+        try {
+          const parsed = JSON.parse(String(e.data ?? "")) as { data?: unknown }
+          if (typeof parsed?.data === "string") {
+            callback({ data: parsed.data })
+            return
+          }
+        } catch {
+          // Ignore non-log message payloads for this listener.
+        }
+      }
+      es.addEventListener("complete", () => {
+        closedByUs = true
+        es.close()
+      })
       es.onerror = () => {
+        if (closedByUs || es.readyState === EventSource.CLOSED) return
         console.warn("[conveyor-bridge] deploy.onBuildLog EventSource error")
       }
     } catch (err) {
@@ -1888,16 +2174,18 @@ export const deployBridge = {
     }
   },
 
-  onBuildProgress: (callback: BuildProgressCallback): UnsubscribeFn => {
+  onBuildProgress: (callback: BuildProgressCallback, buildId?: string): UnsubscribeFn => {
     if (_buildProgressEs) {
       _buildProgressEs.close()
       _buildProgressEs = null
     }
-    const streamPath = _currentBuildId
-      ? `/api/deploy/stream/${_currentBuildId}`
+    const streamBuildId = buildId ?? _currentBuildId
+    const streamPath = streamBuildId
+      ? `/api/deploy/stream/${streamBuildId}`
       : "/api/deploy/stream/current"
     try {
       const es = createAuthenticatedEventSource(streamPath)
+      let closedByUs = false
       _buildProgressEs = es
       es.addEventListener("progress", (e: MessageEvent) => {
         try {
@@ -1906,7 +2194,23 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onBuildProgress callback error:", err)
         }
       })
+      es.onmessage = (e: MessageEvent) => {
+        // Fallback for plain "message" event streams.
+        try {
+          const parsed = JSON.parse(String(e.data ?? "")) as Partial<IOSBuildProgress>
+          if (typeof parsed?.step === "string" && typeof parsed?.percent === "number") {
+            callback(parsed as IOSBuildProgress)
+          }
+        } catch {
+          // Ignore non-progress payloads for this listener.
+        }
+      }
+      es.addEventListener("complete", () => {
+        closedByUs = true
+        es.close()
+      })
       es.onerror = () => {
+        if (closedByUs || es.readyState === EventSource.CLOSED) return
         console.warn("[conveyor-bridge] deploy.onBuildProgress EventSource error")
       }
     } catch (err) {
@@ -1920,16 +2224,18 @@ export const deployBridge = {
     }
   },
 
-  onInteractiveAuth: (callback: InteractiveAuthCallback): UnsubscribeFn => {
+  onInteractiveAuth: (callback: InteractiveAuthCallback, buildId?: string): UnsubscribeFn => {
     if (_buildInteractiveEs) {
       _buildInteractiveEs.close()
       _buildInteractiveEs = null
     }
-    const streamPath = _currentBuildId
-      ? `/api/deploy/stream/${_currentBuildId}`
+    const streamBuildId = buildId ?? _currentBuildId
+    const streamPath = streamBuildId
+      ? `/api/deploy/stream/${streamBuildId}`
       : "/api/deploy/stream/current"
     try {
       const es = createAuthenticatedEventSource(streamPath)
+      let closedByUs = false
       _buildInteractiveEs = es
       es.addEventListener("interactive_auth", (e: MessageEvent) => {
         try {
@@ -1938,7 +2244,23 @@ export const deployBridge = {
           console.warn("[conveyor-bridge] deploy.onInteractiveAuth callback error:", err)
         }
       })
+      es.onmessage = (e: MessageEvent) => {
+        // Fallback for plain "message" event streams.
+        try {
+          const parsed = JSON.parse(String(e.data ?? "")) as Partial<InteractiveAuthEvent>
+          if (typeof parsed?.type === "string") {
+            callback(parsed as InteractiveAuthEvent)
+          }
+        } catch {
+          // Ignore non-auth payloads for this listener.
+        }
+      }
+      es.addEventListener("complete", () => {
+        closedByUs = true
+        es.close()
+      })
       es.onerror = () => {
+        if (closedByUs || es.readyState === EventSource.CLOSED) return
         console.warn("[conveyor-bridge] deploy.onInteractiveAuth EventSource error")
       }
     } catch (err) {
@@ -2005,6 +2327,28 @@ export const secretsBridge = {
     } catch (err) {
       console.warn("[conveyor-bridge] secrets.deleteSecret error:", err)
       return { success: false }
+    }
+  },
+
+  ensureConvexAuthEnv: async (
+    projectId: string,
+    appType: "web" | "mobile",
+  ): Promise<EnsureConvexAuthEnvResult> => {
+    try {
+      return await getSidecarApiSync().http.post<EnsureConvexAuthEnvResult>(
+        `/api/secrets/${projectId}/convex-auth-env/ensure`,
+        { appType },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] secrets.ensureConvexAuthEnv error:", err)
+      return {
+        success: false,
+        status: "failed",
+        projectId,
+        updatedKeys: [],
+        siteUrl: null,
+        error: err instanceof Error ? err.message : String(err),
+      }
     }
   },
 }
