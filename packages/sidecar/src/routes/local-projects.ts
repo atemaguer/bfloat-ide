@@ -150,6 +150,12 @@ const ProjectSchema = z.object({
   sessions: z.array(AgentSessionSchema).optional(),
 }).passthrough();
 
+// Update payloads come from mixed legacy/new project shapes.
+// Require only id here to avoid rejecting metadata updates (e.g. sourceUrl).
+const ProjectUpdateSchema = z.object({
+  id: z.string().min(1),
+}).passthrough();
+
 // ---------------------------------------------------------------------------
 // Shared helper — update a session within a project (used by routes + agent-session)
 // ---------------------------------------------------------------------------
@@ -276,7 +282,7 @@ localProjectsRouter.put("/:id/launch-config", async (c) => {
 localProjectsRouter.put("/:id", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json().catch(() => ({}));
-  const parsed = ProjectSchema.safeParse(body);
+  const parsed = ProjectUpdateSchema.safeParse(body);
   if (!parsed.success) {
     console.warn(`[LocalProjects] update rejected for ${id}:`, parsed.error.flatten());
     return c.json({ error: "Invalid project data", details: parsed.error.flatten() }, 400);
