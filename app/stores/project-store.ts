@@ -512,6 +512,24 @@ class ProjectStoreImpl {
   }
 
   /**
+   * Compare local/remote git branch heads and ahead/behind state
+   */
+  async getGitSyncStatus(): Promise<{
+    isGitRepo?: boolean
+    branch?: string
+    localHead?: string
+    remoteHead?: string
+    ahead?: number
+    behind?: number
+    diverged?: boolean
+    inSync?: boolean
+    success?: boolean
+    error?: string
+  }> {
+    return projectFiles.getGitSyncStatus()
+  }
+
+  /**
    * Get language for a file path
    */
   getLanguage(path: string): string {

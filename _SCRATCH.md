@@ -412,3 +412,257 @@ Verification:
 - Run ESLint on changed files.
 - Validate TypeScript compile (`tsc --noEmit`) for impacted code.
 - Inspect diff to ensure only scoped changes.
+
+## Task: 2026-03-03_002_unauthenticated-requests (follow-up: auth modal timeout UX)
+
+ASSUMPTIONS:
+1. `provider:auth-output` events may be absent in current sidecar flow, so modal progress cannot rely on SSE.
+2. If auth flow shows no progress quickly, user should be directed to terminal CLI login instead of waiting in modal.
+3. CLI fallback commands are `claude /login` (or `claude setup-token`) for Anthropic and `codex login` for OpenAI.
+→ Proceeding with these.
+
+PLAN:
+1. Modify `app/components/integrations/ProviderAuthModal.tsx` to track whether auth progress output was received.
+2. Add a short no-progress watchdog timer (15s) that fails fast with actionable CLI instructions when no output arrives.
+3. Keep existing success path intact so immediate successful auth still completes normally.
+4. Preserve existing overall timeout as safety net, but update timeout errors to include CLI fallback instructions.
+5. Verify with TypeScript-aware sanity check by inspecting diff and ensuring no new imports/types are missing.
+
+RISKS:
+- False fail-fast if auth is valid but emits no progress output before completion.
+- Different provider CLI versions may prefer `setup-token` vs `/login`; include both where relevant.
+
+VERIFICATION:
+- Open modal and simulate no output path: expect CLI instruction error within ~15s.
+- Confirm success result still sets `status=success` and enables Done.
+
+## Follow-up: frontend log bridge overflow from Chat.tsx
+
+ASSUMPTIONS:
+1. Repeated `console.log` calls in render/effects are the primary cause of `[frontend-log-bridge] queue overflow`.
+2. Auth invalidation behavior should remain unchanged; only logging frequency should be reduced.
+3. Keeping one occasional auth-warning log is useful for diagnosis, but repeated identical lines are noise.
+→ Proceeding with targeted log reduction and auth log dedupe.
+
+PLAN:
+1. Remove render-time and high-frequency effect logs in `app/components/chat/Chat.tsx`.
+2. Add cooldown-based dedupe around the Claude auth detection log in message stream handling.
+3. Keep functional behavior unchanged (auth invalidation, session/pending prompt logic).
+4. Run eslint for modified file.
+
+RISKS:
+- Reduced logs may hide debug context during development.
+
+VERIFICATION:
+- Confirm file compiles/lints.
+- Reproduce auth-expired flow and verify no repeated log flood.
+
+## Follow-up: allow updating existing secret keys from Add Secret modal
+
+ASSUMPTIONS:
+1. Secret writes are upserts in sidecar (`POST /api/secrets/:projectId`), so duplicate key saves are safe and expected.
+2. Blocking duplicates in `SecretModal` is now incorrect UX after env sync merge continuation work.
+3. Users may intentionally type an existing key while using Add Secret and expect overwrite.
+→ Proceeding with frontend validation/UX alignment only.
+
+PLAN:
+1. Update `app/components/settings/sections/SecretModal.tsx` duplicate-key validation to allow existing keys.
+2. Add UI hint when typed key already exists and will be updated.
+3. Adjust title/description/button text in add mode to communicate add-or-update behavior.
+4. Run eslint on modified file.
+
+RISKS:
+- Users might overwrite a key unintentionally; mitigate with clear inline hint.
+
+VERIFICATION:
+- In Add Secret modal, enter an existing key and new value; save should succeed and update key.
+- Existing edit flow should remain unchanged.
+
+# UI Parity Merge Review (2026-03-06)
+
+## Scope reviewed
+- Merge commit: `23d1133` (`Merge pull request #14 from atemaguer/task/2026-03-04_003_ui-visual-parity`)
+- Files changed:
+  - `app/components/window/Titlebar.tsx`
+  - `app/components/window/titlebar.css`
+  - `app/components/ai-elements/web-preview.tsx`
+  - `app/components/ui/tooltip.tsx`
+  - `app/components/payments/PaymentsOverview.tsx`
+  - `app/components/workbench/Workbench.tsx`
+
+## What changed
+1. Titlebar/workbench visual alignment:
+   - Added divider-aligned tab rail with dynamic positioning (`ResizeObserver` + layout measurements).
+   - Split tabs into primary strip + separate publish button section.
+   - Removed copy-project-id action from project titlebar actions.
+2. Preview toolbar parity:
+   - Reduced toolbar/nav height and icon button sizing to match chat session tab proportions.
+3. Tooltip parity:
+   - Restyled tooltip visuals globally to match workbench styling (larger rounded tooltip, dark/light fill updates, increased side offset).
+4. Payments parity + behavior:
+   - Reworked Payments tab into a connect/connected hero view.
+   - Wired connected-state to detected secrets presence via `detectIntegrationSecretsPresence` in `Workbench`.
+
+## Findings
+1. High: `node` app type can show inconsistent payments integration UX/state.
+   - `Workbench` computes `isConnected` using normalized app type (`node` -> `web`).
+   - `PaymentsOverview` still infers web/mobile from raw `project.appType` and treats `node` as mobile.
+   - Impact: for `node` projects, UI text/button can point to RevenueCat while connected-state is evaluated from Stripe secrets.
+2. Medium: tab ordering mismatch between titlebar visuals and content transition logic.
+   - Titlebar tab order now starts with Preview then Editor.
+   - Workbench slide-order array still uses Editor then Preview.
+   - Impact: directional slide animation between Preview/Editor can feel opposite to visual tab order.
+
+## Review limits
+- Static code review only; no runtime validation or test execution performed in this pass.
+
+# Task: Git-connected Sync Button + Git Settings Section (2026-03-06)
+
+ASSUMPTIONS:
+1. In this IDE, “git connected” should be represented by a non-empty `project.sourceUrl` (same signal used in bfloat-workbench titlebar).
+2. For this task, connecting Git means saving a user-provided repository URL to project metadata (`sourceUrl`), not provisioning managed GitHub remotes.
+3. Existing push behavior (sync button -> `projectStore.commitAndPush`) remains unchanged and out-of-scope for deeper git remote initialization work.
+→ Proceeding with these.
+
+## Phase 2 Plan
+
+### Files to modify
+- `app/components/window/Titlebar.tsx`
+- `app/components/project/ProjectSettings.tsx`
+
+### Order of operations and why
+1. Add `isGitConnected` derivation in titlebar from current project metadata and conditionally render sync button only when connected.
+2. Add Git section UI in Project Settings with repository URL input, status text, and connect/disconnect actions.
+3. Persist Git URL changes via `localProjectsStore.update(project.id, { sourceUrl })` and update live workbench project metadata so titlebar reacts immediately.
+4. Reuse existing settings card styling and button components to minimize visual risk.
+5. Verify via typecheck/lint on touched files and inspect diff for scope.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: metadata-driven connect/disconnect (URL stored as `sourceUrl`) matching current local-first architecture.
+- Rejected: implementing new sidecar git-remote mutation endpoints in this task; larger backend scope not required for requested UI behavior.
+
+### Risk areas
+- URL validation too strict could reject valid git URLs (e.g., SSH format); we should accept common HTTPS and SSH-style git URLs.
+- If workbench current project metadata is not updated live, titlebar sync icon visibility might lag until reload.
+
+### Verification
+- `pnpm eslint app/components/window/Titlebar.tsx app/components/project/ProjectSettings.tsx`
+- Manual diff review for only requested behavior changes.
+
+# Task: iOS deploy owner/account regression follow-up (2026-03-06)
+
+ASSUMPTIONS:
+1. Sidecar filesystem routes are the source of truth, and desktop `filesystem.ts` should normalize those responses into the existing `success`-based contract used by app code.
+2. The `eas whoami` parser should tolerate terminal noise and partial output, and failing to parse accounts should not break deploy flow.
+3. The `.gitconfig` lock warning in logs is non-fatal noise from concurrent git access and should be ignored by account parsing.
+-> Proceeding with these.
+
+PLAN:
+1. Patch `packages/desktop/src/api/filesystem.ts` to map sidecar response shapes (`ok`, raw content payloads, body-based delete) to app-facing `success` contracts.
+2. Harden `app/utils/eas-accounts.ts` parsing by stripping shell prompt/echo noise and by accepting owner-only fallback when `Accounts:` is absent.
+3. Keep existing runtime logs but remove obvious false-negative branches causing `Could not read app.json`.
+4. Run focused lint/typecheck on touched files.
+5. Self-review diff and report exact behavior changes.
+
+RISKS:
+- Over-normalizing FS responses could hide genuine sidecar failures if error mapping is too permissive.
+- EAS output heuristics could misclassify malformed output as valid.
+
+VERIFICATION:
+- `pnpm eslint packages/desktop/src/api/filesystem.ts app/utils/eas-accounts.ts`
+- Targeted typecheck if needed.
+
+## Follow-up (2026-03-06): executeCommand capture bug
+ASSUMPTIONS:
+1. `terminal.executeCommand` in the desktop bridge can drop full output when command echo/output/marker arrive in one first chunk.
+2. Fixing output capture in this bridge is the right layer and will unblock `fetchEasAccounts` parsing.
+-> Proceeding.
+
+PLAN:
+1. Inspect current `executeCommand` websocket message handling in `packages/desktop/src/conveyor-bridge.ts`.
+2. Remove brittle first-chunk discard logic and correctly handle both raw-string and `{type:"data"}` message shapes.
+3. Keep marker-based exit parsing intact.
+4. Run eslint/typecheck for touched files.
+
+## Follow-up (2026-03-06): deploy modal stuck at prepare due missing SSE updates
+ASSUMPTIONS:
+1. Interactive build is starting successfully (buildId is returned) but SSE delivery to renderer is unreliable in this path.
+2. Sidecar already has authoritative per-build state (output/progress/result), so polling that state is a safe fallback.
+-> Proceeding.
+
+PLAN:
+1. Add sidecar deploy status endpoint to return build snapshot by buildId.
+2. Add deploy bridge method to fetch that status.
+3. Add polling fallback in `IOSDeployModals` interactive flow that updates logs/progress and completes/fails modal from polled status.
+4. Keep existing SSE listeners; polling acts as resilience layer.
+
+## Follow-up (2026-03-06): align interactive iOS deploy with bfloat-workbench PTY flow
+ASSUMPTIONS:
+1. The recurring `Input is required, but stdin is not readable` failure is caused by running EAS interactive prompts through `Bun.spawn` pipes instead of a PTY.
+2. We can safely reuse sidecar `bun-pty` support (already used by terminal routes) inside deploy routes.
+3. For interactive iOS deploy, `eas init` must run with `--non-interactive --force` and explicit project id when known to avoid config prompts before Apple login.
+-> Proceeding.
+
+PLAN:
+1. Compare workbench deploy handler (`deploy-handler.ts`, `prompt-classifier.ts`, `pty-state-machine.ts`) with sidecar deploy route and port only the essential prompt handling behaviors.
+2. Refactor `packages/sidecar/src/routes/deploy.ts` interactive execution to use `bun-pty` first (fallback to `Bun.spawn` only if PTY unavailable).
+3. Add prompt classification/auto-response parity for interactive prompts:
+   - auto-confirm yes/no and menu prompts,
+   - emit `interactive_auth` events for 2FA,
+   - preserve manual `submit-input` path.
+4. Make `eas init` deterministic by passing `--id` when `extra.easProjectId` is provided to bypass "Configure this project?" interactive prompt.
+5. Verify with sidecar typecheck/test target and review logs for prompt progression and absence of stdin-readability errors.
+
+RISKS:
+- PTY output parsing can be noisier than stream readers and may require stricter ANSI cleanup.
+- Over-aggressive auto-confirmation could answer non-routine prompts incorrectly if regexes are too broad.
+
+VERIFICATION:
+- `bun test` in `packages/sidecar` (or targeted compile check if tests are not available).
+- Manual log validation: interactive prompt events and PTY writes occur, and build no longer fails at unreadable stdin prompt.
+
+## Follow-up (2026-03-07): deploy log readability cleanup + offline replay validation
+ASSUMPTIONS:
+1. The worst readability issues come from repeated spinner/progress frames and chunk-boundary glueing, not from missing transport data.
+2. We can safely normalize log presentation in the frontend store without changing deploy behavior.
+3. Replaying `pg/deploy.logs` line-by-line through the same cleaner is sufficient to validate formatting improvements before another real deploy.
+-> Proceeding.
+
+PLAN:
+1. Expand log normalization to collapse repeated lines, suppress known noisy warnings, and keep chunk boundaries stable.
+2. Add overwrite-style handling for interactive prompt typing/progress patterns so partial prompt echoes do not flood output.
+3. Keep all critical informational/error lines while reducing repetitive spinner noise.
+4. Run lint on touched files.
+5. Replay `pg/deploy.logs` with a local script that feeds the cleaner line-by-line and report before/after stats + sample output.
+
+## 2026-03-07_git-connect-interactive-auth
+
+ASSUMPTIONS:
+1. The Git connect flow should only persist `sourceUrl` after successful remote validation.
+2. Existing iOS interactive auth UX (prompt classification + guided inputs + fallback input) is the desired pattern to mirror for Git auth prompts.
+3. We should not persist entered Git credentials/passphrases/OTP anywhere in app storage.
+→ Proceeding with these.
+
+PLAN:
+1. Extend sidecar `project-files` routes with an interactive `git-connect` session lifecycle:
+   - Start connect (init repo if missing, add/set `origin`, validate via `git ls-remote origin`).
+   - Stream logs/auth prompt events over SSE.
+   - Accept prompt input + cancellation.
+   - Add prompt detection for HTTPS username/password, SSH passphrase, OTP, yes/no, and unknown fallback.
+2. Update desktop bridge `projectFilesBridge` with typed connect-session methods and event streaming callbacks similar to deploy flow.
+3. Update `ProjectSettings` Git card to run connect flow instead of metadata-only update:
+   - Keep URL validation.
+   - Show guided prompt UI for known prompt types, dedicated OTP input, and manual fallback input.
+   - Persist `sourceUrl` only when connect succeeds.
+4. Add/adjust TypeScript schema/types as needed for new API shapes.
+5. Verify with targeted tests for sidecar route behavior and run relevant test command(s) for project-files route tests.
+
+RISKS:
+- Prompt regexes can miss real-world git prompts; unknown prompts must reliably fall back to manual input.
+- Sidecar stream lifecycle cleanup (listener leaks / stale sessions) needs careful teardown paths.
+- UI state race conditions if user retries connect rapidly.
+
+VERIFICATION:
+- Unit tests for sidecar git connect prompt detection and connect success/failure paths.
+- Typecheck/build for affected packages.
+- Manual sanity flow: connect URL with no auth prompt + failure path from invalid auth.

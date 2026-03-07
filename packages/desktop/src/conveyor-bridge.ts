@@ -31,6 +31,7 @@ import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener"
 import { open as tauriOpenDialog } from "@tauri-apps/plugin-dialog"
 import { type as osType } from "@tauri-apps/plugin-os"
 import { getSidecarApiSync } from "./api"
+import { SidecarError } from "./api/client"
 import { addDeepLinkListener } from "./entry"
 
 // ---------------------------------------------------------------------------
@@ -248,6 +249,36 @@ interface FileChangeEvent {
   type: "add" | "change" | "unlink" | "addDir" | "unlinkDir"
   path: string
   projectId: string
+}
+
+type GitConnectPromptType =
+  | "https_username"
+  | "https_password"
+  | "ssh_passphrase"
+  | "otp"
+  | "yes_no"
+  | "unknown"
+
+interface GitConnectAuthEvent {
+  type: GitConnectPromptType
+  confidence: number
+  context: string
+  suggestion?: string
+}
+
+interface GitConnectResult {
+  success: boolean
+  projectId: string
+  projectPath: string
+  remoteUrl: string
+  remoteBranch: string
+  error?: string
+}
+
+interface GitConnectStreamHandlers {
+  onLog?: (data: string) => void
+  onInteractiveAuth?: (event: GitConnectAuthEvent) => void
+  onComplete: (result: GitConnectResult) => void
 }
 
 // ProjectSyncApi types
@@ -1504,10 +1535,12 @@ export const projectFilesBridge = {
   commitAndPush: async (message: string): Promise<void> => {
     const pid = _activeProjectId
     if (!pid) throw new Error("No active project — call open() first")
+    console.log("[conveyor-bridge] projectFiles.commitAndPush start", { projectId: pid, message })
     await getSidecarApiSync().http.post<void>(
       `/api/project-files/git-commit/${pid}`,
       { message, push: true },
     )
+    console.log("[conveyor-bridge] projectFiles.commitAndPush complete", { projectId: pid })
   },
 
   syncToRemote: async (_authenticatedUrl?: string): Promise<void> => {
@@ -1521,9 +1554,8 @@ export const projectFilesBridge = {
   pull: async (): Promise<void> => {
     const pid = _activeProjectId
     if (!pid) throw new Error("No active project — call open() first")
-    // Note: the sidecar uses git-clone endpoint for pulling
     await getSidecarApiSync().http.post<void>(
-      `/api/project-files/git-clone/${pid}`,
+      `/api/project-files/git-pull/${pid}`,
     )
   },
 
@@ -1532,15 +1564,72 @@ export const projectFilesBridge = {
     if (!pid) return false
     try {
       const result = await getSidecarApiSync().http.get<{
+        success?: boolean
+        error?: string
         isGitRepo?: boolean
         files?: unknown[]
         clean?: boolean
       }>(`/api/project-files/git-status/${pid}`)
+      if (result?.success === false || result?.error) {
+        throw new Error(result?.error || "Failed to read git status")
+      }
+      console.log("[conveyor-bridge] projectFiles.hasChanges status", {
+        projectId: pid,
+        isGitRepo: result?.isGitRepo ?? null,
+        clean: result?.clean ?? null,
+        files: result?.files?.length ?? 0,
+      })
       if (typeof result?.clean === "boolean") return !result.clean
       return (result?.files?.length ?? 0) > 0
     } catch (err) {
       console.warn("[conveyor-bridge] projectFiles.hasChanges error:", err)
-      return false
+      throw err instanceof Error ? err : new Error(String(err))
+    }
+  },
+
+  getGitSyncStatus: async (): Promise<{
+    isGitRepo?: boolean
+    branch?: string
+    localHead?: string
+    remoteHead?: string
+    ahead?: number
+    behind?: number
+    diverged?: boolean
+    inSync?: boolean
+    success?: boolean
+    error?: string
+  }> => {
+    const pid = _activeProjectId
+    if (!pid) {
+      return { success: false, error: "No active project — call open() first" }
+    }
+    try {
+      const result = await getSidecarApiSync().http.get<{
+        isGitRepo?: boolean
+        branch?: string
+        localHead?: string
+        remoteHead?: string
+        ahead?: number
+        behind?: number
+        diverged?: boolean
+        inSync?: boolean
+        success?: boolean
+        error?: string
+      }>(`/api/project-files/git-sync-status/${pid}`)
+      if (result?.success === false || result?.error) {
+        throw new Error(result?.error || "Failed to read git sync status")
+      }
+      console.log("[conveyor-bridge] projectFiles.getGitSyncStatus", {
+        projectId: pid,
+        branch: result?.branch ?? null,
+        ahead: result?.ahead ?? null,
+        behind: result?.behind ?? null,
+        inSync: result?.inSync ?? null,
+      })
+      return result
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.getGitSyncStatus error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
     }
   },
 
@@ -1628,6 +1717,125 @@ export const projectFilesBridge = {
     } catch (err) {
       console.warn("[conveyor-bridge] projectFiles.syncAgentInstructions error:", err)
       return false
+    }
+  },
+
+  startGitConnect: async (projectId: string, remoteUrl: string, remoteBranch: string): Promise<{ success: boolean; sessionId?: string; remoteBranch?: string; error?: string }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean; sessionId?: string; remoteBranch?: string; error?: string }>(
+        "/api/project-files/git-connect/start",
+        { projectId, remoteUrl, remoteBranch },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.startGitConnect error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  runGitConnectDiagnostics: async (
+    projectId: string,
+    remoteUrl: string,
+  ): Promise<{
+    success: boolean
+    remoteUrl?: string
+    remoteType?: "ssh" | "https" | "other"
+    sshAgentHasIdentities?: boolean | null
+    remoteReachable?: boolean | null
+    probeError?: string
+    suggestedHttpsUrl?: string
+    error?: string
+  }> => {
+    try {
+      return await getSidecarApiSync().http.post<{
+        success: boolean
+        remoteUrl?: string
+        remoteType?: "ssh" | "https" | "other"
+        sshAgentHasIdentities?: boolean | null
+        remoteReachable?: boolean | null
+        probeError?: string
+        suggestedHttpsUrl?: string
+        error?: string
+      }>(
+        "/api/project-files/git-connect/diagnostics",
+        { projectId, remoteUrl },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.runGitConnectDiagnostics error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  submitGitConnectInput: async (sessionId: string, input: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean; error?: string }>(
+        "/api/project-files/git-connect/input",
+        { sessionId, input },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.submitGitConnectInput error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  cancelGitConnect: async (sessionId: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      return await getSidecarApiSync().http.post<{ success: boolean; error?: string }>(
+        "/api/project-files/git-connect/cancel",
+        { sessionId },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.cancelGitConnect error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  streamGitConnect: (sessionId: string, handlers: GitConnectStreamHandlers): UnsubscribeFn => {
+    let es: EventSource | null = null
+    try {
+      es = createAuthenticatedEventSource(`/api/project-files/git-connect/stream/${encodeURIComponent(sessionId)}`)
+      es.addEventListener("log", (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(String(e.data ?? "")) as { data?: string }
+          handlers.onLog?.(payload?.data ?? "")
+        } catch {
+          // ignore malformed log payloads
+        }
+      })
+      es.addEventListener("interactive_auth", (e: MessageEvent) => {
+        try {
+          handlers.onInteractiveAuth?.(JSON.parse(e.data) as GitConnectAuthEvent)
+        } catch (err) {
+          console.warn("[conveyor-bridge] projectFiles.streamGitConnect interactive_auth parse error:", err)
+        }
+      })
+      es.addEventListener("complete", (e: MessageEvent) => {
+        try {
+          handlers.onComplete(JSON.parse(e.data) as GitConnectResult)
+        } catch (err) {
+          handlers.onComplete({
+            success: false,
+            projectId: "",
+            projectPath: "",
+            remoteUrl: "",
+            remoteBranch: "main",
+            error: err instanceof Error ? err.message : String(err),
+          })
+        } finally {
+          es?.close()
+        }
+      })
+      es.onerror = () => {
+        if (!es || es.readyState === EventSource.CLOSED) return
+        console.warn("[conveyor-bridge] projectFiles.streamGitConnect EventSource error", { sessionId, readyState: es.readyState })
+      }
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.streamGitConnect setup error:", err)
+    }
+
+    return () => {
+      if (es) {
+        es.close()
+      }
     }
   },
 
@@ -2506,7 +2714,20 @@ export const localProjectsBridge = {
         data,
       )
     } catch (err) {
-      console.warn("[conveyor-bridge] localProjects.update error:", err)
+      if (err instanceof SidecarError) {
+        console.warn("[conveyor-bridge] localProjects.update error:", {
+          id,
+          status: err.status,
+          message: err.message,
+          body: err.body,
+          payloadKeys: Object.keys(data ?? {}),
+          sourceUrl: (data as { sourceUrl?: string | null })?.sourceUrl ?? null,
+          sourceBranch: (data as { sourceBranch?: string | null })?.sourceBranch ?? null,
+        })
+      } else {
+        console.warn("[conveyor-bridge] localProjects.update error:", err)
+      }
+      throw err
     }
   },
 

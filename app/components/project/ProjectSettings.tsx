@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { AlertCircle, Eye, EyeOff, GitBranch, Globe, Key, Loader2, Lock, Pencil, Plus, Save, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -29,9 +29,93 @@ interface ProjectSettingsProps {
   onProjectUpdate?: (project: Project) => void
 }
 
+type GitAuthPromptType = 'https_username' | 'https_password' | 'ssh_passphrase' | 'otp' | 'yes_no' | 'unknown'
+
+interface GitAuthPrompt {
+  type: GitAuthPromptType
+  confidence: number
+  context: string
+  suggestion?: string
+}
+
+interface GitErrorGuidance {
+  title: string
+  steps: string[]
+}
+
+interface GitConnectDiagnostics {
+  success: boolean
+  remoteUrl?: string
+  remoteType?: 'ssh' | 'https' | 'other'
+  sshAgentHasIdentities?: boolean | null
+  remoteReachable?: boolean | null
+  probeError?: string
+  suggestedHttpsUrl?: string
+  error?: string
+}
+
 const REVENUECAT_API_KEY = 'REVENUECAT_API_KEY'
 const STRIPE_SETUP_PROMPT = 'Use the /add-stripe skill to set up Stripe payments integration for this project'
 const REVENUECAT_SETUP_PROMPT = 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project'
+
+const getGitErrorGuidance = (message: string): GitErrorGuidance | null => {
+  const text = message.toLowerCase()
+
+  if (
+    text.includes('no identities are loaded in ssh-agent') ||
+    text.includes('no usable ssh key was found')
+  ) {
+    return {
+      title: 'SSH key is not loaded',
+      steps: [
+        'Load your key: ssh-add ~/.ssh/<your-key>',
+        'Try Connect Remote again',
+        'If SSH is not available, switch to an HTTPS repository URL and use a token',
+      ],
+    }
+  }
+
+  if (text.includes('repository not found or ssh authentication failed')) {
+    return {
+      title: 'SSH connection could not be authenticated',
+      steps: [
+        'Confirm the repository URL is correct: git@github.com:<owner>/<repo>.git',
+        'Load your SSH key: ssh-add ~/.ssh/<your-key>',
+        'Retry Connect Remote, or switch to HTTPS + token if preferred',
+      ],
+    }
+  }
+
+  if (text.includes('https authentication failed')) {
+    return {
+      title: 'HTTPS credentials were rejected',
+      steps: [
+        'Verify your username and personal access token',
+        'Retry Connect Remote and enter credentials when prompted',
+        'If 2FA is enabled, complete OTP/code prompts',
+      ],
+    }
+  }
+
+  return null
+}
+
+const toHttpsRemoteUrl = (remoteUrl: string): string | null => {
+  const trimmed = remoteUrl.trim()
+  const scpLikeMatch = trimmed.match(/^git@([^:]+):(.+)$/i)
+  if (scpLikeMatch) {
+    const [, host, repoPath] = scpLikeMatch
+    return `https://${host}/${repoPath}`
+  }
+
+  const sshUrlMatch = trimmed.match(/^ssh:\/\/git@([^/]+)\/(.+)$/i)
+  if (sshUrlMatch) {
+    const [, host, repoPath] = sshUrlMatch
+    return `https://${host}/${repoPath}`
+  }
+
+  return null
+}
 
 export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsProps) {
   const [isSaving, setIsSaving] = useState(false)
@@ -40,6 +124,15 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [isUpdatingGit, setIsUpdatingGit] = useState(false)
   const [gitConnectError, setGitConnectError] = useState<string | null>(null)
   const [gitConnectSuccess, setGitConnectSuccess] = useState<string | null>(null)
+  const [gitConnectSessionId, setGitConnectSessionId] = useState<string | null>(null)
+  const [gitAuthPrompt, setGitAuthPrompt] = useState<GitAuthPrompt | null>(null)
+  const [gitAuthInput, setGitAuthInput] = useState('')
+  const [gitOtpInput, setGitOtpInput] = useState('')
+  const [gitConnectLogTail, setGitConnectLogTail] = useState('')
+  const [isRunningGitDiagnostics, setIsRunningGitDiagnostics] = useState(false)
+  const [gitDiagnostics, setGitDiagnostics] = useState<GitConnectDiagnostics | null>(null)
+  const gitConnectUnsubscribeRef = useRef<(() => void) | null>(null)
+  const gitConnectSessionIdRef = useRef<string | null>(null)
 
   // Form state
   const [title, setTitle] = useState(project.title || '')
@@ -50,6 +143,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [isPublic, setIsPublic] = useState(project.isPublic || false)
   const [agentInstructions, setAgentInstructions] = useState(project.agentInstructions || '')
   const [gitRemoteUrl, setGitRemoteUrl] = useState(project.sourceUrl || '')
+  const [gitRemoteBranch, setGitRemoteBranch] = useState(project.sourceBranch || 'main')
   const [connectedGitRemoteUrl, setConnectedGitRemoteUrl] = useState(project.sourceUrl || '')
 
   // App icon state
@@ -116,12 +210,19 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     setIsPublic(project.isPublic || false)
     setAgentInstructions(project.agentInstructions || '')
     setGitRemoteUrl(project.sourceUrl || '')
+    setGitRemoteBranch(project.sourceBranch || 'main')
     setConnectedGitRemoteUrl(project.sourceUrl || '')
     setIosAppIconPreview(project.iosAppIconUrl || null)
     setAndroidAppIconPreview(project.androidAppIconUrl || null)
   }, [project])
 
   const isGitConnected = Boolean(connectedGitRemoteUrl.trim())
+  const gitErrorGuidance = gitConnectError ? getGitErrorGuidance(gitConnectError) : null
+  const autoFixHttpsUrl = toHttpsRemoteUrl(gitRemoteUrl)
+  const canAutoFixToHttps =
+    Boolean(autoFixHttpsUrl) &&
+    Boolean(gitConnectError) &&
+    /ssh|repository not found/i.test(gitConnectError || '')
 
   const isValidGitRemoteUrl = (value: string): boolean => {
     const trimmed = value.trim()
@@ -132,63 +233,221 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     return false
   }
 
-  const updateGitRemote = async (nextSourceUrl: string | null) => {
-    setIsUpdatingGit(true)
-    setGitConnectError(null)
-    setGitConnectSuccess(null)
+  const isValidGitBranchName = (value: string): boolean => {
+    const trimmed = value.trim()
+    if (!trimmed) return false
+    if (trimmed.includes(' ')) return false
+    if (trimmed.startsWith('/') || trimmed.endsWith('/')) return false
+    if (trimmed.includes('..')) return false
+    return true
+  }
 
+  const updateGitRemote = async (nextSourceUrl: string | null, nextSourceBranch: string | null) => {
     const normalizedSourceUrl = nextSourceUrl?.trim() || null
+    const normalizedSourceBranch = nextSourceBranch?.trim() || null
 
-    try {
-      await localProjectsStore.update(project.id, { sourceUrl: normalizedSourceUrl })
-      const updatedProject: Project = {
-        ...project,
-        sourceUrl: normalizedSourceUrl,
-        updatedAt: new Date().toISOString(),
-      }
+    await localProjectsStore.update(project.id, {
+      sourceUrl: normalizedSourceUrl,
+      sourceBranch: normalizedSourceBranch,
+    })
+    const updatedProject: Project = {
+      ...project,
+      sourceUrl: normalizedSourceUrl,
+      sourceBranch: normalizedSourceBranch,
+      updatedAt: new Date().toISOString(),
+    }
 
-      workbenchStore.setProjectMetadata(updatedProject)
-      setGitRemoteUrl(normalizedSourceUrl || '')
-      setConnectedGitRemoteUrl(normalizedSourceUrl || '')
+    workbenchStore.setProjectMetadata(updatedProject)
+    setGitRemoteUrl(normalizedSourceUrl || '')
+    setGitRemoteBranch(normalizedSourceBranch || 'main')
+    setConnectedGitRemoteUrl(normalizedSourceUrl || '')
 
-      if (onProjectUpdate) {
-        onProjectUpdate(updatedProject)
-      }
-    } finally {
-      setIsUpdatingGit(false)
+    if (onProjectUpdate) {
+      onProjectUpdate(updatedProject)
     }
   }
 
-  const handleConnectGit = async () => {
-    const nextUrl = gitRemoteUrl.trim()
+  const handleConnectGit = async (overrides?: { remoteUrl?: string; remoteBranch?: string }) => {
+    const nextUrl = (overrides?.remoteUrl ?? gitRemoteUrl).trim()
+    const nextBranch = (overrides?.remoteBranch ?? gitRemoteBranch).trim() || 'main'
 
     if (!isValidGitRemoteUrl(nextUrl)) {
       setGitConnectError('Enter a valid Git repository URL (HTTPS or SSH).')
       return
     }
+    if (!isValidGitBranchName(nextBranch)) {
+      setGitConnectError('Enter a valid branch name.')
+      return
+    }
+
+    setIsUpdatingGit(true)
+    setGitConnectError(null)
+    setGitConnectSuccess(null)
+    setGitDiagnostics(null)
+    setGitAuthPrompt(null)
+    setGitAuthInput('')
+    setGitOtpInput('')
+    setGitConnectLogTail('')
 
     try {
-      await updateGitRemote(nextUrl)
+      const startResult = await projectFiles.startGitConnect(project.id, nextUrl, nextBranch)
+      if (!startResult.success || !startResult.sessionId) {
+        throw new Error(startResult.error || 'Failed to start Git connection flow')
+      }
+
+      const sessionId = startResult.sessionId
+      setGitConnectSessionId(sessionId)
+      gitConnectSessionIdRef.current = sessionId
+
+      await new Promise<void>((resolve, reject) => {
+        const unsubscribe = projectFiles.streamGitConnect(sessionId, {
+          onLog: (chunk: string) => {
+            if (!chunk) return
+            setGitConnectLogTail((prev) => (prev + chunk).slice(-4000))
+          },
+          onInteractiveAuth: (event: GitAuthPrompt) => {
+            setGitConnectError(null)
+            setGitAuthPrompt(event)
+            setGitAuthInput('')
+            if (event.type !== 'otp') {
+              setGitOtpInput('')
+            }
+          },
+          onComplete: async (result: { success: boolean; error?: string }) => {
+            gitConnectUnsubscribeRef.current?.()
+            gitConnectUnsubscribeRef.current = null
+            setGitConnectSessionId(null)
+            gitConnectSessionIdRef.current = null
+            setGitAuthPrompt(null)
+            setGitAuthInput('')
+            setGitOtpInput('')
+
+            if (!result.success) {
+              reject(new Error(result.error || 'Failed to connect Git repository'))
+              return
+            }
+
+            try {
+              await updateGitRemote(nextUrl, nextBranch)
+              resolve()
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error('Failed to save Git connection metadata'))
+            }
+          },
+        })
+
+        gitConnectUnsubscribeRef.current = unsubscribe
+      })
+
       setGitConnectSuccess('Git repository connected.')
       toast.success('Git repository connected')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to connect Git repository'
       setGitConnectError(message)
       toast.error(message)
+    } finally {
+      setIsUpdatingGit(false)
+    }
+  }
+
+  const handleAutoFixToHttps = async () => {
+    if (!autoFixHttpsUrl) return
+
+    setGitRemoteUrl(autoFixHttpsUrl)
+    setGitConnectError(null)
+    setGitConnectSuccess(null)
+    setGitDiagnostics(null)
+    await handleConnectGit({ remoteUrl: autoFixHttpsUrl })
+  }
+
+  const handleRunGitDiagnostics = async () => {
+    const nextUrl = gitRemoteUrl.trim()
+    if (!isValidGitRemoteUrl(nextUrl)) {
+      setGitConnectError('Enter a valid Git repository URL (HTTPS or SSH).')
+      return
+    }
+
+    setIsRunningGitDiagnostics(true)
+    setGitConnectError(null)
+    setGitConnectSuccess(null)
+    setGitDiagnostics(null)
+    try {
+      const result = await projectFiles.runGitConnectDiagnostics(project.id, nextUrl)
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to run Git diagnostics')
+      }
+      setGitDiagnostics(result)
+      toast.success('Git diagnostics complete')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to run Git diagnostics'
+      setGitConnectError(message)
+      toast.error(message)
+    } finally {
+      setIsRunningGitDiagnostics(false)
     }
   }
 
   const handleDisconnectGit = async () => {
+    setIsUpdatingGit(true)
+    setGitConnectError(null)
+    setGitConnectSuccess(null)
+    setGitDiagnostics(null)
     try {
-      await updateGitRemote(null)
+      await updateGitRemote(null, null)
       setGitConnectSuccess('Git repository disconnected.')
       toast.success('Git repository disconnected')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to disconnect Git repository'
       setGitConnectError(message)
       toast.error(message)
+    } finally {
+      setIsUpdatingGit(false)
     }
   }
+
+  const submitGitAuthInput = async (value: string) => {
+    if (!gitConnectSessionId || !gitAuthPrompt) return
+    const trimmed = value.trim()
+    if (!trimmed) return
+
+    const result = await projectFiles.submitGitConnectInput(gitConnectSessionId, `${trimmed}\n`)
+    if (!result.success) {
+      setGitConnectError(result.error || 'Failed to submit authentication input')
+      return
+    }
+
+    setGitAuthPrompt(null)
+    setGitAuthInput('')
+    if (gitAuthPrompt.type === 'otp') {
+      setGitOtpInput('')
+    }
+  }
+
+  const cancelGitConnect = async () => {
+    if (!gitConnectSessionId) return
+    await projectFiles.cancelGitConnect(gitConnectSessionId)
+    gitConnectUnsubscribeRef.current?.()
+    gitConnectUnsubscribeRef.current = null
+    setGitConnectSessionId(null)
+    gitConnectSessionIdRef.current = null
+    setGitAuthPrompt(null)
+    setGitAuthInput('')
+    setGitOtpInput('')
+    setIsUpdatingGit(false)
+    setGitConnectError('Git connection cancelled.')
+  }
+
+  useEffect(() => {
+    return () => {
+      const sessionId = gitConnectSessionIdRef.current
+      if (sessionId) {
+        projectFiles.cancelGitConnect(sessionId).catch(() => {})
+      }
+      gitConnectUnsubscribeRef.current?.()
+      gitConnectUnsubscribeRef.current = null
+      gitConnectSessionIdRef.current = null
+    }
+  }, [])
 
   // Load secrets
   const loadSecrets = async () => {
@@ -746,19 +1005,187 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                     setGitRemoteUrl(e.target.value)
                     setGitConnectError(null)
                     setGitConnectSuccess(null)
+                    setGitDiagnostics(null)
+                    setGitAuthPrompt(null)
                   }}
                   placeholder="https://github.com/you/repo.git or git@github.com:you/repo.git"
                 />
               </div>
 
+              <div className="settings-field">
+                <label htmlFor="gitRemoteBranch">Remote Branch</label>
+                <Input
+                  id="gitRemoteBranch"
+                  type="text"
+                  value={gitRemoteBranch}
+                  onChange={(e) => {
+                    setGitRemoteBranch(e.target.value)
+                    setGitConnectError(null)
+                    setGitConnectSuccess(null)
+                    setGitDiagnostics(null)
+                  }}
+                  placeholder="main"
+                />
+              </div>
+
               {gitConnectError && (
-                <div className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-300">
-                  {gitConnectError}
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+                  {gitErrorGuidance ? (
+                    <div className="space-y-2">
+                      <div className="font-medium">{`Error: ${gitErrorGuidance.title}`}</div>
+                      <ol className="list-decimal pl-5 space-y-1">
+                        {gitErrorGuidance.steps.map((step, index) => (
+                          <li key={`${index}-${step}`} className="text-red-700 dark:text-red-200">{step}</li>
+                        ))}
+                      </ol>
+                      {canAutoFixToHttps && autoFixHttpsUrl && (
+                        <div className="pt-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleAutoFixToHttps}
+                            disabled={isUpdatingGit}
+                          >
+                            Use HTTPS and retry automatically
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    gitConnectError
+                  )}
                 </div>
               )}
               {gitConnectSuccess && (
-                <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                <div
+                  className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+                  style={{ color: '#064e3b' }}
+                >
                   {gitConnectSuccess}
+                </div>
+              )}
+
+              {gitDiagnostics && (
+                <div className="rounded-md border border-amber-400 bg-amber-100 px-3 py-3 text-sm dark:border-amber-500/30 dark:bg-amber-500/10">
+                  <div className="mb-2 font-medium dark:text-amber-200" style={{ color: '#422006' }}>Git diagnostics</div>
+                  <ol className="list-decimal pl-5 space-y-1 dark:text-amber-100" style={{ color: '#78350f' }}>
+                    <li className="dark:text-amber-100" style={{ color: '#78350f' }}>{`Remote type: ${gitDiagnostics.remoteType || 'unknown'}`}</li>
+                    <li className="dark:text-amber-100" style={{ color: '#78350f' }}>
+                      {gitDiagnostics.remoteReachable
+                        ? 'Remote reachability check passed'
+                        : 'Remote reachability check failed'}
+                    </li>
+                    {gitDiagnostics.remoteType === 'ssh' && (
+                      <li className="dark:text-amber-100" style={{ color: '#78350f' }}>
+                        {gitDiagnostics.sshAgentHasIdentities === true
+                          ? 'SSH agent has at least one loaded identity'
+                          : gitDiagnostics.sshAgentHasIdentities === false
+                            ? 'SSH agent has no loaded identities'
+                            : 'SSH agent identity status is inconclusive'}
+                      </li>
+                    )}
+                    {gitDiagnostics.probeError && (
+                      <li className="dark:text-amber-100" style={{ color: '#78350f' }}>{`Probe error: ${gitDiagnostics.probeError}`}</li>
+                    )}
+                  </ol>
+                  {gitDiagnostics.suggestedHttpsUrl && (
+                    <div className="pt-3 flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="default"
+                        size="sm"
+                        className="bg-emerald-600 text-white hover:bg-emerald-500"
+                        onClick={() => {
+                          setGitRemoteUrl(gitDiagnostics.suggestedHttpsUrl || '')
+                          setGitConnectError(null)
+                        }}
+                      >
+                        Use suggested HTTPS URL
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {gitAuthPrompt && (
+                <div className="space-y-3 rounded-md border border-border/60 bg-muted/20 p-3">
+                  <div className="text-sm font-medium">Authentication required</div>
+                  <div className="text-xs text-muted-foreground whitespace-pre-wrap break-words font-mono">
+                    {gitAuthPrompt.context}
+                  </div>
+                  {gitAuthPrompt.suggestion && (
+                    <div className="text-xs text-muted-foreground">{gitAuthPrompt.suggestion}</div>
+                  )}
+
+                  {gitAuthPrompt.type === 'yes_no' ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => submitGitAuthInput('y')}
+                        disabled={!gitConnectSessionId}
+                      >
+                        Yes (y)
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => submitGitAuthInput('n')}
+                        disabled={!gitConnectSessionId}
+                      >
+                        No (n)
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type={gitAuthPrompt.type === 'https_password' || gitAuthPrompt.type === 'ssh_passphrase' ? 'password' : 'text'}
+                        value={gitAuthPrompt.type === 'otp' ? gitOtpInput : gitAuthInput}
+                        onChange={(e) => {
+                          if (gitAuthPrompt.type === 'otp') {
+                            setGitOtpInput(e.target.value.replace(/\D/g, '').slice(0, 8))
+                          } else {
+                            setGitAuthInput(e.target.value)
+                          }
+                        }}
+                        placeholder={gitAuthPrompt.type === 'otp' ? 'Enter verification code' : 'Enter response'}
+                        inputMode={gitAuthPrompt.type === 'otp' ? 'numeric' : undefined}
+                        autoFocus
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => submitGitAuthInput(gitAuthPrompt.type === 'otp' ? gitOtpInput : gitAuthInput)}
+                        disabled={!gitConnectSessionId}
+                      >
+                        Submit
+                      </Button>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={cancelGitConnect}
+                      disabled={!gitConnectSessionId}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {isUpdatingGit && gitConnectLogTail && (
+                <div className="rounded-md border border-border/60 bg-muted/20 p-3">
+                  <div className="text-xs font-medium text-muted-foreground mb-2">Git Connect Output</div>
+                  <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-xs font-mono text-muted-foreground">
+                    {gitConnectLogTail}
+                  </pre>
                 </div>
               )}
 
@@ -766,12 +1193,32 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={handleConnectGit}
-                  disabled={isUpdatingGit}
+                  onClick={handleRunGitDiagnostics}
+                  disabled={isUpdatingGit || isRunningGitDiagnostics}
                 >
-                  {isUpdatingGit ? <Loader2 size={14} className="animate-spin" /> : <GitBranch size={14} />}
-                  Connect Remote
+                  {isRunningGitDiagnostics ? <Loader2 size={14} className="animate-spin" /> : <AlertCircle size={14} />}
+                  Run diagnostics
                 </Button>
+                {!isGitConnected && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleConnectGit}
+                    disabled={isUpdatingGit}
+                  >
+                    {isUpdatingGit ? <Loader2 size={14} className="animate-spin" /> : <GitBranch size={14} />}
+                    Connect Remote
+                  </Button>
+                )}
+                {gitConnectSessionId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={cancelGitConnect}
+                  >
+                    Cancel Connect
+                  </Button>
+                )}
                 {isGitConnected && (
                   <Button
                     type="button"

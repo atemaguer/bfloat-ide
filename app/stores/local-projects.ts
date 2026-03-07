@@ -190,7 +190,7 @@ class LocalProjectsStore {
     }
 
     // Save to IPC storage
-    await localProjects.update(updated)
+    await localProjects.update(id, updated)
 
     // Update local state
     current[id] = updated

@@ -91,10 +91,71 @@ export const projectFilesApiSchema = {
     return: z.void(),
   },
 
+  // Git: start interactive remote connect flow
+  'project:startGitConnect': {
+    args: z.tuple([z.string(), z.string(), z.string()]), // projectId, remoteUrl, remoteBranch
+    return: z.object({
+      success: z.boolean(),
+      sessionId: z.string().optional(),
+      remoteBranch: z.string().optional(),
+      error: z.string().optional(),
+    }),
+  },
+
+  // Git: submit interactive auth input
+  'project:submitGitConnectInput': {
+    args: z.tuple([z.string(), z.string()]), // sessionId, input
+    return: z.object({
+      success: z.boolean(),
+      error: z.string().optional(),
+    }),
+  },
+
+  // Git: run preflight diagnostics for remote connectivity/auth
+  'project:runGitConnectDiagnostics': {
+    args: z.tuple([z.string(), z.string()]), // projectId, remoteUrl
+    return: z.object({
+      success: z.boolean(),
+      remoteUrl: z.string().optional(),
+      remoteType: z.enum(['ssh', 'https', 'other']).optional(),
+      sshAgentHasIdentities: z.boolean().nullable().optional(),
+      remoteReachable: z.boolean().nullable().optional(),
+      probeError: z.string().optional(),
+      suggestedHttpsUrl: z.string().optional(),
+      error: z.string().optional(),
+    }),
+  },
+
+  // Git: cancel interactive connect flow
+  'project:cancelGitConnect': {
+    args: z.tuple([z.string()]), // sessionId
+    return: z.object({
+      success: z.boolean(),
+      error: z.string().optional(),
+    }),
+  },
+
   // Git: check for changes
   'project:hasChanges': {
     args: z.tuple([]),
     return: z.boolean(),
+  },
+
+  // Git: compare local and remote branch heads
+  'project:getGitSyncStatus': {
+    args: z.tuple([]),
+    return: z.object({
+      isGitRepo: z.boolean().optional(),
+      branch: z.string().optional(),
+      localHead: z.string().optional(),
+      remoteHead: z.string().optional(),
+      ahead: z.number().optional(),
+      behind: z.number().optional(),
+      diverged: z.boolean().optional(),
+      inSync: z.boolean().optional(),
+      success: z.boolean().optional(),
+      error: z.string().optional(),
+    }),
   },
 
   // Get current project path
