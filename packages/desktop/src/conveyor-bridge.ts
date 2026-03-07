@@ -1674,6 +1674,40 @@ export const projectFilesBridge = {
     }
   },
 
+  runGitConnectDiagnostics: async (
+    projectId: string,
+    remoteUrl: string,
+  ): Promise<{
+    success: boolean
+    remoteUrl?: string
+    remoteType?: "ssh" | "https" | "other"
+    sshAgentHasIdentities?: boolean | null
+    remoteReachable?: boolean | null
+    probeError?: string
+    suggestedHttpsUrl?: string
+    error?: string
+  }> => {
+    try {
+      console.log("[conveyor-bridge] projectFiles.runGitConnectDiagnostics", { projectId })
+      return await getSidecarApiSync().http.post<{
+        success: boolean
+        remoteUrl?: string
+        remoteType?: "ssh" | "https" | "other"
+        sshAgentHasIdentities?: boolean | null
+        remoteReachable?: boolean | null
+        probeError?: string
+        suggestedHttpsUrl?: string
+        error?: string
+      }>(
+        "/api/project-files/git-connect/diagnostics",
+        { projectId, remoteUrl },
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] projectFiles.runGitConnectDiagnostics error:", err)
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
   submitGitConnectInput: async (sessionId: string, input: string): Promise<{ success: boolean; error?: string }> => {
     try {
       console.log("[conveyor-bridge] projectFiles.submitGitConnectInput", { sessionId, length: input.length })

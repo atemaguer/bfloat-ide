@@ -111,6 +111,21 @@ export const projectFilesApiSchema = {
     }),
   },
 
+  // Git: run preflight diagnostics for remote connectivity/auth
+  'project:runGitConnectDiagnostics': {
+    args: z.tuple([z.string(), z.string()]), // projectId, remoteUrl
+    return: z.object({
+      success: z.boolean(),
+      remoteUrl: z.string().optional(),
+      remoteType: z.enum(['ssh', 'https', 'other']).optional(),
+      sshAgentHasIdentities: z.boolean().nullable().optional(),
+      remoteReachable: z.boolean().nullable().optional(),
+      probeError: z.string().optional(),
+      suggestedHttpsUrl: z.string().optional(),
+      error: z.string().optional(),
+    }),
+  },
+
   // Git: cancel interactive connect flow
   'project:cancelGitConnect': {
     args: z.tuple([z.string()]), // sessionId

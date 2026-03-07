@@ -100,6 +100,53 @@ async function runGit(
   return { ok: exitCode === 0, stdout: stdout.trim(), stderr: stderr.trim() };
 }
 
+async function runGitProbe(
+  args: string[],
+  cwd: string,
+  timeoutMs = 12000
+): Promise<{ ok: boolean; stdout: string; stderr: string; timedOut: boolean }> {
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    env: {
+      ...process.env,
+      // Diagnostics must never block on interactive prompts.
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_ASKPASS: "echo",
+      // Prevent SSH from prompting for passwords/passphrases in diagnostics.
+      GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=5",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const stdoutPromise = new Response(proc.stdout).text();
+  const stderrPromise = new Response(proc.stderr).text();
+
+  let timedOut = false;
+  const exitCode = await Promise.race<number>([
+    proc.exited,
+    new Promise<number>((resolve) => {
+      setTimeout(() => {
+        timedOut = true;
+        try {
+          proc.kill();
+        } catch {
+          // best effort
+        }
+        resolve(124);
+      }, timeoutMs);
+    }),
+  ]);
+
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  return {
+    ok: !timedOut && exitCode === 0,
+    stdout: stdout.trim(),
+    stderr: timedOut ? `${stderr.trim()}\nDiagnostics probe timed out.`.trim() : stderr.trim(),
+    timedOut,
+  };
+}
+
 async function getConfiguredRemoteBranch(cwd: string): Promise<string> {
   const configured = await runGit(["config", "--get", "bfloat.remoteBranch"], cwd);
   if (configured.ok && configured.stdout) {
@@ -218,6 +265,11 @@ const GitConnectStartSchema = z.object({
   remoteBranch: z.string().min(1).default("main"),
 });
 
+const GitConnectDiagnosticsSchema = z.object({
+  projectId: z.string().min(1),
+  remoteUrl: z.string().min(1),
+});
+
 const GitConnectInputSchema = z.object({
   sessionId: z.string().min(1),
   input: z.string().min(1),
@@ -271,6 +323,7 @@ interface ActiveGitConnectSession {
   stdinWrite: ((input: string) => Promise<void>) | null;
   listeners: Set<GitConnectListener>;
   output: string;
+  sshAgentHasIdentities: boolean | null;
   done: boolean;
   result: GitConnectResult | null;
   lastPromptKey: string | null;
@@ -354,6 +407,135 @@ export function detectGitConnectPrompt(rawChunk: string): GitConnectInteractiveA
   return null;
 }
 
+function isSshRemoteUrl(remoteUrl: string): boolean {
+  const value = remoteUrl.trim();
+  return /^git@/i.test(value) || /^ssh:\/\//i.test(value);
+}
+
+async function checkSshAgentHasIdentities(): Promise<boolean | null> {
+  try {
+    const proc = Bun.spawn(["ssh-add", "-l"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const code = await proc.exited;
+    const output = `${stdout}\n${stderr}`.toLowerCase();
+    const summary = output.trim().split("\n").filter(Boolean)[0] ?? "";
+
+    if (code === 0) {
+      console.log("[project-files] git-connect ssh-agent check: identities present");
+      return true;
+    }
+    if (output.includes("the agent has no identities")) {
+      console.log("[project-files] git-connect ssh-agent check: no identities loaded");
+      return false;
+    }
+
+    console.log(
+      `[project-files] git-connect ssh-agent check: inconclusive (exit=${code}, summary="${summary.slice(0, 200)}")`
+    );
+
+    // Could not determine reliably (no ssh-agent, command missing, etc).
+    return null;
+  } catch (err) {
+    console.log(
+      `[project-files] git-connect ssh-agent check: failed (${err instanceof Error ? err.message : String(err)})`
+    );
+    return null;
+  }
+}
+
+function sshNoIdentityGuidance(): string {
+  return [
+    "SSH authentication failed: no identities are loaded in ssh-agent.",
+    "Run `ssh-add ~/.ssh/<your-key>` (or switch to HTTPS remote URL) and try again.",
+  ].join(" ");
+}
+
+function sshRepoNotFoundGuidance(): string {
+  return [
+    "Repository not found or SSH authentication failed.",
+    "Verify the SSH URL and repository access, then run `ssh-add ~/.ssh/<your-key>` and try again (or use HTTPS with a token).",
+  ].join(" ");
+}
+
+interface GitConnectDiagnosticsResult {
+  success: boolean;
+  remoteUrl: string;
+  remoteType: "ssh" | "https" | "other";
+  sshAgentHasIdentities: boolean | null;
+  remoteReachable: boolean | null;
+  probeError?: string;
+  suggestedHttpsUrl?: string;
+}
+
+function toHttpsRemoteUrl(remoteUrl: string): string | null {
+  const trimmed = remoteUrl.trim();
+  const scpLikeMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
+  if (scpLikeMatch) {
+    const [, host, repoPath] = scpLikeMatch;
+    return `https://${host}/${repoPath}`;
+  }
+
+  const sshUrlMatch = trimmed.match(/^ssh:\/\/git@([^/]+)\/(.+)$/i);
+  if (sshUrlMatch) {
+    const [, host, repoPath] = sshUrlMatch;
+    return `https://${host}/${repoPath}`;
+  }
+
+  return null;
+}
+
+export function resolveGitConnectFailureReason(params: {
+  output: string;
+  remoteUrl: string;
+  sshAgentHasIdentities: boolean | null;
+}): string {
+  let reason = classifyGitConnectFailure(params.output);
+  const isSshRemote = isSshRemoteUrl(params.remoteUrl);
+  if (
+    isSshRemote &&
+    params.sshAgentHasIdentities === false &&
+    (reason === "Git remote validation failed. Check credentials and try again." ||
+      reason === "Repository not found. Verify the remote URL and your access permissions.")
+  ) {
+    reason = sshNoIdentityGuidance();
+  } else if (
+    isSshRemote &&
+    reason === "Repository not found. Verify the remote URL and your access permissions."
+  ) {
+    // GitHub private repos over SSH can report "repository not found" for auth failures.
+    reason = sshRepoNotFoundGuidance();
+  }
+  return reason;
+}
+
+export function classifyGitConnectFailure(output: string): string {
+  const text = output.toLowerCase();
+
+  if (text.includes("permission denied (publickey)") || text.includes("no such identity")) {
+    return "SSH authentication failed: no usable SSH key was found. Load your key with ssh-add and try again.";
+  }
+
+  if (text.includes("host key verification failed")) {
+    return "SSH host verification failed. Add the host to known_hosts and try again.";
+  }
+
+  if (text.includes("authentication failed") || text.includes("invalid username or password")) {
+    return "HTTPS authentication failed. Check your username/password or personal access token.";
+  }
+
+  if (text.includes("repository not found")) {
+    return "Repository not found. Verify the remote URL and your access permissions.";
+  }
+
+  return "Git remote validation failed. Check credentials and try again.";
+}
+
 function maybeEmitGitConnectPrompt(session: ActiveGitConnectSession, chunk: string): void {
   const prompt = detectGitConnectPrompt(chunk);
   if (!prompt) return;
@@ -426,6 +608,26 @@ async function runGitConnectSession(session: ActiveGitConnectSession): Promise<v
   try {
     await fsp.mkdir(session.projectPath, { recursive: true });
 
+    const isSshRemote = isSshRemoteUrl(session.remoteUrl);
+    console.log(`[project-files] git-connect[${session.sessionId}] auth mode`, {
+      isSshRemote,
+      remote: maskRemoteUrlForLog(session.remoteUrl),
+    });
+
+    if (isSshRemote) {
+      const hasIdentities = await checkSshAgentHasIdentities();
+      session.sshAgentHasIdentities = hasIdentities;
+      console.log(`[project-files] git-connect[${session.sessionId}] ssh-agent identities`, {
+        hasIdentities,
+      });
+      if (hasIdentities === false) {
+        appendGitConnectOutput(
+          session,
+          "[git-connect] ssh-agent has no loaded identities; SSH auth may fail unless key files are otherwise configured.\n"
+        );
+      }
+    }
+
     try {
       const ptyProc = bunPtySpawn("bash", ["-lc", buildCommands], {
         cwd: session.projectPath,
@@ -483,7 +685,20 @@ async function runGitConnectSession(session: ActiveGitConnectSession): Promise<v
     await finishGitConnectSession(session, true);
   } else {
     console.warn(`[project-files] git-connect[${session.sessionId}] failed with exit code=${exitCode}`);
-    await finishGitConnectSession(session, false, "Git remote validation failed. Check credentials and try again.");
+    const classifiedReason = classifyGitConnectFailure(session.output);
+    const reason = resolveGitConnectFailureReason({
+      output: session.output,
+      remoteUrl: session.remoteUrl,
+      sshAgentHasIdentities: session.sshAgentHasIdentities,
+    });
+    console.log(`[project-files] git-connect[${session.sessionId}] failure resolution`, {
+      remote: maskRemoteUrlForLog(session.remoteUrl),
+      sshAgentHasIdentities: session.sshAgentHasIdentities,
+      classifiedReason,
+      resolvedReason: reason,
+      outputTail: session.output.slice(-400),
+    });
+    await finishGitConnectSession(session, false, reason);
   }
 }
 
@@ -517,6 +732,7 @@ projectFilesRouter.post("/git-connect/start", async (c) => {
     stdinWrite: null,
     listeners: new Set(),
     output: "",
+    sshAgentHasIdentities: null,
     done: false,
     result: null,
     lastPromptKey: null,
@@ -541,6 +757,68 @@ projectFilesRouter.post("/git-connect/start", async (c) => {
     });
 
   return c.json({ success: true, sessionId, remoteBranch: session.remoteBranch });
+});
+
+projectFilesRouter.post("/git-connect/diagnostics", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = GitConnectDiagnosticsSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ success: false, error: "Invalid request", details: parsed.error.flatten() }, 400);
+  }
+
+  const { projectId, remoteUrl } = parsed.data;
+  const root = projectRoot(projectId);
+  const isSsh = isSshRemoteUrl(remoteUrl);
+  const isHttps = /^https:\/\//i.test(remoteUrl.trim());
+
+  const result: GitConnectDiagnosticsResult = {
+    success: true,
+    remoteUrl: remoteUrl.trim(),
+    remoteType: isSsh ? "ssh" : isHttps ? "https" : "other",
+    sshAgentHasIdentities: null,
+    remoteReachable: null,
+    suggestedHttpsUrl: isSsh ? toHttpsRemoteUrl(remoteUrl) ?? undefined : undefined,
+  };
+
+  try {
+    await fsp.mkdir(root, { recursive: true });
+  } catch {
+    // best effort; ls-remote does not require a repo working tree
+  }
+
+  if (isSsh) {
+    result.sshAgentHasIdentities = await checkSshAgentHasIdentities();
+  }
+
+  try {
+    const probe = await runGitProbe(["ls-remote", remoteUrl.trim(), "HEAD"], root);
+    result.remoteReachable = probe.ok;
+    if (!probe.ok) {
+      if (probe.timedOut) {
+        result.probeError = "Diagnostics timed out while contacting remote. Check network/connectivity and try again.";
+      } else {
+        result.probeError = resolveGitConnectFailureReason({
+          output: [probe.stderr, probe.stdout].filter(Boolean).join("\n"),
+          remoteUrl: remoteUrl.trim(),
+          sshAgentHasIdentities: result.sshAgentHasIdentities,
+        });
+      }
+    }
+  } catch (err) {
+    result.remoteReachable = false;
+    result.probeError = err instanceof Error ? err.message : String(err);
+  }
+
+  console.log("[project-files] git-connect diagnostics", {
+    projectId,
+    remote: maskRemoteUrlForLog(remoteUrl),
+    remoteType: result.remoteType,
+    sshAgentHasIdentities: result.sshAgentHasIdentities,
+    remoteReachable: result.remoteReachable,
+    probeError: result.probeError,
+  });
+
+  return c.json(result);
 });
 
 projectFilesRouter.post("/git-connect/input", async (c) => {
