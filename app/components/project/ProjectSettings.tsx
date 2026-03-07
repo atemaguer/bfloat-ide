@@ -162,26 +162,24 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     const normalizedSourceUrl = nextSourceUrl?.trim() || null
     const normalizedSourceBranch = nextSourceBranch?.trim() || null
 
-    try {
-      await localProjectsStore.update(project.id, {
-        sourceUrl: normalizedSourceUrl,
-        sourceBranch: normalizedSourceBranch,
-      })
-      const updatedProject: Project = {
-        ...project,
-        sourceUrl: normalizedSourceUrl,
-        sourceBranch: normalizedSourceBranch,
-        updatedAt: new Date().toISOString(),
-      }
+    await localProjectsStore.update(project.id, {
+      sourceUrl: normalizedSourceUrl,
+      sourceBranch: normalizedSourceBranch,
+    })
+    const updatedProject: Project = {
+      ...project,
+      sourceUrl: normalizedSourceUrl,
+      sourceBranch: normalizedSourceBranch,
+      updatedAt: new Date().toISOString(),
+    }
 
-      workbenchStore.setProjectMetadata(updatedProject)
-      setGitRemoteUrl(normalizedSourceUrl || '')
-      setGitRemoteBranch(normalizedSourceBranch || 'main')
-      setConnectedGitRemoteUrl(normalizedSourceUrl || '')
+    workbenchStore.setProjectMetadata(updatedProject)
+    setGitRemoteUrl(normalizedSourceUrl || '')
+    setGitRemoteBranch(normalizedSourceBranch || 'main')
+    setConnectedGitRemoteUrl(normalizedSourceUrl || '')
 
-      if (onProjectUpdate) {
-        onProjectUpdate(updatedProject)
-      }
+    if (onProjectUpdate) {
+      onProjectUpdate(updatedProject)
     }
   }
 
