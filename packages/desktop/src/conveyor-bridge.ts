@@ -31,6 +31,7 @@ import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener"
 import { open as tauriOpenDialog } from "@tauri-apps/plugin-dialog"
 import { type as osType } from "@tauri-apps/plugin-os"
 import { getSidecarApiSync } from "./api"
+import { SidecarError } from "./api/client"
 import { addDeepLinkListener } from "./entry"
 
 // ---------------------------------------------------------------------------
@@ -2631,7 +2632,20 @@ export const localProjectsBridge = {
         data,
       )
     } catch (err) {
-      console.warn("[conveyor-bridge] localProjects.update error:", err)
+      if (err instanceof SidecarError) {
+        console.warn("[conveyor-bridge] localProjects.update error:", {
+          id,
+          status: err.status,
+          message: err.message,
+          body: err.body,
+          payloadKeys: Object.keys(data ?? {}),
+          sourceUrl: (data as { sourceUrl?: string | null })?.sourceUrl ?? null,
+          sourceBranch: (data as { sourceBranch?: string | null })?.sourceBranch ?? null,
+        })
+      } else {
+        console.warn("[conveyor-bridge] localProjects.update error:", err)
+      }
+      throw err
     }
   },
 
