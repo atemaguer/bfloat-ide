@@ -22,7 +22,7 @@ export function FirebaseSetupBanner({ isConnected, onConnect, onUse }: FirebaseS
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <FirebaseLogo width="20" height="20" />
         <span style={{ fontSize: '13px', color: 'var(--bfloat-text-secondary, #a0a0b8)' }}>
-          To add Firebase backend support, let's get it connected first.
+          To add Firebase support, save the Firebase client config first, then run the `/add-firebase` setup flow.
         </span>
       </div>
       {isConnected ? (
@@ -57,7 +57,7 @@ export function FirebaseSetupBanner({ isConnected, onConnect, onUse }: FirebaseS
             alignSelf: 'flex-start',
           }}
         >
-          Connect Google
+          Add Firebase Credentials
         </button>
       )}
     </div>

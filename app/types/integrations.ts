@@ -5,7 +5,7 @@
  * Mirrors the backend types in bfloat-app-engineer/app/types/integrations.ts
  */
 
-export type IntegrationId = 'stripe' | 'convex' | 'revenuecat'
+export type IntegrationId = 'firebase' | 'stripe' | 'convex' | 'revenuecat'
 export type AppPlatform = 'web' | 'mobile' | 'both'
 
 /**
@@ -21,6 +21,11 @@ export interface IntegrationMeta {
  * Registry of all available integrations with their metadata
  */
 export const INTEGRATION_REGISTRY: Record<IntegrationId, IntegrationMeta> = {
+  firebase: {
+    id: 'firebase',
+    name: 'Firebase',
+    platform: 'both', // Works with both web and mobile
+  },
   stripe: {
     id: 'stripe',
     name: 'Stripe',
@@ -42,6 +47,7 @@ export const INTEGRATION_REGISTRY: Record<IntegrationId, IntegrationMeta> = {
  * Stored integration state from the database
  */
 export interface ProjectIntegrations {
+  firebase?: boolean
   stripe?: boolean
   convex?: boolean
   revenuecat?: boolean
