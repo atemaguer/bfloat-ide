@@ -165,11 +165,12 @@ Never install any of the following deprecated packages. Use the replacement inst
 | \`expo-av\` | \`expo-audio\` and \`expo-video\` |
 | \`expo-permissions\` | Individual package permission APIs |
 | \`@expo/vector-icons\` | \`expo-symbols\` |
-| \`@react-native-async-storage/async-storage\` | \`expo-sqlite/localStorage/install\` |
+| \`@react-native-async-storage/async-storage\` | \`expo-sqlite/localStorage/install\` as an Expo compatibility shim, not browser \`window.localStorage\` |
 | \`expo-app-loading\` | \`expo-splash-screen\` |
 | \`expo-linear-gradient\` | CSS gradients via \`experimental_backgroundImage\` |
 
 If you encounter code that already uses a deprecated package, do not add it as a new dependency. Migrate to the replacement.
+For Expo/React Native projects, never suggest browser \`window.localStorage\` or \`sessionStorage\` APIs as the persistence mechanism.
 `.trim()
 
 /**
