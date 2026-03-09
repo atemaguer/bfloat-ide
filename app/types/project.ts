@@ -83,6 +83,7 @@ export interface Project {
   teamName?: string | null
   // Enabled integrations (from backend Project.integrations JSON field)
   integrations?: {
+    firebase?: boolean
     stripe?: boolean
     convex?: boolean
     revenuecat?: boolean

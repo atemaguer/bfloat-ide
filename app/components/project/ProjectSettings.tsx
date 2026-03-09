@@ -56,6 +56,7 @@ interface GitConnectDiagnostics {
 }
 
 const REVENUECAT_API_KEY = 'REVENUECAT_API_KEY'
+const FIREBASE_SETUP_PROMPT = 'Use the /add-firebase skill to set up Firebase for this project'
 const STRIPE_SETUP_PROMPT = 'Use the /add-stripe skill to set up Stripe payments integration for this project'
 const REVENUECAT_SETUP_PROMPT = 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project'
 
@@ -175,6 +176,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     project.appType === 'nextjs' || project.appType === 'vite' || project.appType === 'node' || project.appType === 'web'
       ? 'web'
       : 'mobile'
+  const requiredFirebaseKeys = getRequiredSecretKeys('firebase', normalizedAppType)
   const requiredStripeKeys = getRequiredSecretKeys('stripe', normalizedAppType)
 
   const validateSecretWriteTarget = (
@@ -605,6 +607,23 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         toast.success('Stripe credentials saved. Starting Stripe setup in chat...')
       }
     }
+
+    if (requiredFirebaseKeys.includes(key) && isChanged && nextValue) {
+      const nextSecretKeys = new Set(secrets.map((secret) => secret.key))
+      nextSecretKeys.add(key)
+      const hasFirebaseKeys = hasRequiredSecrets([...nextSecretKeys], 'firebase', normalizedAppType)
+
+      if (hasFirebaseKeys) {
+        workbenchStore.triggerChatPrompt(FIREBASE_SETUP_PROMPT, {
+          integrationId: 'firebase',
+          projectId: project.id,
+          requiredSecretKeys: requiredFirebaseKeys,
+          waitForSecrets: true,
+          timeoutMs: 8000,
+        })
+        toast.success('Firebase credentials saved. Starting Firebase setup in chat...')
+      }
+    }
   }
 
   const handleSaveIntegrationSecrets = async (
@@ -699,7 +718,30 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       }
     }
 
-    if (successes.length > 0 && activeIntegrationId !== 'convex' && activeIntegrationId !== 'revenuecat' && activeIntegrationId !== 'stripe') {
+    if (activeIntegrationId === 'firebase' && successes.length > 0) {
+      const result = await secretsApi.readSecrets(project.id)
+      const secretKeys = (result.secrets || []).map((secret) => secret.key)
+      const hasFirebaseKeys = hasRequiredSecrets(secretKeys, 'firebase', normalizedAppType)
+
+      if (hasFirebaseKeys) {
+        workbenchStore.triggerChatPrompt(FIREBASE_SETUP_PROMPT, {
+          integrationId: 'firebase',
+          projectId: project.id,
+          requiredSecretKeys: requiredFirebaseKeys,
+          waitForSecrets: true,
+          timeoutMs: 8000,
+        })
+        toast.success('Firebase credentials saved. Starting Firebase setup in chat...')
+      }
+    }
+
+    if (
+      successes.length > 0 &&
+      activeIntegrationId !== 'convex' &&
+      activeIntegrationId !== 'revenuecat' &&
+      activeIntegrationId !== 'stripe' &&
+      activeIntegrationId !== 'firebase'
+    ) {
       toast.success('Integration credentials saved.')
     }
 

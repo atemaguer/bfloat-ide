@@ -28,6 +28,7 @@ interface MessagesProps {
   convexStage?: ConvexIntegrationStage
   convexMissingKey?: 'url' | 'deploy_key' | null
   isFirebaseConnected?: boolean
+  isFirebaseSettingUp?: boolean
   isStripeConnected?: boolean
   isStripeSettingUp?: boolean
   isRevenueCatConnected?: boolean
@@ -67,6 +68,7 @@ export const Messages = memo(function Messages({
   convexStage,
   convexMissingKey,
   isFirebaseConnected,
+  isFirebaseSettingUp,
   isStripeConnected,
   isStripeSettingUp,
   isRevenueCatConnected,
@@ -197,18 +199,19 @@ export const Messages = memo(function Messages({
               {isUserMessage ? (
                 <UserMessage content={content} parts={parts} />
               ) : (
-              <AssistantMessage
-                parts={parts}
-                isStreaming={isStreaming && isLast}
-                onAskUserSubmit={onAskUserSubmit}
-                onIntegrationConnect={onIntegrationConnect}
-                onIntegrationUse={onIntegrationUse}
-                onConvexIntentSelect={onConvexIntentSelect}
+                <AssistantMessage
+                  parts={parts}
+                  isStreaming={isStreaming && isLast}
+                  onAskUserSubmit={onAskUserSubmit}
+                  onIntegrationConnect={onIntegrationConnect}
+                  onIntegrationUse={onIntegrationUse}
+                  onConvexIntentSelect={onConvexIntentSelect}
                   onClaudeReconnect={onClaudeReconnect}
                   onClaudeAuthError={onClaudeAuthError}
                   convexStage={convexStage}
                   convexMissingKey={convexMissingKey}
                   isFirebaseConnected={isFirebaseConnected}
+                  isFirebaseSettingUp={isFirebaseSettingUp}
                   isStripeConnected={isStripeConnected}
                   isStripeSettingUp={isStripeSettingUp}
                   isRevenueCatConnected={isRevenueCatConnected}
