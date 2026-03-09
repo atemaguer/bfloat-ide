@@ -18,6 +18,7 @@ A local-first, open-source AI-powered IDE for building software with integrated 
 - **Multi-Session Support** - Manage multiple chat sessions per project with local persistence
 - **Local-First Architecture** - All data stored locally in `~/.bfloat-ide/projects.json`
 - **Project Templates** - Start new projects with Expo or Next.js templates
+- **Git-First Project Workflow** - Import repositories, connect remotes, and push changes from inside the IDE
 - **Real-Time Preview** - Live preview for mobile and web applications
 - **Integrated Terminal** - Full terminal access within the IDE
 - **File Explorer** - Browse and edit project files with syntax highlighting
@@ -98,6 +99,38 @@ Copy `.env.example` to `.env` and configure:
 ```bash
 cp .env.example .env
 ```
+
+<br />
+
+## Publishing
+
+In Bfloat IDE, "publish" depends on the type of app you are building.
+
+### iOS
+
+Bfloat IDE supports publishing iOS apps through the Expo/EAS toolchain.
+
+- Connect your Expo account in the app
+- Configure the required iOS/App Store Connect credentials
+- Run the iOS publish flow from Bfloat IDE
+
+This path is intended for shipping iOS apps to the App Store. Android publishing is not yet fully supported.
+
+### Web
+
+For web apps, the recommended workflow is git-based publishing.
+
+1. Create or connect a hosted git repository, ideally on GitHub
+2. Add that repository to your project in Bfloat IDE
+3. Commit and push your changes from the IDE
+4. Let your hosting provider deploy from that repository
+
+This works well with platforms that watch a GitHub repository and build automatically after each push. If your hosting platform supports another hosted git provider, that workflow can be used as well.
+
+### What "publish" means
+
+- **iOS publish**: Bfloat IDE runs the Expo/EAS-based build and submission workflow for you
+- **Web publish**: Bfloat IDE helps you ship by managing the git workflow; your hosting provider performs the actual deployment after push
 
 <br />
 
