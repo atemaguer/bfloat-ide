@@ -48,6 +48,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 process-wrap = { version = "9.0.3", features = ["tokio1"] }
 tokio-stream = { version = "0.1.18", features = ["sync"] }
+base64 = "0.22.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
@@ -55,6 +56,7 @@ webkit2gtk = "=2.0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+objc2-app-kit = "0.3"
 objc2-web-kit = "0.3"
 
 # [patch.crates-io]

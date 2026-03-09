@@ -271,10 +271,12 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 name = "bfloat-desktop"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "dirs",
  "futures",
  "gtk",
  "objc2",
+ "objc2-app-kit",
  "objc2-web-kit",
  "process-wrap",
  "reqwest 0.12.28",
