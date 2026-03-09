@@ -13,6 +13,7 @@ import { Switch } from '@/app/components/ui/Switch'
 import { localProjectsStore } from '@/app/stores/local-projects'
 import { useStore } from '@/app/hooks/useStore'
 import { workbenchStore } from '@/app/stores/workbench'
+import { themeStore } from '@/app/stores/theme'
 import { SecretModal } from '@/app/components/settings/sections/SecretModal'
 import {
   IntegrationCredentialsModal,
@@ -168,6 +169,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [activeIntegrationId, setActiveIntegrationId] = useState<ConnectIntegrationId | null>(null)
   const [deletingSecretKey, setDeletingSecretKey] = useState<string | null>(null)
   const pendingIntegrationConnect = useStore(workbenchStore.pendingIntegrationConnect)
+  const resolvedTheme = useStore(themeStore.resolvedTheme)
   const files = useStore(workbenchStore.files)
   const normalizedAppType: 'web' | 'mobile' =
     project.appType === 'nextjs' || project.appType === 'vite' || project.appType === 'node' || project.appType === 'web'
@@ -218,6 +220,8 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
 
   const isGitConnected = Boolean(connectedGitRemoteUrl.trim())
   const gitErrorGuidance = gitConnectError ? getGitErrorGuidance(gitConnectError) : null
+  const gitDiagnosticsTextColor = resolvedTheme === 'dark' ? '#fef3c7' : '#78350f'
+  const gitDiagnosticsTitleColor = resolvedTheme === 'dark' ? '#fde68a' : '#422006'
   const autoFixHttpsUrl = toHttpsRemoteUrl(gitRemoteUrl)
   const canAutoFixToHttps =
     Boolean(autoFixHttpsUrl) &&
@@ -1067,17 +1071,20 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
               )}
 
               {gitDiagnostics && (
-                <div className="rounded-md border border-amber-400 bg-amber-100 px-3 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-                  <div className="mb-2 font-medium text-amber-950 dark:text-amber-200">Git diagnostics</div>
-                  <ol className="list-decimal space-y-1 pl-5">
-                    <li>{`Remote type: ${gitDiagnostics.remoteType || 'unknown'}`}</li>
-                    <li>
+                <div
+                  className="rounded-md border border-amber-400 bg-amber-100 px-3 py-3 text-sm dark:border-amber-500/30 dark:bg-amber-500/10"
+                  style={{ color: gitDiagnosticsTextColor }}
+                >
+                  <div className="mb-2 font-medium" style={{ color: gitDiagnosticsTitleColor }}>Git diagnostics</div>
+                  <ol className="list-decimal space-y-1 pl-5" style={{ color: gitDiagnosticsTextColor }}>
+                    <li style={{ color: gitDiagnosticsTextColor }}>{`Remote type: ${gitDiagnostics.remoteType || 'unknown'}`}</li>
+                    <li style={{ color: gitDiagnosticsTextColor }}>
                       {gitDiagnostics.remoteReachable
                         ? 'Remote reachability check passed'
                         : 'Remote reachability check failed'}
                     </li>
                     {gitDiagnostics.remoteType === 'ssh' && (
-                      <li>
+                      <li style={{ color: gitDiagnosticsTextColor }}>
                         {gitDiagnostics.sshAgentHasIdentities === true
                           ? 'SSH agent has at least one loaded identity'
                           : gitDiagnostics.sshAgentHasIdentities === false
@@ -1086,7 +1093,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                       </li>
                     )}
                     {gitDiagnostics.probeError && (
-                      <li>{`Probe error: ${gitDiagnostics.probeError}`}</li>
+                      <li style={{ color: gitDiagnosticsTextColor }}>{`Probe error: ${gitDiagnostics.probeError}`}</li>
                     )}
                   </ol>
                   {gitDiagnostics.suggestedHttpsUrl && (
