@@ -25,7 +25,7 @@ export function getIntegrationCredentialSpec(
       const prefix = appType === 'web' ? 'NEXT_PUBLIC_FIREBASE_' : 'EXPO_PUBLIC_FIREBASE_'
       return {
         title: 'Connect Firebase',
-        description: 'Add the required Firebase environment variables for this app.',
+        description: 'Add the Firebase client environment variables required for this app. This enables local-first Firebase setup; it does not provision a Firebase project for you.',
         fields: [
           {
             key: `${prefix}API_KEY`,
@@ -35,9 +35,37 @@ export function getIntegrationCredentialSpec(
             sensitive: true,
           },
           {
+            key: `${prefix}AUTH_DOMAIN`,
+            label: 'Firebase Auth Domain',
+            placeholder: 'my-project.firebaseapp.com',
+            required: true,
+            sensitive: false,
+          },
+          {
             key: `${prefix}PROJECT_ID`,
             label: 'Firebase Project ID',
             placeholder: 'my-project-id',
+            required: true,
+            sensitive: false,
+          },
+          {
+            key: `${prefix}STORAGE_BUCKET`,
+            label: 'Firebase Storage Bucket',
+            placeholder: 'my-project.firebasestorage.app',
+            required: true,
+            sensitive: false,
+          },
+          {
+            key: `${prefix}MESSAGING_SENDER_ID`,
+            label: 'Firebase Messaging Sender ID',
+            placeholder: '123456789012',
+            required: true,
+            sensitive: false,
+          },
+          {
+            key: `${prefix}APP_ID`,
+            label: 'Firebase App ID',
+            placeholder: '1:123456789012:web:abcdef123456',
             required: true,
             sensitive: false,
           },

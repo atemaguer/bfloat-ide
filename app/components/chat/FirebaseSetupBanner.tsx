@@ -1,12 +1,14 @@
 import FirebaseLogo from '@/app/components/ui/icons/firebase-logo'
+import { Loader2 } from 'lucide-react'
 
 interface FirebaseSetupBannerProps {
   isConnected: boolean
+  isSettingUp?: boolean
   onConnect: () => void
   onUse: () => void
 }
 
-export function FirebaseSetupBanner({ isConnected, onConnect, onUse }: FirebaseSetupBannerProps) {
+export function FirebaseSetupBanner({ isConnected, isSettingUp = false, onConnect, onUse }: FirebaseSetupBannerProps) {
   return (
     <div
       style={{
@@ -22,12 +24,13 @@ export function FirebaseSetupBanner({ isConnected, onConnect, onUse }: FirebaseS
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <FirebaseLogo width="20" height="20" />
         <span style={{ fontSize: '13px', color: 'var(--bfloat-text-secondary, #a0a0b8)' }}>
-          To add Firebase backend support, let's get it connected first.
+          To add Firebase support, save the Firebase client config first, then run the `/add-firebase` setup flow.
         </span>
       </div>
       {isConnected ? (
         <button
           onClick={onUse}
+          disabled={isSettingUp}
           style={{
             padding: '8px 16px',
             borderRadius: '8px',
@@ -36,11 +39,16 @@ export function FirebaseSetupBanner({ isConnected, onConnect, onUse }: FirebaseS
             color: '#fff',
             fontSize: '13px',
             fontWeight: 500,
-            cursor: 'pointer',
+            cursor: isSettingUp ? 'not-allowed' : 'pointer',
             alignSelf: 'flex-start',
+            opacity: isSettingUp ? 0.7 : 1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
           }}
         >
-          Set up Firebase
+          {isSettingUp && <Loader2 size={14} className="animate-spin" />}
+          {isSettingUp ? 'Setting up Firebase...' : 'Set up Firebase'}
         </button>
       ) : (
         <button
@@ -57,7 +65,7 @@ export function FirebaseSetupBanner({ isConnected, onConnect, onUse }: FirebaseS
             alignSelf: 'flex-start',
           }}
         >
-          Connect Google
+          Add Firebase Credentials
         </button>
       )}
     </div>

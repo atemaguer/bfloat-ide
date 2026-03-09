@@ -29,6 +29,7 @@ import { generateSuggestions } from './generateSuggestions'
 import { SessionTabs } from './SessionTabs'
 import { providerAuthStore } from '@/app/stores/provider-auth'
 import ConvexLogo from '@/app/components/ui/icons/convex-logo'
+import FirebaseLogo from '@/app/components/ui/icons/firebase-logo'
 import RevenueCatLogo from '@/app/components/ui/icons/revenuecat-logo'
 import StripeLogo from '@/app/components/ui/icons/stripe-logo'
 import { isIntegrationAvailableForAppType, type IntegrationId } from '@/app/types/integrations'
@@ -49,6 +50,7 @@ import './styles.css'
 
 const FRONTEND_DESIGN_SKILL_PREFIX =
   'Use the /frontend-design skill for this request. If the project has an established design system, preserve it and adapt within it.'
+const FIREBASE_SETUP_PROMPT = 'Use the /add-firebase skill to set up Firebase for this project'
 const CONVEX_SETUP_PROMPT = 'Use the /convex-setup skill to set up Convex backend integration for this project'
 const CONVEX_AUTH_PROMPT = 'Use the /convex-auth skill to set up Convex Better Auth (email/password) for this project'
 
@@ -167,6 +169,7 @@ export function Chat({
   const [convexProvisioned, setConvexProvisioned] = useState(false)
   const [firebaseProvisioned, setFirebaseProvisioned] = useState(false)
   const [revenuecatProvisioned, setRevenuecatProvisioned] = useState(false)
+  const [isFirebaseSettingUp, setIsFirebaseSettingUp] = useState(false)
   const [isStripeSettingUp, setIsStripeSettingUp] = useState(false)
   const [isRevenueCatSettingUp, setIsRevenueCatSettingUp] = useState(false)
   const [pendingConvexAuthAfterSetup, setPendingConvexAuthAfterSetup] = useState(false)
@@ -416,6 +419,7 @@ export function Chat({
   const handleIntegrationUse = useCallback(
     async (id: string) => {
       const prompts: Record<string, string> = {
+        firebase: FIREBASE_SETUP_PROMPT,
         stripe: 'Use the /add-stripe skill to set up Stripe payments integration for this project',
         convex: CONVEX_AUTH_PROMPT,
         revenuecat: 'Use the /add-revenuecat skill to set up RevenueCat in-app purchases for this project',
@@ -423,6 +427,14 @@ export function Chat({
 
       if (id === 'firebase') {
         setFirebaseProvisioned(true)
+        setIsFirebaseSettingUp(true)
+        const firebasePrompt = prompts.firebase
+        if (firebasePrompt) {
+          workbenchStore.triggerChatPrompt(firebasePrompt, {
+            integrationId: 'firebase',
+          })
+        }
+        return
       }
       if (id === 'convex') {
         if (!convexSecretStatus.isConfigured) {
@@ -1374,7 +1386,7 @@ export function Chat({
           !projectHasFirebase &&
           !firebaseProvisioned &&
           !hasIntegrationSecrets.firebase &&
-          !/\/firebase-setup\b/i.test(text)
+          !/\/add-firebase\b/i.test(text)
         ) {
           const guidanceMessage: ChatMessage = {
             id: generateId(),
@@ -1749,10 +1761,14 @@ export function Chat({
 
     const run = async () => {
       console.log('[Chat] Sending pending prompt:', pendingPrompt)
+      const isFirebasePrompt = pendingPromptRequest.integrationId === 'firebase' || /\/add-firebase\b/i.test(pendingPrompt)
       const isStripePrompt = pendingPromptRequest.integrationId === 'stripe' || /\/add-stripe\b/i.test(pendingPrompt)
       const isRevenueCatPrompt =
         pendingPromptRequest.integrationId === 'revenuecat' || /\/add-revenuecat\b/i.test(pendingPrompt)
 
+      if (isFirebasePrompt) {
+        setIsFirebaseSettingUp(true)
+      }
       if (isStripePrompt) {
         setIsStripeSettingUp(true)
       }
@@ -1776,6 +1792,10 @@ export function Chat({
             workbenchStore.mergePendingEnvVars(pendingEnvVars)
           }
           setConvexProvisioned(true)
+        }
+
+        if (/\/add-firebase\b/i.test(pendingPrompt)) {
+          setFirebaseProvisioned(true)
         }
 
         if (
@@ -1824,6 +1844,9 @@ export function Chat({
         if (activePendingPromptIdRef.current === requestId) {
           workbenchStore.clearPendingPrompt()
           activePendingPromptIdRef.current = null
+        }
+        if (isFirebasePrompt) {
+          setIsFirebaseSettingUp(false)
         }
         if (isRevenueCatPrompt) {
           setIsRevenueCatSettingUp(false)
@@ -1985,6 +2008,7 @@ export function Chat({
             convexStage={convexStage}
             convexMissingKey={convexSecretStatus.missingKey}
             isFirebaseConnected={integrationStatus.firebase}
+            isFirebaseSettingUp={isFirebaseSettingUp}
             isStripeConnected={integrationStatus.stripe}
             isStripeSettingUp={isStripeSettingUp}
             isRevenueCatConnected={integrationStatus.revenuecat}
@@ -2048,6 +2072,12 @@ export function Chat({
           onPendingAttachmentConsumed={handlePendingAttachmentConsumed}
           integrationsMenu={{
             integrations: [
+              {
+                id: 'firebase',
+                name: 'Firebase',
+                icon: <FirebaseLogo width="20" height="20" />,
+                isConnected: integrationStatus.firebase,
+              },
               {
                 id: 'stripe',
                 name: 'Stripe',

@@ -42,12 +42,12 @@ export function FirebaseIntegration({ isConnected, onConnect, onDisconnect }: Fi
           {/* Heading */}
           <div>
             <h3 className="text-xl font-semibold mb-2">
-              {isConnected ? 'Firebase Connected' : 'Connect to Firebase'}
+              {isConnected ? 'Firebase Credentials Added' : 'Add Firebase Credentials'}
             </h3>
             <p className="text-sm text-muted-foreground">
               {isConnected
-                ? 'Your Firebase account is connected and ready to use.'
-                : 'Connect your Firebase account to enable backend features for your app.'}
+                ? 'Firebase client configuration is saved for this project and ready for local-first setup.'
+                : 'Add your Firebase client environment variables to enable local-first Firebase setup for this project.'}
             </p>
           </div>
 
@@ -77,12 +77,12 @@ export function FirebaseIntegration({ isConnected, onConnect, onDisconnect }: Fi
                 {isLoading ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Disconnecting...
+                    Removing...
                   </>
                 ) : (
                   <>
                     <Unplug className="h-4 w-4 mr-2" />
-                    Disconnect
+                    Remove Credentials
                   </>
                 )}
               </button>
@@ -95,7 +95,7 @@ export function FirebaseIntegration({ isConnected, onConnect, onDisconnect }: Fi
                 {isLoading ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Connecting...
+                    Saving...
                   </>
                 ) : (
                   <>
@@ -103,7 +103,7 @@ export function FirebaseIntegration({ isConnected, onConnect, onDisconnect }: Fi
                       <path d="M5.8 24.6L7.5 8.3L12.2 13.6L5.8 24.6Z" />
                       <path d="M16 25.6L12.2 13.6L7.5 8.3L16 2.4L16 25.6Z" />
                     </svg>
-                    Connect Firebase
+                    Add Credentials
                   </>
                 )}
               </button>
