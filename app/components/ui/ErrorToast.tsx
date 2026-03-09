@@ -1,7 +1,8 @@
 import { useEffect, type MouseEvent } from 'react'
 import toast, { type Toast } from 'react-hot-toast'
+import { AlertCircle, X } from 'lucide-react'
 
-const DEFAULT_MAX_LENGTH = 240
+const DEFAULT_MAX_LENGTH = 120
 const DEFAULT_ERROR_DURATION = 6000
 
 interface ErrorToastAction {
@@ -77,15 +78,29 @@ function ErrorToastView({ toastId, displayMessage, fullMessage, actions, allowCo
   }
 
   return (
-    <div className="flex min-w-0 w-full items-start gap-2" role="alert" aria-live="assertive">
+    <div
+      className="flex min-w-0 items-start gap-2 rounded-lg border px-3 py-2.5 shadow-lg"
+      role="alert"
+      aria-live="assertive"
+      style={{
+        width: '100%',
+        maxWidth: '420px',
+        background: 'color-mix(in srgb, hsl(var(--destructive)) 12%, hsl(var(--card)))',
+        color: 'hsl(var(--foreground))',
+        borderColor: 'color-mix(in srgb, hsl(var(--destructive)) 45%, hsl(var(--border)))',
+      }}
+    >
+      <div className="shrink-0 pt-0.5 text-destructive" aria-hidden="true">
+        <AlertCircle size={16} />
+      </div>
       <div className="min-w-0 flex-1">
-        <p className="min-w-0 whitespace-pre-wrap break-words text-sm leading-relaxed">{displayMessage}</p>
+        <p className="min-w-0 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{displayMessage}</p>
         {(allowCopy || (actions && actions.length > 0)) && (
-          <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+          <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
             {allowCopy && (
               <button
                 type="button"
-                className="cursor-pointer rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-muted"
+                className="cursor-pointer rounded-md border border-border/70 px-2 py-1 text-xs font-medium text-foreground hover:bg-black/5 dark:hover:bg-white/8"
                 onClick={handleCopy}
               >
                 COPY
@@ -95,7 +110,10 @@ function ErrorToastView({ toastId, displayMessage, fullMessage, actions, allowCo
               <button
                 key={action.label}
                 type="button"
-                className={action.className ?? 'cursor-pointer rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground hover:bg-muted'}
+                className={
+                  action.className ??
+                  'cursor-pointer rounded-md border border-border/70 px-2 py-1 text-xs font-medium text-foreground hover:bg-black/5 dark:hover:bg-white/8'
+                }
                 onClick={(event) => handleActionClick(event, action)}
               >
                 {action.label}
@@ -107,10 +125,10 @@ function ErrorToastView({ toastId, displayMessage, fullMessage, actions, allowCo
       <button
         type="button"
         aria-label="Dismiss error notification"
-        className="shrink-0 self-start cursor-pointer rounded p-1 leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
+        className="shrink-0 self-start cursor-pointer rounded p-1 leading-none text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/8"
         onClick={closeToast}
       >
-        X
+        <X size={14} />
       </button>
     </div>
   )
@@ -136,8 +154,12 @@ export function showErrorToast(message: unknown, options: ShowErrorToastOptions 
       id: toastId,
       duration: options.duration ?? DEFAULT_ERROR_DURATION,
       style: {
-        width: options.width ?? 'min(560px, calc(100vw - 2rem))',
-        maxWidth: options.width ?? 'min(560px, calc(100vw - 2rem))',
+        width: options.width ?? 'min(420px, calc(100vw - 2rem))',
+        maxWidth: options.width ?? 'min(420px, calc(100vw - 2rem))',
+        padding: 0,
+        background: 'transparent',
+        boxShadow: 'none',
+        border: 'none',
       },
     },
   )
