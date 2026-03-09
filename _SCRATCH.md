@@ -690,3 +690,35 @@ VERIFICATION:
 - Unit tests for sidecar git connect prompt detection and connect success/failure paths.
 - Typecheck/build for affected packages.
 - Manual sanity flow: connect URL with no auth prompt + failure path from invalid auth.
+
+# Task 2026-03-09_001_diagnostics-banner
+
+## Phase 2 Plan
+
+### Files to modify
+- `app/components/project/ProjectSettings.tsx`
+
+### Order of operations and why
+1. Remove the inline text color overrides from the Git diagnostics banner because they are defeating the existing dark-theme utilities.
+2. Put the light/dark text classes on the banner container and heading so every diagnostics row, including optional SSH/probe rows, inherits readable colors consistently.
+3. Keep the change scoped to this banner only and leave diagnostics behavior/copy untouched.
+4. Run focused lint on the touched file and review the diff for scope.
+
+### Approach chosen (and alternatives rejected)
+- Chosen: the narrow banner fix recommended in the task note, using theme-aware utility classes instead of inline colors.
+- Rejected: broader warning-banner normalization, because it is not required to resolve this defect and would expand scope.
+- Rejected: theme-conditional inline colors, because that preserves the pattern that caused the regression.
+
+### Assumptions
+1. Manual verification is sufficient for this UI bug in the absence of existing component coverage.
+2. Light-mode styling only needs to remain visually consistent/readable; exact pixel-for-pixel parity with the previous inline hex values is not required.
+3. The list rows can inherit banner text color safely without per-item overrides.
+→ Proceeding with these.
+
+### Risk areas
+- Optional nested rows could inherit the wrong color if a parent class is missing.
+- Removing the inline colors could unintentionally soften light-mode contrast if the replacement utilities are too weak.
+
+### Verification
+- `pnpm exec eslint app/components/project/ProjectSettings.tsx`
+- `git diff -- app/components/project/ProjectSettings.tsx _SCRATCH.md`
