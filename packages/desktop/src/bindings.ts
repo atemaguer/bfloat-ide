@@ -14,6 +14,9 @@ async awaitInitialization(events: TAURI_CHANNEL<InitStep>) : Promise<ServerReady
 async appendFrontendLog(line: string) : Promise<null> {
     return await TAURI_INVOKE("append_frontend_log", { line });
 },
+async capturePreviewScreenshot(bounds: ScreenshotBounds, devicePixelRatio: number | null) : Promise<ScreenshotCaptureResult> {
+    return await TAURI_INVOKE("capture_preview_screenshot", { bounds, devicePixelRatio });
+},
 async getDefaultServerUrl() : Promise<string | null> {
     return await TAURI_INVOKE("get_default_server_url");
 },
@@ -60,6 +63,8 @@ async openUrl(url: string) : Promise<null> {
 /** user-defined types **/
 
 export type InitStep = { phase: "server_waiting" } | { phase: "done" }
+export type ScreenshotBounds = { x: number; y: number; width: number; height: number }
+export type ScreenshotCaptureResult = { success: boolean; dataUrl: string | null; error: string | null }
 export type ServerReadyData = { url: string; password: string | null }
 
 /** tauri-specta globals **/

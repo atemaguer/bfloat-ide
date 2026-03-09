@@ -662,6 +662,17 @@ export function Preview(props: PreviewProps) {
     if (!url || isCapturing || !props.onScreenshot) return
 
     const mobileCapture = !isWebApp
+    const screenshotTarget = isWebApp ? webIframeRef.current : iframeRef.current
+    const targetRect = screenshotTarget?.getBoundingClientRect()
+    const bounds =
+      targetRect && targetRect.width > 0 && targetRect.height > 0
+        ? {
+            x: targetRect.left,
+            y: targetRect.top,
+            width: targetRect.width,
+            height: targetRect.height,
+          }
+        : undefined
     const width = mobileCapture ? Math.max(1, Math.round(phoneWidth || 390)) : 1280
     const height = mobileCapture ? Math.max(1, Math.round(phoneHeight || 844)) : 800
 
@@ -669,10 +680,16 @@ export function Preview(props: PreviewProps) {
     try {
       const result = await screenshot.capture({
         url,
+        bounds,
         width,
         height,
         mobile: mobileCapture,
-        deviceScaleFactor: mobileCapture ? 2 : 1,
+        deviceScaleFactor:
+          typeof window !== 'undefined' && window.devicePixelRatio > 0
+            ? window.devicePixelRatio
+            : mobileCapture
+              ? 2
+              : 1,
       })
       if (result.success && result.dataUrl) {
         props.onScreenshot(result.dataUrl)
