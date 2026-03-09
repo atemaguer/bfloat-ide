@@ -101,6 +101,7 @@ interface AssistantMessageProps {
   convexStage?: ConvexIntegrationStage
   convexMissingKey?: 'url' | 'deploy_key' | null
   isFirebaseConnected?: boolean
+  isFirebaseSettingUp?: boolean
   isStripeConnected?: boolean
   isStripeSettingUp?: boolean
   isRevenueCatConnected?: boolean
@@ -254,6 +255,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   convexStage = 'disconnected',
   convexMissingKey,
   isFirebaseConnected,
+  isFirebaseSettingUp,
   isStripeConnected,
   isStripeSettingUp,
   isRevenueCatConnected,
@@ -380,6 +382,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             <FirebaseSetupBanner
               key={`firebase-setup-${index}`}
               isConnected={!!isFirebaseConnected}
+              isSettingUp={!!isFirebaseSettingUp}
               onConnect={() => onIntegrationConnect?.('firebase')}
               onUse={() => onIntegrationUse?.('firebase')}
             />

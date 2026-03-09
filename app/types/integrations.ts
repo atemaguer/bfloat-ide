@@ -24,7 +24,7 @@ export const INTEGRATION_REGISTRY: Record<IntegrationId, IntegrationMeta> = {
   firebase: {
     id: 'firebase',
     name: 'Firebase',
-    platform: 'both', // Works with both web and mobile
+    platform: 'web', // Web only
   },
   stripe: {
     id: 'stripe',

@@ -169,6 +169,7 @@ export function Chat({
   const [convexProvisioned, setConvexProvisioned] = useState(false)
   const [firebaseProvisioned, setFirebaseProvisioned] = useState(false)
   const [revenuecatProvisioned, setRevenuecatProvisioned] = useState(false)
+  const [isFirebaseSettingUp, setIsFirebaseSettingUp] = useState(false)
   const [isStripeSettingUp, setIsStripeSettingUp] = useState(false)
   const [isRevenueCatSettingUp, setIsRevenueCatSettingUp] = useState(false)
   const [pendingConvexAuthAfterSetup, setPendingConvexAuthAfterSetup] = useState(false)
@@ -426,6 +427,7 @@ export function Chat({
 
       if (id === 'firebase') {
         setFirebaseProvisioned(true)
+        setIsFirebaseSettingUp(true)
         const firebasePrompt = prompts.firebase
         if (firebasePrompt) {
           workbenchStore.triggerChatPrompt(firebasePrompt, {
@@ -1759,10 +1761,14 @@ export function Chat({
 
     const run = async () => {
       console.log('[Chat] Sending pending prompt:', pendingPrompt)
+      const isFirebasePrompt = pendingPromptRequest.integrationId === 'firebase' || /\/add-firebase\b/i.test(pendingPrompt)
       const isStripePrompt = pendingPromptRequest.integrationId === 'stripe' || /\/add-stripe\b/i.test(pendingPrompt)
       const isRevenueCatPrompt =
         pendingPromptRequest.integrationId === 'revenuecat' || /\/add-revenuecat\b/i.test(pendingPrompt)
 
+      if (isFirebasePrompt) {
+        setIsFirebaseSettingUp(true)
+      }
       if (isStripePrompt) {
         setIsStripeSettingUp(true)
       }
@@ -1838,6 +1844,9 @@ export function Chat({
         if (activePendingPromptIdRef.current === requestId) {
           workbenchStore.clearPendingPrompt()
           activePendingPromptIdRef.current = null
+        }
+        if (isFirebasePrompt) {
+          setIsFirebaseSettingUp(false)
         }
         if (isRevenueCatPrompt) {
           setIsRevenueCatSettingUp(false)
@@ -1999,6 +2008,7 @@ export function Chat({
             convexStage={convexStage}
             convexMissingKey={convexSecretStatus.missingKey}
             isFirebaseConnected={integrationStatus.firebase}
+            isFirebaseSettingUp={isFirebaseSettingUp}
             isStripeConnected={integrationStatus.stripe}
             isStripeSettingUp={isStripeSettingUp}
             isRevenueCatConnected={integrationStatus.revenuecat}
