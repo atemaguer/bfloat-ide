@@ -1,3 +1,27 @@
+## Task 2026-03-09_000_local-storage-usage
+
+PLAN:
+- Update shared generated-agent guidance in `packages/sidecar/src/services/agent-instructions.ts` so the AsyncStorage replacement text explicitly describes `expo-sqlite/localStorage/install` as an Expo shim, not browser `window.localStorage`.
+- Mirror that clarification in `lib/launch/system-prompt.ts` so session-time instructions match generated `AGENTS.md`.
+- Tighten Expo/mobile skill guidance in `resources/skills/add-revenuecat/SKILL.md`, `resources/skills/convex/auth/SKILL.md`, and `resources/skills/upgrading-expo/SKILL.md` so agents do not suggest browser storage APIs or speculative `crossDomainClient()` removal.
+- Keep this task instruction-only; do not change runtime templates unless a reproduced bug requires it.
+- Verify by searching the touched sources for the new guardrail text and running the smallest relevant lint/check command covering the touched TypeScript files.
+
+ASSUMPTIONS:
+1. The applicable repo instructions are `/Users/v1b3m/Dev/bfloat/bfloat-ide/AGENTS.md` plus companion docs in `commander/`.
+2. Existing Convex Expo guidance and template remain the current source of truth that `crossDomainClient()` is required, so this task should prevent contradictory troubleshooting rather than change runtime code.
+3. `resources/skills/upgrading-expo/SKILL.md` is in scope because its deprecated-package wording can reinforce the same `localStorage` confusion.
+→ Proceeding with these.
+
+RISKS:
+- Wording changes could accidentally discourage the valid Expo shim path if they overstate the prohibition.
+- Prompt/skill drift would leave the agent with conflicting instructions, so all touched surfaces must stay aligned.
+
+VERIFICATION:
+- `rg -n "window\\.localStorage|sessionStorage|crossDomainClient\\(\\)|expo-sqlite/localStorage/install" ...`
+- Focused lint/check covering `packages/sidecar/src/services/agent-instructions.ts` and `lib/launch/system-prompt.ts`
+- `git diff` review for instruction-only scope
+
 # Task 2026-03-01_011_restart-app-mcp
 
 ## Phase 2 Plan

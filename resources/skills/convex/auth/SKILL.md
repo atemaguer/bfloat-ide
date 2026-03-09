@@ -201,7 +201,8 @@ Create Convex functions in the `convex/` directory. Use `authComponent.getAuthUs
 
 ### Step 14: Update Existing Components
 
-Replace any local storage usage (AsyncStorage, etc.) with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`.
+Replace app-level local persistence usage (AsyncStorage, SecureStore-backed caches, etc.) with Convex queries/mutations where the data belongs on the backend. Use `useQuery` and `useMutation` from `convex/react`.
+For Expo/React Native, do not reinterpret this as advice to use browser `window.localStorage` or `sessionStorage` APIs.
 
 For top-level auth gating, prefer Better Auth session state (`authClient.useSession()`) as the primary source of truth. Convex auth state can be used as a secondary signal, but do not gate the entire home screen on Convex-only helpers.
 
@@ -309,7 +310,8 @@ export default async function Page() {
 
 ### Step 17: Update Existing Components
 
-Replace any local storage usage with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`.
+Replace app-level local persistence usage with Convex queries/mutations. Use `useQuery` and `useMutation` from `convex/react`.
+For Expo/React Native, do not use browser `window.localStorage` or `sessionStorage` APIs as the persistence mechanism.
 
 For top-level auth gating, prefer Better Auth session state (`authClient.useSession()`) as the primary source of truth and use Convex auth as secondary/fallback signal.
 
@@ -495,7 +497,7 @@ Note: Expo apps run natively and DO need `baseURL` since they connect directly t
 - ❌ Wrong: `plugins: [convex({ authConfig }), crossDomain({ ... })]`
 - ✅ Correct: `plugins: [convex({ authConfig })]`
 
-Note: Expo apps DO need `crossDomainClient()` on the client and the corresponding `crossDomain()` server plugin since the app and Convex are on different domains.
+Note: Expo apps DO need `crossDomainClient()` on the client and the corresponding `crossDomain()` server plugin since the app and Convex are on different domains. Do not suggest removing these as speculative troubleshooting for React Native storage errors unless this skill or product guidance is updated with a verified fix.
 
 ### Expo-Specific: Deep Linking
 
