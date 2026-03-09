@@ -1067,17 +1067,17 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
               )}
 
               {gitDiagnostics && (
-                <div className="rounded-md border border-amber-400 bg-amber-100 px-3 py-3 text-sm dark:border-amber-500/30 dark:bg-amber-500/10">
-                  <div className="mb-2 font-medium dark:text-amber-200" style={{ color: '#422006' }}>Git diagnostics</div>
-                  <ol className="list-decimal pl-5 space-y-1 dark:text-amber-100" style={{ color: '#78350f' }}>
-                    <li className="dark:text-amber-100" style={{ color: '#78350f' }}>{`Remote type: ${gitDiagnostics.remoteType || 'unknown'}`}</li>
-                    <li className="dark:text-amber-100" style={{ color: '#78350f' }}>
+                <div className="rounded-md border border-amber-400 bg-amber-100 px-3 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                  <div className="mb-2 font-medium text-amber-950 dark:text-amber-200">Git diagnostics</div>
+                  <ol className="list-decimal space-y-1 pl-5">
+                    <li>{`Remote type: ${gitDiagnostics.remoteType || 'unknown'}`}</li>
+                    <li>
                       {gitDiagnostics.remoteReachable
                         ? 'Remote reachability check passed'
                         : 'Remote reachability check failed'}
                     </li>
                     {gitDiagnostics.remoteType === 'ssh' && (
-                      <li className="dark:text-amber-100" style={{ color: '#78350f' }}>
+                      <li>
                         {gitDiagnostics.sshAgentHasIdentities === true
                           ? 'SSH agent has at least one loaded identity'
                           : gitDiagnostics.sshAgentHasIdentities === false
@@ -1086,7 +1086,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                       </li>
                     )}
                     {gitDiagnostics.probeError && (
-                      <li className="dark:text-amber-100" style={{ color: '#78350f' }}>{`Probe error: ${gitDiagnostics.probeError}`}</li>
+                      <li>{`Probe error: ${gitDiagnostics.probeError}`}</li>
                     )}
                   </ol>
                   {gitDiagnostics.suggestedHttpsUrl && (
