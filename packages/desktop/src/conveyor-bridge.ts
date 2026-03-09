@@ -27,6 +27,7 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
+import { invoke } from "@tauri-apps/api/core"
 import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener"
 import { open as tauriOpenDialog } from "@tauri-apps/plugin-dialog"
 import { type as osType } from "@tauri-apps/plugin-os"
@@ -2590,11 +2591,43 @@ export const screenshotBridge = {
   capture: async (options?: {
     url?: string
     cwd?: string
+    bounds?: { x: number; y: number; width: number; height: number }
     width?: number
     height?: number
     mobile?: boolean
     deviceScaleFactor?: number
   }): Promise<{ success: boolean; dataUrl?: string; error?: string }> => {
+    const isTauri =
+      typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__)
+
+    if (
+      isTauri &&
+      options?.bounds &&
+      options.bounds.width > 0 &&
+      options.bounds.height > 0
+    ) {
+      try {
+        const nativeResult = await invoke<{ success: boolean; dataUrl?: string; error?: string }>(
+          "capture_preview_screenshot",
+          {
+            bounds: options.bounds,
+            devicePixelRatio: options.deviceScaleFactor,
+          },
+        )
+
+        if (nativeResult.success && nativeResult.dataUrl) {
+          return nativeResult
+        }
+
+        console.warn(
+          "[conveyor-bridge] native screenshot capture failed; falling back to sidecar capture:",
+          nativeResult.error,
+        )
+      } catch (err) {
+        console.warn("[conveyor-bridge] native screenshot.capture error:", err)
+      }
+    }
+
     try {
       return await getSidecarApiSync().http.post<{ success: boolean; dataUrl?: string; error?: string }>(
         "/api/screenshot/capture",

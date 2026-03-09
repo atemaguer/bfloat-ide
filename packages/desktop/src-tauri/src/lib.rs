@@ -4,6 +4,7 @@ mod server;
 mod window_commands;
 mod windows;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crate::cli::CommandChild;
 use futures::{
     FutureExt,
@@ -14,6 +15,7 @@ use std::{
     io::Write,
     net::TcpListener,
     path::{Path, PathBuf},
+    process::Command as StdCommand,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -28,6 +30,8 @@ use tokio::{
 use crate::constants::*;
 use crate::server::get_saved_server_url;
 use crate::windows::MainWindow;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSWindow;
 
 const FRONTEND_LOG_FILE: &str = "frontend-console.log";
 const FRONTEND_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
@@ -37,6 +41,23 @@ const FRONTEND_LOG_BACKUPS: usize = 3;
 struct ServerReadyData {
     url: String,
     password: Option<String>,
+}
+
+#[derive(Clone, Copy, serde::Deserialize, specta::Type, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotBounds {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[derive(Clone, serde::Serialize, specta::Type, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotCaptureResult {
+    success: bool,
+    data_url: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Clone, Copy, serde::Serialize, specta::Type, Debug)]
@@ -154,6 +175,121 @@ fn append_frontend_log(app: AppHandle, line: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn capture_preview_screenshot(
+    app: AppHandle,
+    bounds: ScreenshotBounds,
+    device_pixel_ratio: Option<f64>,
+) -> ScreenshotCaptureResult {
+    if !(bounds.width.is_finite()
+        && bounds.height.is_finite()
+        && bounds.x.is_finite()
+        && bounds.y.is_finite())
+    {
+        return ScreenshotCaptureResult {
+            success: false,
+            data_url: None,
+            error: Some("Screenshot bounds must be finite numbers.".to_string()),
+        };
+    }
+
+    if bounds.width < 1.0 || bounds.height < 1.0 {
+        return ScreenshotCaptureResult {
+            success: false,
+            data_url: None,
+            error: Some("Screenshot bounds must be at least 1px by 1px.".to_string()),
+        };
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = device_pixel_ratio;
+        match capture_preview_screenshot_macos(app, bounds) {
+            Ok(result) => result,
+            Err(error) => ScreenshotCaptureResult {
+                success: false,
+                data_url: None,
+                error: Some(error),
+            },
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        let _ = device_pixel_ratio;
+        ScreenshotCaptureResult {
+            success: false,
+            data_url: None,
+            error: Some("Native preview screenshot is currently only implemented on macOS.".to_string()),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn capture_preview_screenshot_macos(
+    app: AppHandle,
+    bounds: ScreenshotBounds,
+) -> Result<ScreenshotCaptureResult, String> {
+    let window = app
+        .get_webview_window(MainWindow::LABEL)
+        .ok_or_else(|| "Main window not found".to_string())?;
+
+    let scale_factor = window.scale_factor().map_err(|e| e.to_string())?;
+    let inner_position = window.inner_position().map_err(|e| e.to_string())?;
+    let screenshot_rect = format!(
+        "{},{},{},{}",
+        ((inner_position.x as f64) / scale_factor + bounds.x).round() as i32,
+        ((inner_position.y as f64) / scale_factor + bounds.y).round() as i32,
+        bounds.width.round().max(1.0) as i32,
+        bounds.height.round().max(1.0) as i32,
+    );
+
+    // Best-effort window validation so errors are clearer when capture fails.
+    let ns_window = window.ns_window().map_err(|e| e.to_string())?;
+    let ns_window: &NSWindow = unsafe { &*ns_window.cast() };
+    let window_number = ns_window.windowNumber();
+    if window_number <= 0 {
+        return Err("Could not resolve native macOS window number for screenshot capture.".to_string());
+    }
+
+    let temp_path =
+        std::env::temp_dir().join(format!("bfloat-preview-screenshot-{}.png", uuid::Uuid::new_v4()));
+
+    let output = StdCommand::new("screencapture")
+        .args(["-x", &format!("-R{screenshot_rect}")])
+        .arg(&temp_path)
+        .output()
+        .map_err(|e| format!("Failed to run screencapture: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("exit status {}", output.status)
+        };
+        return Err(format!("macOS screenshot capture failed: {detail}"));
+    }
+
+    let bytes = fs::read(&temp_path)
+        .map_err(|e| format!("Failed to read screenshot output {:?}: {e}", temp_path))?;
+    let _ = fs::remove_file(&temp_path);
+
+    Ok(ScreenshotCaptureResult {
+        success: true,
+        data_url: Some(format!(
+            "data:image/png;base64,{}",
+            BASE64_STANDARD.encode(bytes)
+        )),
+        error: None,
+    })
+}
+
 fn rotate_frontend_log_if_needed(log_file: &Path) -> Result<(), String> {
     let Ok(metadata) = fs::metadata(log_file) else {
         return Ok(());
@@ -261,6 +397,7 @@ fn make_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             kill_sidecar,
             await_initialization,
             append_frontend_log,
+            capture_preview_screenshot,
             server::get_default_server_url,
             server::set_default_server_url,
             window_commands::window_minimize,
