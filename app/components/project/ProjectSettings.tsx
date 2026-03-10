@@ -23,6 +23,7 @@ import { secrets as secretsApi, projectFiles } from '@/app/api/sidecar'
 import { isConvexSecretKey } from '@/app/lib/integrations/secrets'
 import { detectConvexBootstrap, getConvexSecretStatusFromSecrets } from '@/app/lib/integrations/convex'
 import { getRequiredSecretKeys, hasRequiredSecrets, type ConnectIntegrationId } from '@/app/lib/integrations/credentials'
+import { showErrorToast } from '@/app/components/ui/ErrorToast'
 import './styles.css'
 
 interface ProjectSettingsProps {
@@ -189,7 +190,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       const msg = `${actionLabel} targeted ${result.projectId}, but active project is ${project.id}.`
       console.error('[ProjectSettings]', msg, result)
       setSecretsError(msg)
-      toast.error('Secret save targeted a different project. Please reload the project.')
+      showErrorToast('Secret save targeted a different project. Please reload the project.')
       return false
     }
 
@@ -197,7 +198,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       const msg = `${actionLabel} wrote to ${result.writePath}, which does not match active project ${project.id}.`
       console.error('[ProjectSettings]', msg, result)
       setSecretsError(msg)
-      toast.error('Secret write path does not match active project. Please reload the project.')
+      showErrorToast('Secret write path does not match active project. Please reload the project.')
       return false
     }
 
@@ -827,7 +828,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       await localProjectsStore.update(project.id, updates)
       const synced = await projectFiles.syncAgentInstructions(agentInstructions)
       if (!synced) {
-        toast.error('Saved settings, but failed to sync AGENTS.md/CLAUDE.md')
+        showErrorToast('Saved settings, but failed to sync AGENTS.md/CLAUDE.md')
       }
 
       const updatedProject: Project = { ...project, ...updates, updatedAt: new Date().toISOString() }
@@ -839,7 +840,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       toast.success('Project settings saved')
     } catch (error) {
       console.error('Error saving project settings:', error)
-      toast.error('Failed to save project settings')
+      showErrorToast('Failed to save project settings')
     } finally {
       setIsSaving(false)
     }
@@ -856,7 +857,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
       }, 1000)
     } catch (error) {
       console.error('Error deleting project:', error)
-      toast.error('Failed to delete project')
+      showErrorToast('Failed to delete project')
       setShowDeleteDialog(false)
     } finally {
       setIsDeleting(false)

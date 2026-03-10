@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, type ReactNode } from 'react'
 import { useIsWebApp } from '@/app/hooks/useAppType'
 import {
   ArrowLeft,
@@ -81,6 +81,46 @@ interface PreviewProps {
   refreshKey?: number
 }
 
+interface PreviewIconTooltipButtonProps {
+  tooltip: string
+  dismissSignal: number
+  onClick?: () => void
+  disabled?: boolean
+  children: ReactNode
+}
+
+function PreviewIconTooltipButton({
+  tooltip,
+  dismissSignal,
+  onClick,
+  disabled,
+  children,
+}: PreviewIconTooltipButtonProps) {
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    setOpen(false)
+  }, [dismissSignal])
+
+  const handleClick = () => {
+    setOpen(false)
+    onClick?.()
+  }
+
+  return (
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="sm" onClick={handleClick} disabled={disabled}>
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        <p>{tooltip}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 // Compact mode should only activate on genuinely small preview panes.
 const COMPACT_PANE_PX = 520
 const TIGHT_PANE_PX = 420
@@ -127,6 +167,7 @@ export function Preview(props: PreviewProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [canGoBack, setCanGoBack] = useState(false)
   const [canGoForward, setCanGoForward] = useState(false)
+  const [previewTooltipDismissSignal, setPreviewTooltipDismissSignal] = useState(0)
   const [mobileLayoutWidth, setMobileLayoutWidth] = useState(0)
   const [mobileLayoutHeight, setMobileLayoutHeight] = useState(0)
   const [expandedSection, setExpandedSection] = useState<'simulator' | 'qr' | null>(null)
@@ -348,6 +389,10 @@ export function Preview(props: PreviewProps) {
     setIsLoading(true)
     setCurrentUrl(normalizedUrl)
     setUrlInput(normalizedUrl)
+  }, [])
+
+  const dismissPreviewTooltips = useCallback(() => {
+    setPreviewTooltipDismissSignal((signal) => signal + 1)
   }, [])
 
   // Handle URL input submission
@@ -736,13 +781,27 @@ export function Preview(props: PreviewProps) {
       <div className={`w-full h-full flex flex-col ${isFullscreen ? 'fixed inset-0 z-50 bg-background' : ''}`}>
         <WebPreview defaultUrl={currentUrl} className={`flex-1 rounded-none border-0`}>
           <WebPreviewNavigation>
-            <WebPreviewNavigationButton tooltip="Go back" onClick={handleGoBack} disabled={!canGoBack}>
+            <WebPreviewNavigationButton
+              tooltip="Go back"
+              onClick={handleGoBack}
+              disabled={!canGoBack}
+              dismissSignal={previewTooltipDismissSignal}
+            >
               <ArrowLeft className="size-5" />
             </WebPreviewNavigationButton>
-            <WebPreviewNavigationButton tooltip="Go forward" onClick={handleGoForward} disabled={!canGoForward}>
+            <WebPreviewNavigationButton
+              tooltip="Go forward"
+              onClick={handleGoForward}
+              disabled={!canGoForward}
+              dismissSignal={previewTooltipDismissSignal}
+            >
               <ArrowRight className="size-5" />
             </WebPreviewNavigationButton>
-            <WebPreviewNavigationButton tooltip="Reload" onClick={handleRefresh}>
+            <WebPreviewNavigationButton
+              tooltip="Reload"
+              onClick={handleRefresh}
+              dismissSignal={previewTooltipDismissSignal}
+            >
               <RefreshCcw className={`size-5 ${isLoading ? 'animate-spin' : ''}`} />
             </WebPreviewNavigationButton>
 
@@ -761,16 +820,23 @@ export function Preview(props: PreviewProps) {
                 tooltip="DevTools"
                 onClick={handleToggleDevTools}
                 className={isDevToolsOpen ? 'bg-foreground/10' : ''}
+                dismissSignal={previewTooltipDismissSignal}
               >
                 <Bug className="size-5" />
               </WebPreviewNavigationButton>
             )}
-            <WebPreviewNavigationButton tooltip="Open in browser" onClick={handleOpenExternal} disabled={!currentUrl}>
+            <WebPreviewNavigationButton
+              tooltip="Open in browser"
+              onClick={handleOpenExternal}
+              disabled={!currentUrl}
+              dismissSignal={previewTooltipDismissSignal}
+            >
               <ExternalLink className="size-5" />
             </WebPreviewNavigationButton>
             <WebPreviewNavigationButton
               tooltip={isFullscreen ? 'Exit fullscreen' : 'Maximize'}
               onClick={() => setIsFullscreen(!isFullscreen)}
+              dismissSignal={previewTooltipDismissSignal}
             >
               <Maximize2 className="size-5" />
             </WebPreviewNavigationButton>
@@ -778,6 +844,7 @@ export function Preview(props: PreviewProps) {
               <WebPreviewNavigationButton
                 tooltip="Restart dev server"
                 onClick={props.onRestartServer}
+                dismissSignal={previewTooltipDismissSignal}
               >
                 <RotateCw className="size-5" />
               </WebPreviewNavigationButton>
@@ -787,6 +854,7 @@ export function Preview(props: PreviewProps) {
                 tooltip="Screenshot to chat"
                 onClick={handleScreenshot}
                 disabled={!currentUrl || isCapturing}
+                dismissSignal={previewTooltipDismissSignal}
               >
                 <Camera className={`size-5 ${isCapturing ? 'animate-pulse' : ''}`} />
               </WebPreviewNavigationButton>
@@ -809,7 +877,11 @@ export function Preview(props: PreviewProps) {
               )}
             </div>
           ) : currentUrl ? (
-            <div className="flex-1 relative bg-white">
+            <div
+              className="flex-1 relative bg-white"
+              onPointerDownCapture={dismissPreviewTooltips}
+              onPointerEnter={dismissPreviewTooltips}
+            >
               {isTauri ? (
                 <iframe
                   key={props.refreshKey}
@@ -866,43 +938,39 @@ export function Preview(props: PreviewProps) {
           }`}
         >
           <div className="flex items-center gap-1 mb-2 flex-shrink-0">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="sm" onClick={props.onRefresh}>
-                  <RefreshCcw className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                <p>Reload preview</p>
-              </TooltipContent>
-            </Tooltip>
+            <PreviewIconTooltipButton
+              tooltip="Reload preview"
+              onClick={props.onRefresh}
+              dismissSignal={previewTooltipDismissSignal}
+            >
+              <RefreshCcw className="h-4 w-4" />
+            </PreviewIconTooltipButton>
             {props.onRestartServer && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="sm" onClick={props.onRestartServer}>
-                    <RotateCw className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  <p>Restart dev server</p>
-                </TooltipContent>
-              </Tooltip>
+              <PreviewIconTooltipButton
+                tooltip="Restart dev server"
+                onClick={props.onRestartServer}
+                dismissSignal={previewTooltipDismissSignal}
+              >
+                <RotateCw className="h-4 w-4" />
+              </PreviewIconTooltipButton>
             )}
             {props.onScreenshot && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="sm" onClick={handleScreenshot} disabled={!(currentUrl || props.previewUrl) || isCapturing}>
-                    <Camera className={`h-4 w-4 ${isCapturing ? 'animate-pulse' : ''}`} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  <p>Screenshot to chat</p>
-                </TooltipContent>
-              </Tooltip>
+              <PreviewIconTooltipButton
+                tooltip="Screenshot to chat"
+                onClick={handleScreenshot}
+                disabled={!(currentUrl || props.previewUrl) || isCapturing}
+                dismissSignal={previewTooltipDismissSignal}
+              >
+                <Camera className={`h-4 w-4 ${isCapturing ? 'animate-pulse' : ''}`} />
+              </PreviewIconTooltipButton>
             )}
           </div>
 
-          <div className={`w-full flex justify-center ${isCompactMobilePreview ? 'shrink-0' : 'min-h-0 flex-1 items-center'}`}>
+          <div
+            className={`w-full flex justify-center ${isCompactMobilePreview ? 'shrink-0' : 'min-h-0 flex-1 items-center'}`}
+            onPointerDownCapture={dismissPreviewTooltips}
+            onPointerEnter={dismissPreviewTooltips}
+          >
             <div
               style={{
                 width: `${phoneWidth}px`,

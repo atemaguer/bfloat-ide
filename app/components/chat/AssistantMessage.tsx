@@ -13,6 +13,7 @@
  */
 
 import { memo, useMemo, useState, useCallback, useEffect, useRef } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { Loader2 } from 'lucide-react'
 import { Shimmer } from '@/app/components/ui/shimmer'
 import { Markdown } from './Markdown'
@@ -24,6 +25,11 @@ import { FirebaseSetupBanner } from './FirebaseSetupBanner'
 import { StripeSetupBanner } from './StripeSetupBanner'
 import { RevenueCatSetupBanner } from './RevenueCatSetupBanner'
 import { isClaudeAuthError } from './ClaudeAuthBanner'
+import {
+  shouldRenderConvexIntentBanner,
+  shouldRenderIntegrationSetupBanner,
+  type IntegrationSetupRenderState,
+} from './integrationSetupPolicy'
 import type { MessagePart } from '@/app/types/project'
 import type { ConvexIntegrationStage } from '@/app/lib/integrations/convex'
 import type { ToolAction } from './types'
@@ -243,6 +249,29 @@ function parseIntoSections(parts: MessagePart[]): Section[] {
   return rawSections
 }
 
+function getSectionKey(section: Section, index: number): string {
+  if (section.type === 'text' || section.type === 'reasoning') {
+    return `${section.type}-${index}-${section.content.slice(0, 32)}`
+  }
+  if (section.type === 'tool_group') {
+    return `tool-group-${section.actions[0]?.id || index}`
+  }
+  if (section.type === 'ask_user') {
+    return `ask-user-${section.toolCallId}`
+  }
+  return `${section.type}-${index}`
+}
+
+function isAnimatedBannerSection(section: Section): boolean {
+  return (
+    section.type === 'convex_setup' ||
+    section.type === 'convex_intent' ||
+    section.type === 'firebase_setup' ||
+    section.type === 'stripe_setup' ||
+    section.type === 'revenuecat_setup'
+  )
+}
+
 export const AssistantMessage = memo(function AssistantMessage({
   parts,
   isStreaming,
@@ -274,6 +303,48 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   // Parse into sections
   const sections = useMemo(() => parseIntoSections(safeParts), [safeParts])
+  const integrationSetupRenderState = useMemo<IntegrationSetupRenderState>(
+    () => ({
+      convexStage,
+      isFirebaseConnected: !!isFirebaseConnected,
+      isFirebaseSettingUp: !!isFirebaseSettingUp,
+      isStripeConnected: !!isStripeConnected,
+      isStripeSettingUp: !!isStripeSettingUp,
+      isRevenueCatConnected: !!isRevenueCatConnected,
+      isRevenueCatSettingUp: !!isRevenueCatSettingUp,
+    }),
+    [
+      convexStage,
+      isFirebaseConnected,
+      isFirebaseSettingUp,
+      isStripeConnected,
+      isStripeSettingUp,
+      isRevenueCatConnected,
+      isRevenueCatSettingUp,
+    ]
+  )
+  const visibleSections = useMemo(
+    () =>
+      sections.filter((section) => {
+        if (section.type === 'convex_setup') {
+          return shouldRenderIntegrationSetupBanner('convex-setup-prompt', integrationSetupRenderState)
+        }
+        if (section.type === 'firebase_setup') {
+          return shouldRenderIntegrationSetupBanner('firebase-setup-prompt', integrationSetupRenderState)
+        }
+        if (section.type === 'convex_intent') {
+          return shouldRenderConvexIntentBanner(integrationSetupRenderState)
+        }
+        if (section.type === 'stripe_setup') {
+          return shouldRenderIntegrationSetupBanner('stripe-setup-prompt', integrationSetupRenderState)
+        }
+        if (section.type === 'revenuecat_setup') {
+          return shouldRenderIntegrationSetupBanner('revenuecat-setup-prompt', integrationSetupRenderState)
+        }
+        return true
+      }),
+    [sections, integrationSetupRenderState]
+  )
 
   // Notify parent when Claude auth error is detected
   useEffect(() => {
@@ -312,7 +383,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   )
 
   // Check if there's any renderable content
-  const hasContent = sections.length > 0
+  const hasContent = visibleSections.length > 0
 
   // Show thinking indicator if no content yet
   if (!hasContent && isStreaming) {
@@ -327,29 +398,33 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div className="assistant-message">
-      {sections.map((section, index) => {
+      <AnimatePresence initial={false}>
+        {visibleSections.map((section, index) => {
+          const sectionKey = getSectionKey(section, index)
+
+          let content: JSX.Element | null = null
+
         if (section.type === 'text') {
-          const isLastSection = index === sections.length - 1
-          return (
-            <div key={index} className="assistant-text">
+          const isLastSection = index === visibleSections.length - 1
+          content = (
+            <div className="assistant-text">
               <Markdown isAnimating={isLastSection && !!isStreaming}>{section.content}</Markdown>
             </div>
           )
         }
 
         if (section.type === 'reasoning') {
-          return (
-            <div key={index} className="assistant-reasoning">
+          content = (
+            <div className="assistant-reasoning">
               {section.content}
             </div>
           )
         }
 
         if (section.type === 'tool_group') {
-          const isLastSection = index === sections.length - 1
-          return (
+          const isLastSection = index === visibleSections.length - 1
+          content = (
             <ToolAccordion
-              key={`tools-${index}-${section.actions[0]?.id}`}
               actions={section.actions}
               isStreaming={isLastSection && isStreaming}
             />
@@ -357,9 +432,8 @@ export const AssistantMessage = memo(function AssistantMessage({
         }
 
         if (section.type === 'convex_setup') {
-          return (
+          content = (
             <ConvexSetupBanner
-              key={`convex-setup-${index}`}
               stage={convexStage}
               missingKey={convexMissingKey}
               onConnect={() => onIntegrationConnect?.('convex')}
@@ -369,18 +443,16 @@ export const AssistantMessage = memo(function AssistantMessage({
         }
 
         if (section.type === 'convex_intent') {
-          return (
+          content = (
             <ConvexIntentBanner
-              key={`convex-intent-${index}`}
               onSelect={(mode) => onConvexIntentSelect?.(mode)}
             />
           )
         }
 
         if (section.type === 'firebase_setup') {
-          return (
+          content = (
             <FirebaseSetupBanner
-              key={`firebase-setup-${index}`}
               isConnected={!!isFirebaseConnected}
               isSettingUp={!!isFirebaseSettingUp}
               onConnect={() => onIntegrationConnect?.('firebase')}
@@ -390,9 +462,8 @@ export const AssistantMessage = memo(function AssistantMessage({
         }
 
         if (section.type === 'ask_user') {
-          return (
+          content = (
             <AskUserQuestion
-              key={section.toolCallId}
               input={section.input}
               onSubmit={(answers) => handleAskUserSubmit(section.toolCallId, answers)}
               isSubmitting={submittingId === section.toolCallId}
@@ -402,9 +473,8 @@ export const AssistantMessage = memo(function AssistantMessage({
         }
 
         if (section.type === 'stripe_setup') {
-          return (
+          content = (
             <StripeSetupBanner
-              key={`stripe-setup-${index}`}
               isConnected={!!isStripeConnected}
               isSettingUp={!!isStripeSettingUp}
               onConnect={() => onIntegrationConnect?.('stripe')}
@@ -414,9 +484,8 @@ export const AssistantMessage = memo(function AssistantMessage({
         }
 
         if (section.type === 'revenuecat_setup') {
-          return (
+          content = (
             <RevenueCatSetupBanner
-              key={`revenuecat-setup-${index}`}
               isConnected={!!isRevenueCatConnected}
               isSettingUp={!!isRevenueCatSettingUp}
               onConnect={() => onIntegrationConnect?.('revenuecat')}
@@ -425,8 +494,25 @@ export const AssistantMessage = memo(function AssistantMessage({
           )
         }
 
-        return null
-      })}
+          if (!content) {
+            return null
+          }
+
+          return (
+            <motion.div
+              key={sectionKey}
+              layout={isAnimatedBannerSection(section)}
+              initial={{ opacity: 0, y: 8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98, height: 0, marginTop: 0, marginBottom: 0 }}
+              transition={{ duration: 1, ease: 'easeOut' }}
+              style={{ overflow: 'hidden' }}
+            >
+              {content}
+            </motion.div>
+          )
+        })}
+      </AnimatePresence>
 
       {/* Streaming indicator at end */}
       {isStreaming && (
