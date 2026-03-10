@@ -91,6 +91,8 @@ function getEnhancedEnv(extra?: Record<string, string>): Record<string, string> 
   };
 }
 
+console.log("[Deploy] bun-pty imported for deploy route");
+
 // ---------------------------------------------------------------------------
 // ANSI cleaner (mirrors deploy-handler cleanAnsi)
 // ---------------------------------------------------------------------------
@@ -812,7 +814,6 @@ deployRouter.get("/stream/current", async (c) => {
   if (build.lastProgress) {
     write("progress", build.lastProgress);
   }
-
   if (build.done && build.result) {
     write("complete", build.result);
     writer.close().catch(() => {});

@@ -2260,7 +2260,6 @@ export const deployBridge = {
       controller.abort()
     }
   },
-
   checkAppleSession: async (appleId: string): Promise<AppleSessionInfo> => {
     try {
       const query = new URLSearchParams({ appleId }).toString()
