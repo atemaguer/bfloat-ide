@@ -47,6 +47,10 @@ import {
 } from '@/app/lib/integrations/convex'
 import toast from 'react-hot-toast'
 import { showErrorToast } from '@/app/components/ui/ErrorToast'
+import {
+  sessionContainsSetupPrompt,
+  type IntegrationSetupPromptType,
+} from './integrationSetupPolicy'
 import './styles.css'
 
 const FRONTEND_DESIGN_SKILL_PREFIX =
@@ -54,6 +58,32 @@ const FRONTEND_DESIGN_SKILL_PREFIX =
 const FIREBASE_SETUP_PROMPT = 'Use the /add-firebase skill to set up Firebase for this project'
 const CONVEX_SETUP_PROMPT = 'Use the /convex-setup skill to set up Convex backend integration for this project'
 const CONVEX_AUTH_PROMPT = 'Use the /convex-auth skill to set up Convex Better Auth (email/password) for this project'
+
+const SETUP_PROMPT_BY_INTEGRATION: Record<string, IntegrationSetupPromptType> = {
+  firebase: 'firebase-setup-prompt',
+  convex: 'convex-setup-prompt',
+  stripe: 'stripe-setup-prompt',
+  revenuecat: 'revenuecat-setup-prompt',
+}
+
+function appendSetupPromptIfMissing(
+  messages: ChatMessage[],
+  promptType: IntegrationSetupPromptType
+): ChatMessage[] {
+  if (sessionContainsSetupPrompt(messages, promptType)) {
+    return messages
+  }
+
+  const guidanceMessage: ChatMessage = {
+    id: generateId(),
+    role: 'assistant',
+    content: '',
+    parts: [{ type: promptType } as MessagePart],
+    createdAt: new Date().toISOString(),
+  }
+
+  return [...messages, guidanceMessage]
+}
 
 function extractCommitDraftFromMessage(message: ChatMessage): string | null {
   const content = (message.content || '').trim()
@@ -378,14 +408,7 @@ export function Chat({
 
   // Integration menu handlers
   const handleIntegrationConnect = useCallback(async (id: string) => {
-    const setupPromptByIntegration: Record<string, MessagePart['type']> = {
-      firebase: 'firebase-setup-prompt',
-      convex: 'convex-setup-prompt',
-      stripe: 'stripe-setup-prompt',
-      revenuecat: 'revenuecat-setup-prompt',
-    }
-
-    const promptType = setupPromptByIntegration[id]
+    const promptType = SETUP_PROMPT_BY_INTEGRATION[id]
     workbenchStore.setActiveTab('settings')
     if (id === 'firebase' || id === 'convex' || id === 'stripe' || id === 'revenuecat') {
       workbenchStore.setPendingIntegrationConnect({
@@ -396,25 +419,7 @@ export function Chat({
 
     if (!promptType) return
 
-    setMessages((prev) => {
-      const lastMessage = prev[prev.length - 1]
-      const isDuplicatePrompt =
-        lastMessage?.role === 'assistant' && !!lastMessage.parts?.some((part) => part?.type === promptType)
-
-      if (isDuplicatePrompt) {
-        return prev
-      }
-
-      const guidanceMessage: ChatMessage = {
-        id: generateId(),
-        role: 'assistant',
-        content: '',
-        parts: [{ type: promptType } as MessagePart],
-        createdAt: new Date().toISOString(),
-      }
-
-      return [...prev, guidanceMessage]
-    })
+    setMessages((prev) => appendSetupPromptIfMissing(prev, promptType))
   }, [])
 
   const handleIntegrationUse = useCallback(
@@ -1389,14 +1394,7 @@ export function Chat({
           !hasIntegrationSecrets.firebase &&
           !/\/add-firebase\b/i.test(text)
         ) {
-          const guidanceMessage: ChatMessage = {
-            id: generateId(),
-            role: 'assistant',
-            content: '',
-            parts: [{ type: 'firebase-setup-prompt' } as MessagePart],
-            createdAt: new Date().toISOString(),
-          }
-          setMessages((prev) => [...prev, userMessage, guidanceMessage])
+          setMessages((prev) => appendSetupPromptIfMissing([...prev, userMessage], 'firebase-setup-prompt'))
           setInput('')
           return
         }
@@ -1424,28 +1422,14 @@ export function Chat({
           convexStage === 'disconnected' &&
           !/\/convex-auth\b/i.test(text)
         ) {
-          const guidanceMessage: ChatMessage = {
-            id: generateId(),
-            role: 'assistant',
-            content: '',
-            parts: [{ type: 'convex-setup-prompt' } as MessagePart],
-            createdAt: new Date().toISOString(),
-          }
-          setMessages((prev) => [...prev, userMessage, guidanceMessage])
+          setMessages((prev) => appendSetupPromptIfMissing([...prev, userMessage], 'convex-setup-prompt'))
           setInput('')
           return
         }
 
         // Intercept Stripe-related prompts when Stripe is not provisioned and secrets are not configured
         if (/\bstripe\b/i.test(text) && !projectHasStripe && !hasIntegrationSecrets.stripe && !/\/add-stripe\b/i.test(text)) {
-          const guidanceMessage: ChatMessage = {
-            id: generateId(),
-            role: 'assistant',
-            content: '',
-            parts: [{ type: 'stripe-setup-prompt' } as MessagePart],
-            createdAt: new Date().toISOString(),
-          }
-          setMessages((prev) => [...prev, userMessage, guidanceMessage])
+          setMessages((prev) => appendSetupPromptIfMissing([...prev, userMessage], 'stripe-setup-prompt'))
           setInput('')
           return
         }
@@ -1458,14 +1442,7 @@ export function Chat({
           !hasIntegrationSecrets.revenuecat &&
           !/\/add-revenuecat\b/i.test(text)
         ) {
-          const guidanceMessage: ChatMessage = {
-            id: generateId(),
-            role: 'assistant',
-            content: '',
-            parts: [{ type: 'revenuecat-setup-prompt' } as MessagePart],
-            createdAt: new Date().toISOString(),
-          }
-          setMessages((prev) => [...prev, userMessage, guidanceMessage])
+          setMessages((prev) => appendSetupPromptIfMissing([...prev, userMessage], 'revenuecat-setup-prompt'))
           setInput('')
           return
         }
