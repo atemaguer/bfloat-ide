@@ -29,6 +29,65 @@ import type {
 } from "./agent-session.ts";
 
 const LOG_PREFIX = "[Codex Provider]";
+const DEFAULT_CODEX_ERROR_MESSAGE =
+  "Codex failed before returning a detailed error. Check authentication, model access, or sidecar logs for details.";
+
+function extractErrorMessage(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+
+  if (!value || typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  const nestedCandidates = [
+    record.message,
+    record.error,
+    record.details,
+    record.stderr,
+    record.stdout,
+    record.cause,
+  ];
+
+  for (const candidate of nestedCandidates) {
+    const extracted = extractErrorMessage(candidate);
+    if (extracted) return extracted;
+  }
+
+  if (record.error && typeof record.error === "object") {
+    const nested = extractErrorMessage(record.error);
+    if (nested) return nested;
+  }
+
+  if (record.response && typeof record.response === "object") {
+    const nested = extractErrorMessage(record.response);
+    if (nested) return nested;
+  }
+
+  return undefined;
+}
+
+export function normalizeCodexError(error: unknown, fallback = DEFAULT_CODEX_ERROR_MESSAGE): string {
+  const direct =
+    extractErrorMessage(error) ||
+    (error instanceof Error ? error.message.trim() : undefined);
+
+  if (direct && direct !== "[object Object]" && direct.toLowerCase() !== "unknown error") {
+    return direct;
+  }
+
+  if (error && typeof error === "object") {
+    try {
+      const json = JSON.stringify(error);
+      if (json && json !== "{}") return json;
+    } catch {
+      // Ignore serialization issues and use the fallback below.
+    }
+  }
+
+  return fallback;
+}
 
 // ---------------------------------------------------------------------------
 // Auth helpers
@@ -365,7 +424,7 @@ export class CodexProvider implements AgentProvider {
             yield {
               kind: "error",
               code: "turn_failed",
-              message: event.error.message,
+              message: normalizeCodexError(event.error, "Codex turn failed without returning error details."),
               recoverable: false,
             };
             break;
@@ -375,7 +434,7 @@ export class CodexProvider implements AgentProvider {
             yield {
               kind: "error",
               code: "stream_error",
-              message: event.message,
+              message: normalizeCodexError(event, "Codex stream failed without returning error details."),
               recoverable: false,
             };
             break;
@@ -392,11 +451,12 @@ export class CodexProvider implements AgentProvider {
         return;
       }
 
-      console.error(`${LOG_PREFIX} Stream error:`, error instanceof Error ? error.message : error);
+      const normalizedError = normalizeCodexError(error);
+      console.error(`${LOG_PREFIX} Stream error:`, normalizedError, error);
       yield {
         kind: "error",
         code: "execution_error",
-        message: error instanceof Error ? error.message : "Unknown error",
+        message: normalizedError,
         recoverable: false,
       };
     }
