@@ -41,6 +41,13 @@ interface LocalAgentState {
 
 type PermissionMode = 'default' | 'plan' | 'bypassPermissions' | 'delegate' | 'dontAsk'
 
+interface ReconnectSessionInfo {
+  sessionId: string
+  provider: ProviderId
+  status: 'running' | 'completed' | 'error'
+  source: 'mount' | 'tab'
+}
+
 interface UseLocalAgentOptions {
   cwd: string
   provider?: ProviderId
@@ -57,6 +64,7 @@ interface UseLocalAgentOptions {
   onError?: (error: string) => void
   onComplete?: () => void
   onSessionId?: (sessionId: string) => void // Called when we get a session ID from init
+  onReconnectSession?: (info: ReconnectSessionInfo) => void // Called when reattaching to an existing session
 }
 
 export function useLocalAgent(options: UseLocalAgentOptions) {
@@ -84,12 +92,14 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   const onMessageRef = useRef(options.onMessage)
   const onCompleteRef = useRef(options.onComplete)
   const onSessionIdRef = useRef(options.onSessionId)
+  const onReconnectSessionRef = useRef(options.onReconnectSession)
   const onErrorRef = useRef(options.onError)
 
   useEffect(() => {
     onMessageRef.current = options.onMessage
     onCompleteRef.current = options.onComplete
     onSessionIdRef.current = options.onSessionId
+    onReconnectSessionRef.current = options.onReconnectSession
     onErrorRef.current = options.onError
 
     requestedResumeSessionIdRef.current = options.resumeSessionId || null
@@ -354,6 +364,12 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
         // Set the session ID so future prompts use the same session
         sessionIdRef.current = bgSession.sessionId
+        onReconnectSessionRef.current?.({
+          sessionId: bgSession.sessionId,
+          provider: bgSession.provider,
+          status: bgSession.status,
+          source: 'mount',
+        })
         setState((prev) => ({
           ...prev,
           sessionId: bgSession.sessionId,
@@ -640,6 +656,12 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
         const canonicalSessionId = bgSession.sessionId
         sessionIdRef.current = canonicalSessionId
+        onReconnectSessionRef.current?.({
+          sessionId: canonicalSessionId,
+          provider: bgSession.provider,
+          status: bgSession.status,
+          source: 'tab',
+        })
         setState((prev) => ({ ...prev, sessionId: canonicalSessionId, isRunning: true }))
 
         console.log('[useLocalAgent] tab-reconnect: attaching to session', {
