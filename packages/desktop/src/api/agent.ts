@@ -122,6 +122,7 @@ export interface QueueUserPromptContent {
 
 export interface InitContent {
   sessionId: string
+  providerSessionId?: string
   availableTools: string[]
   model: string
 }
@@ -213,6 +214,30 @@ export interface BackgroundSessionResult {
 export interface BackgroundMessagesResult {
   success: boolean
   messages: AgentMessage[]
+}
+
+export interface PromptDisplayMessage {
+  id: string
+  role: "user"
+  content: string
+  parts?: Record<string, unknown>[]
+  createdAt: string
+}
+
+export interface SessionHistoryEntry {
+  kind: "user_message" | "agent_message"
+  message: PromptDisplayMessage | AgentMessage
+}
+
+export interface SessionHistoryResult {
+  success: boolean
+  sessionId?: string
+  provider?: ProviderId
+  providerSessionId?: string
+  status?: SessionStatus
+  lastSeq?: number
+  entries?: SessionHistoryEntry[]
+  error?: string
 }
 
 export interface SessionMessageBlock {
@@ -361,7 +386,11 @@ export class AgentApi {
    * @param sessionId  Session identifier returned from `createSession()`.
    * @param message    The user's text prompt.
    */
-  async prompt(sessionId: string, message: string): Promise<PromptResult> {
+  async prompt(
+    sessionId: string,
+    message: string,
+    displayMessage?: PromptDisplayMessage,
+  ): Promise<PromptResult> {
     try {
       const res = await this.http.post<{
         queued: boolean
@@ -370,7 +399,7 @@ export class AgentApi {
         message?: string
       }>(
         `/api/agent/sessions/${encodeURIComponent(sessionId)}/message`,
-        { content: message },
+        { content: message, displayMessage },
       )
       // The streamChannel used by the React app is the sessionId — it's used
       // as the key for the agent WebSocket stream.
@@ -489,6 +518,12 @@ export class AgentApi {
     const qs = params.size ? `?${params}` : ""
     return this.http.get<BackgroundMessagesResult>(
       `/api/agent/sessions/${encodeURIComponent(sessionId)}/messages${qs}`,
+    )
+  }
+
+  async getSessionHistory(sessionId: string): Promise<SessionHistoryResult> {
+    return this.http.get<SessionHistoryResult>(
+      `/api/agent/sessions/${encodeURIComponent(sessionId)}/history`,
     )
   }
 
