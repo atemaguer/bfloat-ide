@@ -14,6 +14,8 @@ On a new session, keep project discovery minimal:
 Start implementation quickly, then gather additional context incrementally only if blocked.
 `.trim()
 
+export type AgentPromptProvider = 'claude' | 'codex'
+
 /**
  * Instruction to use the Terminal MCP tool for long-running processes instead of Bash.
  */
@@ -122,6 +124,19 @@ Do not run long stretches of tool calls silently.
 `.trim()
 
 /**
+ * Codex-specific prompt guidance. Keep this concise and avoid mandatory
+ * rollout-style status chatter; Codex follows shorter, higher-priority
+ * directives more reliably than a Claude-oriented collaboration script.
+ */
+const CODEX_EXECUTION_STYLE_PROMPT = `
+## Execution Style
+
+- Start useful work quickly. Prefer implementation over extended planning.
+- Keep user-facing progress updates sparse and natural rather than logging every step.
+- Deliver the concrete change in the same turn whenever feasible.
+`.trim()
+
+/**
  * Instruction for the model to emit structured suggestion chips at the end of every response.
  */
 const SUGGESTIONS_PROMPT = `
@@ -188,13 +203,27 @@ Icons use \`IconSymbol\` from \`@/components/ui/icon-symbol\`. Use SF Symbol nam
 `.trim()
 
 /**
- * Get the system prompt. Always returns a prompt string.
- * - New sessions: exploration instructions + suggestions instructions
- * - Resumed sessions: suggestions instructions only
+ * Get the system prompt for the active provider.
+ * - New sessions: include exploration instructions
+ * - Resumed sessions: omit exploration instructions
  */
-export function getSystemPrompt(isResumedSession: boolean): string {
+export function getSystemPrompt(isResumedSession: boolean, provider: AgentPromptProvider = 'claude'): string {
+  const promptParts = [
+    TERMINAL_USAGE_PROMPT,
+    MOBILE_PREVIEW_PROMPT,
+    FRONTEND_DESIGN_SKILL_PROMPT,
+    EXPO_WEB_STYLE_SAFETY_PROMPT,
+    EXPO_NAVIGATION_PROMPT,
+    MOBILE_ONLY_PACKAGE_SAFETY_PROMPT,
+    DEPRECATED_PACKAGES_PROMPT,
+    EXPO_ICON_USAGE_PROMPT,
+    provider === 'codex' ? CODEX_EXECUTION_STYLE_PROMPT : TOOL_TRANSPARENCY_PROMPT,
+    SUGGESTIONS_PROMPT,
+  ]
+
   if (isResumedSession) {
-    return TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + EXPO_NAVIGATION_PROMPT + '\n\n' + MOBILE_ONLY_PACKAGE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + EXPO_ICON_USAGE_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+    return promptParts.join('\n\n')
   }
-  return PROJECT_EXPLORATION_PROMPT + '\n\n' + TERMINAL_USAGE_PROMPT + '\n\n' + MOBILE_PREVIEW_PROMPT + '\n\n' + FRONTEND_DESIGN_SKILL_PROMPT + '\n\n' + EXPO_WEB_STYLE_SAFETY_PROMPT + '\n\n' + EXPO_NAVIGATION_PROMPT + '\n\n' + MOBILE_ONLY_PACKAGE_SAFETY_PROMPT + '\n\n' + DEPRECATED_PACKAGES_PROMPT + '\n\n' + EXPO_ICON_USAGE_PROMPT + '\n\n' + TOOL_TRANSPARENCY_PROMPT + '\n\n' + SUGGESTIONS_PROMPT
+
+  return [PROJECT_EXPLORATION_PROMPT, ...promptParts].join('\n\n')
 }
