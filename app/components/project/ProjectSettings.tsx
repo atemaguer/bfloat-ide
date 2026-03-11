@@ -847,6 +847,7 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
 
     try {
       await localProjectsStore.delete(project.id)
+      setShowDeleteDialog(false)
       toast.success('Project deleted')
       setTimeout(() => {
         window.location.href = '/'
@@ -1376,7 +1377,13 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         </div>
       </form>
 
-      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <Dialog
+        open={showDeleteDialog}
+        onOpenChange={(open) => {
+          if (isDeleting) return
+          setShowDeleteDialog(open)
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="dialog-title-danger">
@@ -1400,30 +1407,32 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
             </div>
           </div>
           <div className="dialog-actions">
-            <Button
-              variant="outline"
-              onClick={() => setShowDeleteDialog(false)}
-              disabled={isDeleting}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              onClick={handleDeleteProject}
-              disabled={isDeleting}
-            >
-              {isDeleting ? (
-                <>
+            {isDeleting ? (
+              <div key="deleting">
+                <Button type="button" variant="danger" disabled>
                   <Loader2 size={16} className="spinner" />
                   Deleting...
-                </>
-              ) : (
-                <>
+                </Button>
+              </div>
+            ) : (
+              <div key="idle" style={{ display: 'flex', gap: '12px' }}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowDeleteDialog(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  onClick={handleDeleteProject}
+                >
                   <Trash2 size={16} />
                   Yes, Delete Project
-                </>
-              )}
-            </Button>
+                </Button>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
