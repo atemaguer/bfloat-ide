@@ -51,6 +51,7 @@ import {
   sessionContainsSetupPrompt,
   type IntegrationSetupPromptType,
 } from './integrationSetupPolicy'
+import { applyAgentMessageToTranscript, hydrateTranscriptFromHistory, type SessionHistoryEntry } from './session-transcript'
 import './styles.css'
 
 const FRONTEND_DESIGN_SKILL_PREFIX =
@@ -708,12 +709,64 @@ export function Chat({
     [aiAgentApi, convertSessionMessage, initialMessages, provider, usableProjectPath]
   )
 
-  const canReadPersistedSession = useCallback(
-    async (sessionIdToCheck: string, sessionProvider: ProviderId) => {
-      const result = await aiAgentApi.readSession(sessionIdToCheck, sessionProvider, usableProjectPath || undefined)
-      return result.success
+  const loadSessionTranscript = useCallback(
+    async (
+      sessionIdToLoad: string,
+      sessionProvider: ProviderId = provider,
+      options?: { preserveInitialUserMessage?: boolean }
+    ) => {
+      const history = await aiAgent.getSessionHistory(sessionIdToLoad)
+      if (history.success && Array.isArray(history.entries)) {
+        const hydrated = hydrateTranscriptFromHistory(history.entries as SessionHistoryEntry[])
+        let messages = hydrated.messages
+
+        if (options?.preserveInitialUserMessage && initialMessages?.length > 0 && initialMessages[0].role === 'user') {
+          const hasUserMessage = messages.some((m) => m.role === 'user')
+          if (!hasUserMessage) {
+            messages = [initialMessages[0], ...messages]
+          }
+        }
+
+        return {
+          sessionId: history.sessionId || sessionIdToLoad,
+          provider: history.provider || sessionProvider,
+          providerSessionId: history.providerSessionId,
+          messages,
+          lastSeq: history.lastSeq || hydrated.lastSeq,
+          source: 'journal' as const,
+        }
+      }
+
+      const messages = await loadPersistedSession(sessionIdToLoad, sessionProvider, options)
+      return {
+        sessionId: sessionIdToLoad,
+        provider: sessionProvider,
+        messages,
+        lastSeq: 0,
+        source: 'provider-storage' as const,
+      }
     },
-    [aiAgentApi, usableProjectPath]
+    [initialMessages, loadPersistedSession, provider]
+  )
+
+  const persistCanonicalSessionId = useCallback(
+    (params: {
+      requestedSessionId: string
+      canonicalSessionId: string
+      sessionProvider: ProviderId
+    }) => {
+      const { requestedSessionId, canonicalSessionId, sessionProvider } = params
+
+      if (canonicalSessionId !== requestedSessionId && allSessions.some((session) => session.sessionId === requestedSessionId)) {
+        deleteSessionMutation.mutate(requestedSessionId)
+      }
+
+      saveSessionMutation.mutate({
+        sessionId: canonicalSessionId,
+        provider: sessionProvider as 'claude' | 'codex',
+      })
+    },
+    [allSessions, deleteSessionMutation, saveSessionMutation]
   )
 
   const hideReconnectNotice = useCallback(() => {
@@ -765,18 +818,27 @@ export function Chat({
       initialMessagesCount: initialMessages?.length || 0,
     })
 
-    loadPersistedSession(sessionIdToLoad, provider, { preserveInitialUserMessage: true })
-      .then((loadedMessages) => {
-        const convertedTextMsgs = loadedMessages.filter(
+    loadSessionTranscript(sessionIdToLoad, provider, { preserveInitialUserMessage: true })
+      .then((transcript) => {
+        const convertedTextMsgs = transcript.messages.filter(
           (m) => m.role === 'assistant' && m.parts?.some((p) => p.type === 'text')
         )
         console.log('[Chat] Session loaded from storage:', {
-          messageCount: loadedMessages.length,
-          userMessages: loadedMessages.filter((m) => m.role === 'user').length,
-          assistantMessages: loadedMessages.filter((m) => m.role === 'assistant').length,
+          messageCount: transcript.messages.length,
+          userMessages: transcript.messages.filter((m) => m.role === 'user').length,
+          assistantMessages: transcript.messages.filter((m) => m.role === 'assistant').length,
           messagesWithTextParts: convertedTextMsgs.length,
+          source: transcript.source,
         })
-        setMessages(loadedMessages)
+        setMessages(transcript.messages)
+        if (transcript.sessionId !== sessionIdToLoad) {
+          setAgentSessionId(transcript.sessionId)
+          persistCanonicalSessionId({
+            requestedSessionId: sessionIdToLoad,
+            canonicalSessionId: transcript.sessionId,
+            sessionProvider: transcript.provider,
+          })
+        }
       })
       .catch((err) => {
         console.error('[Chat] Error loading session:', err)
@@ -786,7 +848,7 @@ export function Chat({
       })
     // Note: Also depends on resolvedInitialSessionId to handle async session fetch
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadPersistedSession, provider, resolvedInitialSessionId, usableProjectPath])
+  }, [loadSessionTranscript, persistCanonicalSessionId, provider, resolvedInitialSessionId, usableProjectPath])
 
   // Log when projectPath is received
   useEffect(() => {
@@ -871,35 +933,6 @@ export function Chat({
   const handleReconnectSession = useCallback(
     async (info: { sessionId: string; provider: ProviderId; status: 'running' | 'completed' | 'error'; source: 'mount' | 'tab' }) => {
       const { sessionId, provider: sessionProvider, status, source } = info
-      const selectedSessionId = agentSessionId ?? resolvedInitialSessionId
-      let nextVisibleSessionId = sessionId
-      let storageSessionIdToLoad: string | null = null
-      let shouldPersistReconnectSession = true
-      let staleAliasSessionId: string | null = null
-
-      if (selectedSessionId && selectedSessionId !== sessionId) {
-        const [selectedReadable, reconnectReadable] = await Promise.all([
-          canReadPersistedSession(selectedSessionId, sessionProvider),
-          canReadPersistedSession(sessionId, sessionProvider),
-        ])
-
-        if (selectedReadable && !reconnectReadable) {
-          nextVisibleSessionId = selectedSessionId
-          storageSessionIdToLoad = selectedSessionId
-          shouldPersistReconnectSession = false
-          staleAliasSessionId = sessionId
-        } else if (reconnectReadable) {
-          storageSessionIdToLoad = sessionId
-        } else if (selectedReadable) {
-          storageSessionIdToLoad = selectedSessionId
-        }
-      } else if (selectedSessionId === sessionId) {
-        storageSessionIdToLoad = sessionId
-      } else {
-        const reconnectReadable = await canReadPersistedSession(sessionId, sessionProvider)
-        storageSessionIdToLoad = reconnectReadable ? sessionId : null
-      }
-
       console.log('[Chat] Reconnected to existing session:', info)
 
       const providerDefaults: Record<ProviderId, string> = {
@@ -910,50 +943,48 @@ export function Chat({
         setSelectedModel(providerDefaults[sessionProvider] || '')
       }
       setProvider(sessionProvider)
-      setAgentSessionId(nextVisibleSessionId)
+      setAgentSessionId(sessionId)
       setIsResumingSession(status === 'running')
       setShowReconnectNotice(status === 'running')
-      if (shouldPersistReconnectSession) {
-        saveSessionMutation.mutate({
-          sessionId: nextVisibleSessionId,
-          provider: sessionProvider as 'claude' | 'codex',
-        })
-      }
-      if (staleAliasSessionId && allSessions.some((session) => session.sessionId === staleAliasSessionId)) {
-        deleteSessionMutation.mutate(staleAliasSessionId)
-      }
-
-      if (source !== 'mount' || status !== 'running' || !storageSessionIdToLoad) {
-        return
-      }
 
       setIsLoadingSession(true)
       try {
-        const loadedMessages = await loadPersistedSession(storageSessionIdToLoad, sessionProvider, { preserveInitialUserMessage: true })
+        const transcript = await loadSessionTranscript(sessionId, sessionProvider, { preserveInitialUserMessage: true })
         hasLoadedSession.current = true
-        setMessages(loadedMessages)
+        setMessages(transcript.messages)
+        if (transcript.sessionId !== sessionId) {
+          setAgentSessionId(transcript.sessionId)
+          persistCanonicalSessionId({
+            requestedSessionId: sessionId,
+            canonicalSessionId: transcript.sessionId,
+            sessionProvider: transcript.provider,
+          })
+        } else {
+          persistCanonicalSessionId({
+            requestedSessionId: sessionId,
+            canonicalSessionId: sessionId,
+            sessionProvider,
+          })
+        }
+        return transcript.lastSeq
       } catch (err) {
         console.error('[Chat] Error restoring resumed session:', err)
+        return 0
       } finally {
         setIsLoadingSession(false)
       }
     },
     [
-      agentSessionId,
-      allSessions,
-      canReadPersistedSession,
-      deleteSessionMutation,
-      loadPersistedSession,
+      loadSessionTranscript,
+      persistCanonicalSessionId,
       provider,
-      resolvedInitialSessionId,
-      saveSessionMutation,
     ]
   )
 
   // Compute system prompt (exploration + suggestions for new sessions, suggestions-only for resumed)
   const systemPrompt = useMemo(() => {
-    return getSystemPrompt(!!agentSessionId)
-  }, [agentSessionId])
+    return getSystemPrompt(!!agentSessionId, provider)
+  }, [agentSessionId, provider])
 
   // Local agent hook - only use path when it belongs to this project
   const localAgent = useLocalAgent({
@@ -998,123 +1029,17 @@ export function Chat({
         }
 
         hideReconnectNotice()
-        setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1]
-          if (lastMsg && lastMsg.role === 'assistant') {
-            // Append text to last assistant message
-            const existingParts = lastMsg.parts || []
-            const lastPart = existingParts[existingParts.length - 1]
-
-            // If last part is text, append to it; otherwise add new text part
-            let newParts
-            if (lastPart && lastPart.type === 'text' && 'text' in lastPart) {
-              newParts = [
-                ...existingParts.slice(0, -1),
-                { type: 'text' as const, text: (lastPart.text || '') + textContent },
-              ]
-            } else {
-              newParts = [...existingParts, { type: 'text' as const, text: textContent }]
-            }
-
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...lastMsg,
-                content: (lastMsg.content || '') + textContent,
-                parts: newParts,
-              },
-            ]
-          } else {
-            // Create new assistant message
-            return [
-              ...prev,
-              {
-                id: generateId(),
-                role: 'assistant',
-                content: textContent,
-                parts: [{ type: 'text', text: textContent }],
-                createdAt: new Date().toISOString(),
-              },
-            ]
-          }
-        })
+        setMessages((prev) => applyAgentMessageToTranscript(prev, msg))
       } else if (msg.type === 'tool_call') {
         hideReconnectNotice()
-        // Convert to AI SDK tool part format
-        const toolContent = msg.content as {
-          id: string
-          name: string
-          input: Record<string, unknown>
-          status?: string
-          output?: string
-        }
+        const toolContent = msg.content as { name: string; input: Record<string, unknown> }
         console.log('[Chat] Tool call:', toolContent.name, toolContent.input)
-
-        const toolPart = {
-          type: `tool-${toolContent.name}` as string,
-          toolCallId: toolContent.id || generateId(),
-          toolName: toolContent.name,
-          state: (toolContent.status === 'completed' ? 'result' : 'call') as 'call' | 'result',
-          args: toolContent.input,
-          result: toolContent.output,
-        }
-
-        setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1]
-          if (lastMsg && lastMsg.role === 'assistant') {
-            // Add tool part to existing assistant message
-            const existingParts = lastMsg.parts || []
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...lastMsg,
-                parts: [...existingParts, toolPart],
-              },
-            ]
-          } else {
-            // Create new assistant message with tool part
-            return [
-              ...prev,
-              {
-                id: generateId(),
-                role: 'assistant',
-                content: '',
-                parts: [toolPart],
-                createdAt: new Date().toISOString(),
-              },
-            ]
-          }
-        })
+        setMessages((prev) => applyAgentMessageToTranscript(prev, msg))
       } else if (msg.type === 'tool_result') {
         hideReconnectNotice()
-        // Update existing tool part with result
         const resultContent = msg.content as { callId: string; name: string; output: string; isError: boolean }
         console.log('[Chat] Tool result:', resultContent.callId, resultContent.isError ? 'ERROR' : 'SUCCESS')
-
-        setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1]
-          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.parts) {
-            // Find and update the matching tool part
-            const updatedParts = lastMsg.parts.map((part) => {
-              if ('toolCallId' in part && part.toolCallId === resultContent.callId) {
-                return {
-                  ...part,
-                  state: 'result' as const,
-                  result: resultContent.output,
-                }
-              }
-              return part
-            })
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...lastMsg,
-                parts: updatedParts,
-              },
-            ]
-          }
-          return prev
-        })
+        setMessages((prev) => applyAgentMessageToTranscript(prev, msg))
       } else if (msg.type === 'queue_user_prompt') {
         const queuedContent = msg.content as { prompt?: string; reason?: string; source?: string }
         const prompt = typeof queuedContent.prompt === 'string' ? queuedContent.prompt.trim() : ''
@@ -1130,36 +1055,9 @@ export function Chat({
         }
       } else if (msg.type === 'reasoning') {
         hideReconnectNotice()
-        // Handle reasoning messages (agent's thinking)
         const reasoningContent = msg.content as string
         console.log('[Chat] Reasoning:', reasoningContent?.substring(0, 100))
-
-        setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1]
-          if (lastMsg && lastMsg.role === 'assistant') {
-            // Add reasoning as text part
-            const existingParts = lastMsg.parts || []
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...lastMsg,
-                parts: [...existingParts, { type: 'reasoning' as const, text: reasoningContent || '' }],
-              },
-            ]
-          } else {
-            // Create new assistant message with reasoning
-            return [
-              ...prev,
-              {
-                id: generateId(),
-                role: 'assistant',
-                content: reasoningContent || '',
-                parts: [{ type: 'reasoning', text: reasoningContent || '' }],
-                createdAt: new Date().toISOString(),
-              },
-            ]
-          }
-        })
+        setMessages((prev) => applyAgentMessageToTranscript(prev, msg))
       } else if (msg.type === 'init') {
         console.log('[Chat] Agent initialized:', msg.content)
       } else if (msg.type === 'done') {
@@ -1283,21 +1181,19 @@ export function Chat({
         setIsStreaming(true)
 
         let fullPrompt = messageContent
+        const initialImageParts: MessagePart[] = []
 
         // If there are initial images, save them and append paths to prompt
         if (initialImages && initialImages.length > 0) {
           console.log('[Chat] Processing', initialImages.length, 'initial images')
           const attachmentPaths: string[] = []
 
-          // Build image parts for display in the message
-          const imageParts: MessagePart[] = []
-
           for (let i = 0; i < initialImages.length; i++) {
             const imageData = initialImages[i]
             console.log('[Chat] Saving initial image', i, ':', imageData.filename)
 
             // Add image part for display
-            imageParts.push({
+            initialImageParts.push({
               type: 'image',
               url: imageData.base64,
               mediaType: imageData.type,
@@ -1314,12 +1210,12 @@ export function Chat({
           }
 
           // Update the initial message to include image parts for display
-          if (imageParts.length > 0) {
+          if (initialImageParts.length > 0) {
             setMessages((prev) => {
               if (prev.length === 0) return prev
               const updated = [...prev]
               const firstMsg = { ...updated[0] }
-              firstMsg.parts = [...(firstMsg.parts || []), ...imageParts]
+              firstMsg.parts = [...(firstMsg.parts || []), ...initialImageParts]
               updated[0] = firstMsg
               return updated
             })
@@ -1337,7 +1233,13 @@ export function Chat({
           const promptToSend = shouldForceFrontendDesignForCurrentSession()
             ? withFrontendDesignSkillPrompt(fullPrompt)
             : fullPrompt
-          await localAgent.sendPrompt(promptToSend)
+          await localAgent.sendPrompt(promptToSend, {
+            id: initialMessage.id,
+            role: 'user',
+            content: initialMessage.content || messageContent,
+            parts: [...(initialMessage.parts || []), ...initialImageParts] as Record<string, unknown>[],
+            createdAt: initialMessage.createdAt || new Date().toISOString(),
+          })
         } catch (err) {
           console.error('[Chat] Failed to start initial stream:', err)
           const errorMsg = err instanceof Error ? err.message : 'Failed to start stream'
@@ -1547,7 +1449,18 @@ export function Chat({
         const promptToSend = shouldForceFrontendDesignForCurrentSession()
           ? withFrontendDesignSkillPrompt(fullPrompt)
           : fullPrompt
-        await localAgent.sendPrompt(promptToSend)
+        await localAgent.sendPrompt(
+          promptToSend,
+          hideUserMessage
+            ? undefined
+            : {
+                id: userMessage.id,
+                role: 'user',
+                content: userMessage.content,
+                parts: (userMessage.parts || []) as Record<string, unknown>[],
+                createdAt: userMessage.createdAt || new Date().toISOString(),
+              }
+        )
         console.log('[Chat] localAgent.sendPrompt completed')
       } catch (err) {
         console.error('[Chat] Local agent error:', err)
@@ -1623,11 +1536,23 @@ export function Chat({
 
       // Load messages from CLI storage
       setIsLoadingSession(true)
+      let transcriptLastSeq = 0
+      let reconnectSessionId = session.sessionId
       try {
         const sessionProvider = session.provider || provider
-        const loadedMessages = await loadPersistedSession(session.sessionId, sessionProvider)
-        console.log('[Chat] Loaded session messages:', loadedMessages.length)
-        setMessages(loadedMessages)
+        const transcript = await loadSessionTranscript(session.sessionId, sessionProvider)
+        transcriptLastSeq = transcript.lastSeq
+        reconnectSessionId = transcript.sessionId
+        console.log('[Chat] Loaded session messages:', transcript.messages.length, 'source:', transcript.source)
+        setMessages(transcript.messages)
+        if (transcript.sessionId !== session.sessionId) {
+          setAgentSessionId(transcript.sessionId)
+          persistCanonicalSessionId({
+            requestedSessionId: session.sessionId,
+            canonicalSessionId: transcript.sessionId,
+            sessionProvider: transcript.provider,
+          })
+        }
       } catch (err) {
         console.error('[Chat] Error loading session:', err)
         setMessages([])
@@ -1636,13 +1561,13 @@ export function Chat({
       }
 
       // Try to reconnect to background session if still running
-      const reconnected = await localAgent.reconnectToSession(session.sessionId)
+      const reconnected = await localAgent.reconnectToSession(reconnectSessionId, transcriptLastSeq)
       if (reconnected) {
         console.log('[Chat] Reconnected to running background session')
         setIsStreaming(true)
       }
     },
-    [usableProjectPath, agentSessionId, hideReconnectNotice, provider, localAgent, loadPersistedSession, updateSessionMutation]
+    [usableProjectPath, agentSessionId, hideReconnectNotice, provider, localAgent, loadSessionTranscript, persistCanonicalSessionId, updateSessionMutation]
   )
 
   // Handle session deletion - remove from projects.json
