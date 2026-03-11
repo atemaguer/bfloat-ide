@@ -12,7 +12,7 @@ import type { ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { detectAppTypeFromPackageJson } from '@/lib/launch'
 import { Button } from '@/app/components/ui/button'
 import { ProjectContent } from './ProjectContent'
-import { filesystem, terminal, aiAgent } from '@/app/api/sidecar'
+import { filesystem, terminal } from '@/app/api/sidecar'
 import './styles.css'
 
 function normalizePathForProjectMatch(input: string): string {
@@ -159,21 +159,17 @@ function ProjectPageContent() {
               return projectStore.close()
             })
             .then(() => {
-              // Kill all terminal PTY processes and agent sessions
-              console.log('[ProjectPage] Killing all terminals and agent sessions')
+              // Kill workbench terminals, but keep agent sessions alive so the
+              // chat can reconnect when the user returns to this project.
+              console.log('[ProjectPage] Killing all terminals')
               const killAllTerminals =
                 typeof (terminal as { killAll?: () => Promise<unknown> }).killAll === 'function'
                   ? (terminal as { killAll: () => Promise<unknown> }).killAll()
                   : Promise.resolve()
 
-              return Promise.all([
-                killAllTerminals.catch((err: Error) => {
-                  console.error('[ProjectPage] Failed to kill terminals:', err)
-                }),
-                aiAgent.terminateAllSessions().catch((err: Error) => {
-                  console.error('[ProjectPage] Failed to terminate agent sessions:', err)
-                }),
-              ])
+              return killAllTerminals.catch((err: Error) => {
+                console.error('[ProjectPage] Failed to kill terminals:', err)
+              })
             })
             .catch((err: Error) => {
               console.error('[ProjectPage] Failed during cleanup:', err)

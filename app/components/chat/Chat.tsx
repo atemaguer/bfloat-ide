@@ -195,6 +195,8 @@ export function Chat({
   const [selectedModel, setSelectedModel] = useState<string>(initialModel || 'claude-sonnet-4-20250514')
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages || [])
   const [isStreaming, setIsStreaming] = useState(false)
+  const [isResumingSession, setIsResumingSession] = useState(false)
+  const [showReconnectNotice, setShowReconnectNotice] = useState(false)
   const [isLoadingSession, setIsLoadingSession] = useState(false)
   const [isProvisioning, setIsProvisioning] = useState(false)
   const [convexProvisioned, setConvexProvisioned] = useState(false)
@@ -680,6 +682,54 @@ export function Chat({
     }
   }, [])
 
+  const loadPersistedSession = useCallback(
+    async (
+      sessionIdToLoad: string,
+      sessionProvider: ProviderId = provider,
+      options?: { preserveInitialUserMessage?: boolean }
+    ) => {
+      const result = await aiAgentApi.readSession(sessionIdToLoad, sessionProvider, usableProjectPath || undefined)
+      if (!result.success || !result.session?.messages) {
+        throw new Error(result.error || 'Failed to load session')
+      }
+
+      const chatMessages = result.session.messages.map(convertSessionMessage)
+
+      if (options?.preserveInitialUserMessage && initialMessages?.length > 0 && initialMessages[0].role === 'user') {
+        const hasUserMessage = chatMessages.some((m) => m.role === 'user')
+        if (!hasUserMessage) {
+          console.log('[Chat] Preserving initial user message not found in CLI session')
+          return [initialMessages[0], ...chatMessages]
+        }
+      }
+
+      return chatMessages
+    },
+    [aiAgentApi, convertSessionMessage, initialMessages, provider, usableProjectPath]
+  )
+
+  const canReadPersistedSession = useCallback(
+    async (sessionIdToCheck: string, sessionProvider: ProviderId) => {
+      const result = await aiAgentApi.readSession(sessionIdToCheck, sessionProvider, usableProjectPath || undefined)
+      return result.success
+    },
+    [aiAgentApi, usableProjectPath]
+  )
+
+  const hideReconnectNotice = useCallback(() => {
+    setShowReconnectNotice(false)
+  }, [])
+
+  useEffect(() => {
+    if (!showReconnectNotice) return
+
+    const timeoutId = window.setTimeout(() => {
+      setShowReconnectNotice(false)
+    }, 4000)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [showReconnectNotice])
+
   // Load session messages from local CLI storage
   // Only loads ONCE on component mount when we have a session ID from a PREVIOUS run
   // Uses initialSessionIdAtMount ref to ensure we don't load sessions started during this component's lifecycle
@@ -715,76 +765,18 @@ export function Chat({
       initialMessagesCount: initialMessages?.length || 0,
     })
 
-    aiAgentApi
-      .readSession(sessionIdToLoad, provider, usableProjectPath || undefined)
-      .then((result) => {
-        if (result.success && result.session?.messages) {
-          // Debug: Log detailed session info
-          const messages = result.session.messages
-          const textMsgs = messages.filter((m) => m.role === 'assistant' && m.blocks?.some((b) => b.type === 'text'))
-          console.log('[Chat] Session loaded from storage:', {
-            messageCount: messages.length,
-            userMessages: messages.filter((m) => m.role === 'user').length,
-            assistantMessages: messages.filter((m) => m.role === 'assistant').length,
-            messagesWithTextBlocks: textMsgs.length,
-            cwd: result.session.cwd,
-          })
-
-          // Debug: Log first text message if found
-          if (textMsgs.length > 0) {
-            const firstText = textMsgs[0]
-            const textBlock = firstText.blocks?.find((b) => b.type === 'text')
-            console.log('[Chat] First text message from storage:', {
-              id: firstText.id,
-              contentLength: firstText.content?.length || 0,
-              blocksCount: firstText.blocks?.length || 0,
-              firstBlockType: firstText.blocks?.[0]?.type,
-              textBlockContent: textBlock?.content?.substring(0, 100) + '...',
-            })
-          } else {
-            console.warn('[Chat] WARNING: No text messages found in loaded session!')
-            // Log all assistant messages to see what blocks they have
-            const assistantMsgs = messages.filter((m) => m.role === 'assistant')
-            if (assistantMsgs.length > 0) {
-              console.log(
-                '[Chat] Assistant message block types:',
-                assistantMsgs.map((m) => ({
-                  id: m.id,
-                  blocksCount: m.blocks?.length || 0,
-                  blockTypes: m.blocks?.map((b) => b.type) || [],
-                }))
-              )
-            }
-          }
-
-          // Convert session messages to ChatMessage format
-          const chatMessages = result.session.messages.map(convertSessionMessage)
-
-          // Debug: Log converted messages
-          const convertedTextMsgs = chatMessages.filter(
-            (m) => m.role === 'assistant' && m.parts?.some((p) => p.type === 'text')
-          )
-          console.log('[Chat] After conversion:', {
-            totalMessages: chatMessages.length,
-            messagesWithTextParts: convertedTextMsgs.length,
-          })
-
-          // Preserve the initial user message if the loaded session doesn't have it
-          // The CLI session storage may not include the initial user prompt
-          let finalMessages = chatMessages
-          if (initialMessages?.length > 0 && initialMessages[0].role === 'user') {
-            const hasUserMessage = chatMessages.some((m) => m.role === 'user')
-            if (!hasUserMessage) {
-              console.log('[Chat] Preserving initial user message not found in CLI session')
-              finalMessages = [initialMessages[0], ...chatMessages]
-            }
-          }
-
-          setMessages(finalMessages)
-        } else {
-          console.warn('[Chat] Failed to load session:', result.error)
-          // Session not found is not an error - just means new session
-        }
+    loadPersistedSession(sessionIdToLoad, provider, { preserveInitialUserMessage: true })
+      .then((loadedMessages) => {
+        const convertedTextMsgs = loadedMessages.filter(
+          (m) => m.role === 'assistant' && m.parts?.some((p) => p.type === 'text')
+        )
+        console.log('[Chat] Session loaded from storage:', {
+          messageCount: loadedMessages.length,
+          userMessages: loadedMessages.filter((m) => m.role === 'user').length,
+          assistantMessages: loadedMessages.filter((m) => m.role === 'assistant').length,
+          messagesWithTextParts: convertedTextMsgs.length,
+        })
+        setMessages(loadedMessages)
       })
       .catch((err) => {
         console.error('[Chat] Error loading session:', err)
@@ -794,7 +786,7 @@ export function Chat({
       })
     // Note: Also depends on resolvedInitialSessionId to handle async session fetch
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiAgentApi, resolvedInitialSessionId, usableProjectPath])
+  }, [loadPersistedSession, provider, resolvedInitialSessionId, usableProjectPath])
 
   // Log when projectPath is received
   useEffect(() => {
@@ -858,6 +850,7 @@ export function Chat({
         forcedFrontendDesignSessionIdRef.current = sessionId
       }
 
+      setIsResumingSession(false)
       setAgentSessionId(sessionId)
 
       // Mark session as loaded so the load-session effect won't re-run
@@ -875,6 +868,88 @@ export function Chat({
     [onSessionIdChange, provider, selectedModel, saveSessionMutation]
   )
 
+  const handleReconnectSession = useCallback(
+    async (info: { sessionId: string; provider: ProviderId; status: 'running' | 'completed' | 'error'; source: 'mount' | 'tab' }) => {
+      const { sessionId, provider: sessionProvider, status, source } = info
+      const selectedSessionId = agentSessionId ?? resolvedInitialSessionId
+      let nextVisibleSessionId = sessionId
+      let storageSessionIdToLoad: string | null = null
+      let shouldPersistReconnectSession = true
+      let staleAliasSessionId: string | null = null
+
+      if (selectedSessionId && selectedSessionId !== sessionId) {
+        const [selectedReadable, reconnectReadable] = await Promise.all([
+          canReadPersistedSession(selectedSessionId, sessionProvider),
+          canReadPersistedSession(sessionId, sessionProvider),
+        ])
+
+        if (selectedReadable && !reconnectReadable) {
+          nextVisibleSessionId = selectedSessionId
+          storageSessionIdToLoad = selectedSessionId
+          shouldPersistReconnectSession = false
+          staleAliasSessionId = sessionId
+        } else if (reconnectReadable) {
+          storageSessionIdToLoad = sessionId
+        } else if (selectedReadable) {
+          storageSessionIdToLoad = selectedSessionId
+        }
+      } else if (selectedSessionId === sessionId) {
+        storageSessionIdToLoad = sessionId
+      } else {
+        const reconnectReadable = await canReadPersistedSession(sessionId, sessionProvider)
+        storageSessionIdToLoad = reconnectReadable ? sessionId : null
+      }
+
+      console.log('[Chat] Reconnected to existing session:', info)
+
+      const providerDefaults: Record<ProviderId, string> = {
+        claude: 'claude-sonnet-4-20250514',
+        codex: 'gpt-5.3-codex',
+      }
+      if (sessionProvider !== provider) {
+        setSelectedModel(providerDefaults[sessionProvider] || '')
+      }
+      setProvider(sessionProvider)
+      setAgentSessionId(nextVisibleSessionId)
+      setIsResumingSession(status === 'running')
+      setShowReconnectNotice(status === 'running')
+      if (shouldPersistReconnectSession) {
+        saveSessionMutation.mutate({
+          sessionId: nextVisibleSessionId,
+          provider: sessionProvider as 'claude' | 'codex',
+        })
+      }
+      if (staleAliasSessionId && allSessions.some((session) => session.sessionId === staleAliasSessionId)) {
+        deleteSessionMutation.mutate(staleAliasSessionId)
+      }
+
+      if (source !== 'mount' || status !== 'running' || !storageSessionIdToLoad) {
+        return
+      }
+
+      setIsLoadingSession(true)
+      try {
+        const loadedMessages = await loadPersistedSession(storageSessionIdToLoad, sessionProvider, { preserveInitialUserMessage: true })
+        hasLoadedSession.current = true
+        setMessages(loadedMessages)
+      } catch (err) {
+        console.error('[Chat] Error restoring resumed session:', err)
+      } finally {
+        setIsLoadingSession(false)
+      }
+    },
+    [
+      agentSessionId,
+      allSessions,
+      canReadPersistedSession,
+      deleteSessionMutation,
+      loadPersistedSession,
+      provider,
+      resolvedInitialSessionId,
+      saveSessionMutation,
+    ]
+  )
+
   // Compute system prompt (exploration + suggestions for new sessions, suggestions-only for resumed)
   const systemPrompt = useMemo(() => {
     return getSystemPrompt(!!agentSessionId)
@@ -889,6 +964,7 @@ export function Chat({
     systemPrompt, // System prompt for project exploration (new sessions only)
     resumeSessionId: agentSessionId, // Resume from previous session if available
     onSessionId: handleSessionIdChange, // Capture session ID from init message
+    onReconnectSession: handleReconnectSession,
     onMessage: (msg) => {
       console.log('[Chat] Local agent message:', msg.type, msg.content)
 
@@ -915,10 +991,13 @@ export function Chat({
             },
           ])
           setAgentSessionId(null)
+          setIsResumingSession(false)
+          hideReconnectNotice()
           setIsStreaming(false)
           return
         }
 
+        hideReconnectNotice()
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1]
           if (lastMsg && lastMsg.role === 'assistant') {
@@ -960,6 +1039,7 @@ export function Chat({
           }
         })
       } else if (msg.type === 'tool_call') {
+        hideReconnectNotice()
         // Convert to AI SDK tool part format
         const toolContent = msg.content as {
           id: string
@@ -1006,6 +1086,7 @@ export function Chat({
           }
         })
       } else if (msg.type === 'tool_result') {
+        hideReconnectNotice()
         // Update existing tool part with result
         const resultContent = msg.content as { callId: string; name: string; output: string; isError: boolean }
         console.log('[Chat] Tool result:', resultContent.callId, resultContent.isError ? 'ERROR' : 'SUCCESS')
@@ -1048,6 +1129,7 @@ export function Chat({
           })
         }
       } else if (msg.type === 'reasoning') {
+        hideReconnectNotice()
         // Handle reasoning messages (agent's thinking)
         const reasoningContent = msg.content as string
         console.log('[Chat] Reasoning:', reasoningContent?.substring(0, 100))
@@ -1081,6 +1163,7 @@ export function Chat({
       } else if (msg.type === 'init') {
         console.log('[Chat] Agent initialized:', msg.content)
       } else if (msg.type === 'done') {
+        hideReconnectNotice()
         console.log('[Chat] Agent completed:', msg.content)
         // Capture usage data from completion message
         if (msg.metadata?.tokens) {
@@ -1090,6 +1173,7 @@ export function Chat({
     },
     onError: (err) => {
       console.error('[Chat] Local agent error:', err)
+      hideReconnectNotice()
 
       // Detect poisoned conversation history (empty screenshot base64).
       // Once this enters the history, every subsequent API call fails because
@@ -1112,11 +1196,13 @@ export function Chat({
           },
         ])
         setAgentSessionId(null)
+        hideReconnectNotice()
         setIsStreaming(false)
         return
       }
 
       setError(err)
+      setIsResumingSession(false)
       setIsStreaming(false)
       showErrorToast(err, { id: 'agent-error' })
 
@@ -1133,6 +1219,8 @@ export function Chat({
     },
     onComplete: () => {
       console.log('[Chat] Local agent completed')
+      hideReconnectNotice()
+      setIsResumingSession(false)
       setIsStreaming(false)
       // Session is automatically persisted by the CLI tools (Claude/Codex)
       // No need to manually persist to database
@@ -1191,6 +1279,7 @@ export function Chat({
           projectPath: usableProjectPath,
           hasInitialImages: !!initialImages?.length,
         })
+        setIsResumingSession(false)
         setIsStreaming(true)
 
         let fullPrompt = messageContent
@@ -1272,6 +1361,7 @@ export function Chat({
   useEffect(() => {
     if (localAgent.isRunning && !isStreaming) {
       console.log('[Chat] Agent is running (background reconnect) - setting isStreaming=true')
+      setIsResumingSession(true)
       setIsStreaming(true)
     } else if (!localAgent.isRunning && isStreaming) {
       // Only sync from agent→chat when the agent explicitly stops
@@ -1449,6 +1539,7 @@ export function Chat({
 
         setMessages((prev) => [...prev, userMessage])
       }
+      setIsResumingSession(false)
       setIsStreaming(true)
 
       try {
@@ -1495,8 +1586,10 @@ export function Chat({
   const handleStop = useCallback(async () => {
     console.log('[Chat] Stopping agent')
     await localAgent.stop()
+    hideReconnectNotice()
+    setIsResumingSession(false)
     setIsStreaming(false)
-  }, [localAgent])
+  }, [hideReconnectNotice, localAgent])
 
   // Handle session switching - load a different session from CLI storage
   const handleSelectSession = useCallback(
@@ -1514,6 +1607,8 @@ export function Chat({
       // Update session ID
       setAgentSessionId(session.sessionId)
       setError(null)
+      hideReconnectNotice()
+      setIsResumingSession(false)
       setIsStreaming(false)
 
       // Restore provider from session (if available)
@@ -1530,15 +1625,9 @@ export function Chat({
       setIsLoadingSession(true)
       try {
         const sessionProvider = session.provider || provider
-        const result = await aiAgent.readSession(session.sessionId, sessionProvider, usableProjectPath)
-        if (result.success && result.session?.messages) {
-          console.log('[Chat] Loaded session messages:', result.session.messages.length)
-          const loadedMessages = result.session.messages.map(convertSessionMessage)
-          setMessages(loadedMessages)
-        } else {
-          console.error('[Chat] Failed to load session:', result.error)
-          setMessages([])
-        }
+        const loadedMessages = await loadPersistedSession(session.sessionId, sessionProvider)
+        console.log('[Chat] Loaded session messages:', loadedMessages.length)
+        setMessages(loadedMessages)
       } catch (err) {
         console.error('[Chat] Error loading session:', err)
         setMessages([])
@@ -1553,7 +1642,7 @@ export function Chat({
         setIsStreaming(true)
       }
     },
-    [usableProjectPath, agentSessionId, provider, localAgent, convertSessionMessage, updateSessionMutation]
+    [usableProjectPath, agentSessionId, hideReconnectNotice, provider, localAgent, loadPersistedSession, updateSessionMutation]
   )
 
   // Handle session deletion - remove from projects.json
@@ -1610,6 +1699,8 @@ export function Chat({
 
     // Reset session and error state
     setError(null)
+    hideReconnectNotice()
+    setIsResumingSession(false)
     setIsStreaming(false)
     setAgentSessionId(null)
 
@@ -1617,7 +1708,7 @@ export function Chat({
     hasLoadedSession.current = false
     initialSessionIdAtMount.current = null
     hasStartedInitialStream.current = false
-  }, [localAgent, agentSessionId, isStreaming])
+  }, [hideReconnectNotice, localAgent, agentSessionId, isStreaming])
 
   // Handle fix error - submit error to AI for fixing
   const handleFixError = useCallback(() => {
@@ -1626,6 +1717,14 @@ export function Chat({
     handleSubmit(errorPrompt)
     workbenchStore.clearPromptError()
   }, [promptError, handleSubmit])
+
+  const composerPlaceholder = !isWorkspaceReady
+    ? 'Waiting for workspace...'
+    : isStreaming
+      ? isResumingSession
+        ? 'Resuming active agent session...'
+        : 'Agent is working in this session...'
+      : 'Describe what you want to build...'
 
   // Handle dismiss error
   const handleDismissError = useCallback(() => {
@@ -2015,6 +2114,22 @@ export function Chat({
         {/* Task Progress - shown above input when todos exist */}
         {todos && todos.length > 0 && <TaskProgress todos={todos} isStreaming={isStreaming} />}
 
+        {showReconnectNotice && (
+          <div
+            style={{
+              margin: '0 16px 12px',
+              padding: '10px 12px',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius: 12,
+              background: 'rgba(255, 255, 255, 0.03)',
+              fontSize: 13,
+              color: 'rgba(255, 255, 255, 0.78)',
+            }}
+          >
+            Reconnected to the active agent session. Output is still streaming in this tab.
+          </div>
+        )}
+
         {/* Next step suggestion chips */}
         <SuggestionChips suggestions={suggestions} onSelect={handleSuggestionSelect} />
 
@@ -2026,7 +2141,7 @@ export function Chat({
           isStreaming={isStreaming}
           isProvisioning={isProvisioning}
           isDisabled={!isWorkspaceReady}
-          placeholder={isWorkspaceReady ? "Describe what you want to build..." : "Waiting for workspace..."}
+          placeholder={composerPlaceholder}
           showAttachment={true}
           showHint={true}
           providerSelector={{
