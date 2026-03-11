@@ -65,11 +65,12 @@ interface UseLocalAgentOptions {
   cwd: string
   provider?: ProviderId
   model?: string
+  sessionId?: string | null // Canonical sidecar/app session ID for subsequent turns
   systemPrompt?: string // Custom system prompt for exploration
   permissionMode?: PermissionMode // Permission mode for the session
   disallowedTools?: string[] // Tools to disable
   allowedTools?: AgentTool[] // Tools to allow
-  resumeSessionId?: string | null // Session ID to resume from
+  resumeProviderSessionId?: string | null // Provider session ID/thread ID to resume from
   projectId?: string // Project ID for background session tracking
   maxTurns?: number // Maximum agentic turns (prevents infinite loops)
   agents?: Record<string, import('@/lib/agents/types').AgentDefinition> // Agent/subagent definitions for team orchestration
@@ -92,9 +93,9 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   const unsubscribeRef = useRef<(() => void) | null>(null)
   /** Monotonically incrementing counter used to detect and discard stale subscription callbacks */
   const activeSubscriptionIdRef = useRef(0)
-  const sessionIdRef = useRef<string | null>(null)
-  const providerSessionIdRef = useRef<string | null>(options.resumeSessionId || null)
-  const requestedResumeSessionIdRef = useRef<string | null>(options.resumeSessionId || null)
+  const sessionIdRef = useRef<string | null>(options.sessionId || null)
+  const providerSessionIdRef = useRef<string | null>(options.resumeProviderSessionId || null)
+  const requestedResumeSessionIdRef = useRef<string | null>(options.resumeProviderSessionId || null)
   const skipResumeOnceRef = useRef(false)
   const cwdRef = useRef<string>(options.cwd)
   const hasReconnected = useRef(false)
@@ -115,9 +116,16 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     onReconnectSessionRef.current = options.onReconnectSession
     onErrorRef.current = options.onError
 
-    requestedResumeSessionIdRef.current = options.resumeSessionId || null
-    if (!skipResumeOnceRef.current && options.resumeSessionId && providerSessionIdRef.current !== options.resumeSessionId) {
-      providerSessionIdRef.current = options.resumeSessionId
+    requestedResumeSessionIdRef.current = options.resumeProviderSessionId || null
+    if (options.sessionId && sessionIdRef.current !== options.sessionId) {
+      sessionIdRef.current = options.sessionId
+    }
+    if (
+      !skipResumeOnceRef.current &&
+      options.resumeProviderSessionId &&
+      providerSessionIdRef.current !== options.resumeProviderSessionId
+    ) {
+      providerSessionIdRef.current = options.resumeProviderSessionId
     }
   })
 
@@ -520,7 +528,8 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     if (options.provider) sessionOptions.provider = options.provider
     if (options.model) sessionOptions.model = options.model
     if (options.systemPrompt) sessionOptions.systemPrompt = options.systemPrompt
-    const resumeSessionId = skipResumeOnceRef.current ? null : providerSessionIdRef.current || options.resumeSessionId || null
+    const resumeSessionId =
+      skipResumeOnceRef.current ? null : providerSessionIdRef.current || options.resumeProviderSessionId || null
     if (resumeSessionId) {
       sessionOptions.resumeSessionId = resumeSessionId
     }
@@ -569,7 +578,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     }))
 
     return result.sessionId
-  }, [options.cwd, options.provider, options.model, options.systemPrompt, options.resumeSessionId, options.projectId])
+  }, [options.cwd, options.provider, options.model, options.sessionId, options.systemPrompt, options.resumeProviderSessionId, options.projectId])
 
   // Send a prompt to the agent
   const sendPrompt = useCallback(

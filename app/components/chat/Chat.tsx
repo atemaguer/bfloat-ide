@@ -190,6 +190,7 @@ export function Chat({
   const [input, setInput] = useState('')
   // Session ID for resuming conversations (null = new session, backwards compatible with old projects)
   const [agentSessionId, setAgentSessionId] = useState<string | null>(resolvedInitialSessionId)
+  const [resumeProviderSessionId, setResumeProviderSessionId] = useState<string | null>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [provider, setProvider] = useState<ProviderId>(initialProvider || 'claude')
@@ -831,6 +832,7 @@ export function Chat({
           source: transcript.source,
         })
         setMessages(transcript.messages)
+        setResumeProviderSessionId(transcript.providerSessionId || null)
         if (transcript.sessionId !== sessionIdToLoad) {
           setAgentSessionId(transcript.sessionId)
           persistCanonicalSessionId({
@@ -952,6 +954,7 @@ export function Chat({
         const transcript = await loadSessionTranscript(sessionId, sessionProvider, { preserveInitialUserMessage: true })
         hasLoadedSession.current = true
         setMessages(transcript.messages)
+        setResumeProviderSessionId(transcript.providerSessionId || null)
         if (transcript.sessionId !== sessionId) {
           setAgentSessionId(transcript.sessionId)
           persistCanonicalSessionId({
@@ -991,9 +994,10 @@ export function Chat({
     cwd: usableProjectPath || '',
     provider,
     model: selectedModel,
+    sessionId: agentSessionId,
     projectId, // Project ID for background session tracking
     systemPrompt, // System prompt for project exploration (new sessions only)
-    resumeSessionId: agentSessionId, // Resume from previous session if available
+    resumeProviderSessionId,
     onSessionId: handleSessionIdChange, // Capture session ID from init message
     onReconnectSession: handleReconnectSession,
     onMessage: (msg) => {
@@ -1060,6 +1064,8 @@ export function Chat({
         setMessages((prev) => applyAgentMessageToTranscript(prev, msg))
       } else if (msg.type === 'init') {
         console.log('[Chat] Agent initialized:', msg.content)
+        const initContent = msg.content as { providerSessionId?: string }
+        setResumeProviderSessionId(initContent.providerSessionId || null)
       } else if (msg.type === 'done') {
         hideReconnectNotice()
         console.log('[Chat] Agent completed:', msg.content)
@@ -1094,6 +1100,7 @@ export function Chat({
           },
         ])
         setAgentSessionId(null)
+        setResumeProviderSessionId(null)
         hideReconnectNotice()
         setIsStreaming(false)
         return
@@ -1545,6 +1552,7 @@ export function Chat({
         reconnectSessionId = transcript.sessionId
         console.log('[Chat] Loaded session messages:', transcript.messages.length, 'source:', transcript.source)
         setMessages(transcript.messages)
+        setResumeProviderSessionId(transcript.providerSessionId || null)
         if (transcript.sessionId !== session.sessionId) {
           setAgentSessionId(transcript.sessionId)
           persistCanonicalSessionId({
@@ -1628,6 +1636,7 @@ export function Chat({
     setIsResumingSession(false)
     setIsStreaming(false)
     setAgentSessionId(null)
+    setResumeProviderSessionId(null)
 
     // Reset refs so we don't try to load the old session
     hasLoadedSession.current = false
