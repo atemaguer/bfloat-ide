@@ -31,6 +31,15 @@ import { getRedactedTerminalTail } from "./workbench-verification.ts";
 import { captureScreenshot, getPreviewUrl } from "./screenshot.ts";
 import { updateSessionInProject } from "../routes/local-projects.ts";
 import { CodexProvider } from "./codex-provider.ts";
+import { translateFrameToMessage } from "./agent-message.ts";
+import {
+  appendAgentMessageToJournal,
+  appendUserMessageToJournal,
+  initializeSessionJournal,
+  updateSessionJournalMetadata,
+  updateSessionJournalStatus,
+  type SessionJournalDisplayMessage,
+} from "./session-journal.ts";
 
 // ---------------------------------------------------------------------------
 // Frame types (wire format over WebSocket and HTTP responses)
@@ -140,6 +149,14 @@ export interface SessionCreateOptions {
   projectId?: string;
   /** MCP server configurations keyed by server name. */
   mcpServers?: Record<string, unknown>;
+}
+
+export interface UserDisplayMessage {
+  id: string;
+  role: "user";
+  content: string;
+  parts?: Array<Record<string, unknown>>;
+  createdAt: string;
 }
 
 /**
@@ -1183,6 +1200,17 @@ export function createSession(
     seq: 0,
   });
 
+  initializeSessionJournal({
+    sessionId,
+    provider: providerId,
+    cwd: normalizedOptions.cwd,
+    projectId: normalizedOptions.projectId,
+    providerSessionId: normalizedOptions.resumeSessionId,
+    status: "idle",
+  }).catch((err) =>
+    console.warn("[AgentSession] Failed to initialize session journal:", err)
+  );
+
   // Register as background session so the renderer can reconnect on re-mount
   if (normalizedOptions.projectId) {
     registerBackgroundSession(sessionId, normalizedOptions.projectId, providerId, normalizedOptions.cwd);
@@ -1232,6 +1260,9 @@ export async function closeSession(sessionId: string): Promise<{ success: true }
 
   session.state.status = "interrupted";
   session.state.endTime = Date.now();
+  updateSessionJournalStatus(sessionId, "interrupted").catch((err) =>
+    console.warn("[AgentSession] Failed to mark journal interrupted on close:", err)
+  );
 
   sessions.delete(sessionId);
   console.log(`[AgentSession] Closed session ${sessionId}`);
@@ -1246,7 +1277,8 @@ export async function closeSession(sessionId: string): Promise<{ success: true }
  */
 export function sendMessage(
   sessionId: string,
-  message: string
+  message: string,
+  displayMessage?: UserDisplayMessage
 ): { success: true } | { success: false; error: string } {
   const session = sessions.get(sessionId);
   if (!session) {
@@ -1268,6 +1300,33 @@ export function sendMessage(
   session.state.status = "running";
   session.state.messageCount++;
 
+  updateSessionJournalStatus(sessionId, "running").catch((err) =>
+    console.warn("[AgentSession] Failed to mark journal running:", err)
+  );
+
+  if (displayMessage) {
+    const journalMessage: SessionJournalDisplayMessage = {
+      id: displayMessage.id,
+      role: "user",
+      content: displayMessage.content,
+      parts: displayMessage.parts,
+      createdAt: displayMessage.createdAt,
+    };
+    appendUserMessageToJournal(
+      {
+        sessionId,
+        provider: session.state.provider,
+        cwd: session.state.cwd,
+        projectId: session.state.projectId,
+        providerSessionId: session.state.realSessionId,
+        status: "running",
+      },
+      journalMessage
+    ).catch((err) =>
+      console.warn("[AgentSession] Failed to append user message to journal:", err)
+    );
+  }
+
   // Kick off the stream in the background (fire-and-forget)
   runStream(sessionId, message).catch((err) => {
     console.error(`[AgentSession] Unhandled stream error for session ${sessionId}:`, err);
@@ -1275,6 +1334,9 @@ export function sendMessage(
     if (s) {
       s.state.status = "error";
       s.state.endTime = Date.now();
+      updateSessionJournalStatus(sessionId, "error").catch((journalErr) =>
+        console.warn("[AgentSession] Failed to mark journal error:", journalErr)
+      );
       const errFrame = buildFrame(s, "error", {
         code: "unhandled_error",
         message: err instanceof Error ? err.message : String(err),
@@ -1306,6 +1368,9 @@ export function cancelMessage(
   if (session.abortController) {
     session.abortController.abort();
     console.log(`[AgentSession] Cancelled stream for session ${sessionId}`);
+    updateSessionJournalStatus(sessionId, "interrupted").catch((err) =>
+      console.warn("[AgentSession] Failed to mark journal interrupted on cancel:", err)
+    );
   }
 
   return { success: true };
@@ -1391,6 +1456,20 @@ function buildFrame(
 function broadcastToSession(session: InternalSession, frame: AgentFrame): void {
   // Buffer frame for background session replay
   bufferFrame(session.state.id, frame);
+
+  appendAgentMessageToJournal(
+    {
+      sessionId: session.state.id,
+      provider: session.state.provider,
+      cwd: session.state.cwd,
+      projectId: session.state.projectId,
+      providerSessionId: session.state.realSessionId,
+      status: session.state.status,
+    },
+    translateFrameToMessage(frame)
+  ).catch((err) =>
+    console.warn("[AgentSession] Failed to append agent message to journal:", err)
+  );
 
   const json = JSON.stringify(frame);
   for (const sub of session.subscribers) {
@@ -1495,6 +1574,12 @@ async function runStream(sessionId: string, message: string): Promise<void> {
           liveSession.state.realSessionId = event.realSessionId;
           liveSession.options.resumeSessionId = event.realSessionId;
           liveSession.state.model = event.model;
+          updateSessionJournalMetadata(liveSession.state.id, {
+            providerSessionId: event.realSessionId,
+            status: liveSession.state.status,
+          }).catch((err) =>
+            console.warn("[AgentSession] Failed to update journal provider session ID:", err)
+          );
 
           frame = buildFrame(liveSession, "init", {
             realSessionId: event.realSessionId,
@@ -1709,15 +1794,18 @@ async function runStream(sessionId: string, message: string): Promise<void> {
 
           // Persist token/cost to projects.json (fire-and-forget)
           const projectId = sessionToProject.get(sessionId);
-          const realSid = liveSession.state.realSessionId;
-          if (projectId && realSid) {
-            updateSessionInProject(projectId, realSid, {
+          if (projectId) {
+            updateSessionInProject(projectId, liveSession.state.id, {
               totalTokens: liveSession.state.totalTokens,
               totalCostUsd: liveSession.state.totalCostUsd,
             }).catch((err) =>
               console.warn("[AgentSession] Failed to persist token/cost:", err)
             );
           }
+
+          updateSessionJournalStatus(liveSession.state.id, liveSession.state.status).catch((err) =>
+            console.warn("[AgentSession] Failed to persist completed journal status:", err)
+          );
 
           // Save assistant turn to conversation history
           if (assistantText) {
@@ -1756,6 +1844,9 @@ async function runStream(sessionId: string, message: string): Promise<void> {
     if (liveSession && liveSession.state.status === "running") {
       liveSession.state.status = "interrupted";
       liveSession.state.endTime = Date.now();
+      updateSessionJournalStatus(liveSession.state.id, "interrupted").catch((err) =>
+        console.warn("[AgentSession] Failed to mark journal interrupted:", err)
+      );
 
       if (assistantText) {
         liveSession.state.conversation.push({
@@ -1798,6 +1889,9 @@ async function runStream(sessionId: string, message: string): Promise<void> {
 
     liveSession.state.status = "error";
     liveSession.state.endTime = Date.now();
+    updateSessionJournalStatus(liveSession.state.id, "error").catch((journalErr) =>
+      console.warn("[AgentSession] Failed to mark journal error:", journalErr)
+    );
 
     const errFrame = buildFrame(liveSession, "error", {
       code: "stream_error",

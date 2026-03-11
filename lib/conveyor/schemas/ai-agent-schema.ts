@@ -112,6 +112,7 @@ export const queueUserPromptContentSchema = z.object({
 // Init content schema
 export const initContentSchema = z.object({
   sessionId: z.string(),
+  providerSessionId: z.string().optional(),
   availableTools: z.array(z.string()),
   model: z.string(),
 })

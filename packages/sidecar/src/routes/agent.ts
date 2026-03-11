@@ -43,11 +43,14 @@ import {
   getBackgroundMessages,
   type AgentProviderId,
   type AgentFrame,
+  type UserDisplayMessage,
 } from "../services/agent-session.ts";
 import {
   readSession as readSessionFromStorage,
   listSessions as listSessionsFromStorage,
 } from "../services/session-reader.ts";
+import { translateFrameToMessage } from "../services/agent-message.ts";
+import { readSessionHistory } from "../services/session-journal.ts";
 
 // ---------------------------------------------------------------------------
 // Validation schemas
@@ -77,6 +80,13 @@ const CreateSessionSchema = z.object({
 
 const SendMessageSchema = z.object({
   content: z.string().min(1, "Message content must not be empty"),
+  displayMessage: z.object({
+    id: z.string().min(1),
+    role: z.literal("user"),
+    content: z.string(),
+    parts: z.array(z.record(z.unknown())).optional(),
+    createdAt: z.string(),
+  }).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -84,102 +94,6 @@ const SendMessageSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const agentRouter = new Hono();
-
-// ---------------------------------------------------------------------------
-// AgentFrame → AgentMessage translation
-//
-// The sidecar stores raw AgentFrame objects in the background session buffer.
-// The React frontend expects AgentMessage objects with a different shape:
-//   AgentFrame:   { type, sessionId, seq, ts, payload }
-//   AgentMessage: { type, content, metadata?: { seq, timestamp, tokens, cost } }
-//
-// This translation mirrors _translateAgentFrame in conveyor-bridge.ts.
-// ---------------------------------------------------------------------------
-
-interface AgentMessage {
-  type: string;
-  content: unknown;
-  metadata?: Record<string, unknown>;
-}
-
-function translateFrameToMessage(frame: AgentFrame): AgentMessage {
-  const metadata: Record<string, unknown> = {};
-  if (typeof frame.seq === "number") metadata.seq = frame.seq;
-  if (frame.ts) metadata.timestamp = new Date(frame.ts).getTime();
-
-  const payload = (frame.payload ?? {}) as Record<string, unknown>;
-  let content: unknown;
-
-  switch (frame.type) {
-    case "text":
-    case "reasoning":
-      content = (payload.delta as string) ?? "";
-      break;
-
-    case "tool_call":
-      content = {
-        id: payload.callId ?? payload.id ?? "",
-        name: payload.name ?? "",
-        input: payload.input ?? {},
-        status: payload.status ?? "running",
-      };
-      break;
-
-    case "tool_result":
-      content = {
-        callId: payload.callId ?? "",
-        name: payload.name ?? "",
-        output: payload.output ?? "",
-        isError: payload.isError ?? false,
-      };
-      break;
-
-    case "queue_user_prompt":
-      content = {
-        prompt: payload.prompt ?? "",
-        reason: payload.reason,
-        source: payload.source,
-      };
-      break;
-
-    case "error":
-      content = {
-        code: payload.code ?? "unknown",
-        message: payload.message ?? "Unknown error",
-        recoverable: payload.recoverable ?? false,
-      };
-      break;
-
-    case "init":
-      content = {
-        sessionId: (payload.realSessionId as string) ?? frame.sessionId,
-        availableTools: payload.availableTools ?? [],
-        model: payload.model ?? "",
-      };
-      break;
-
-    case "done":
-      content = {
-        sessionId: frame.sessionId,
-        result: payload.result,
-        interrupted: payload.interrupted ?? false,
-      };
-      if (typeof payload.totalTokens === "number") metadata.tokens = payload.totalTokens;
-      if (typeof payload.totalCostUsd === "number") metadata.cost = payload.totalCostUsd;
-      break;
-
-    default:
-      // stream_end, connected, cancelled — pass through as-is
-      content = payload;
-      break;
-  }
-
-  return {
-    type: frame.type,
-    content,
-    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/sessions
@@ -373,7 +287,11 @@ agentRouter.post("/sessions/:id/message", async (c) => {
     );
   }
 
-  const result = sendMessage(sessionId, parsed.data.content);
+  const result = sendMessage(
+    sessionId,
+    parsed.data.content,
+    parsed.data.displayMessage as UserDisplayMessage | undefined,
+  );
 
   if (!result.success) {
     // sendMessage returns an error if the session is already running
@@ -776,6 +694,25 @@ agentRouter.get("/sessions/:id/messages", (c) => {
   return c.json({
     success: true,
     messages,
+  });
+});
+
+agentRouter.get("/sessions/:id/history", async (c) => {
+  const { id: sessionId } = c.req.param();
+  const result = await readSessionHistory(sessionId);
+
+  if (!result) {
+    return c.json({ success: false, error: "Session history not found" }, 404);
+  }
+
+  return c.json({
+    success: true,
+    sessionId: result.canonicalSessionId,
+    provider: result.journal.provider,
+    providerSessionId: result.journal.providerSessionId,
+    status: result.journal.status,
+    lastSeq: result.journal.lastSeq,
+    entries: result.journal.entries,
   });
 });
 

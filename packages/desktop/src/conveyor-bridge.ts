@@ -1076,7 +1076,8 @@ function _translateAgentFrame(raw: unknown, sessionId: string): any {
       // payload: { realSessionId, model, availableTools, provider }
       // AgentMessage expects: { sessionId, availableTools, model }
       content = {
-        sessionId: (payload.realSessionId as string) ?? sessionId,
+        sessionId,
+        providerSessionId: (payload.realSessionId as string) ?? sessionId,
         availableTools: payload.availableTools ?? [],
         model: payload.model ?? "",
       }
@@ -1131,8 +1132,12 @@ export const aiAgentBridge = {
   createSession: (options: Parameters<ReturnType<typeof getSidecarApiSync>["agent"]["createSession"]>[0]) =>
     getSidecarApiSync().agent.createSession(options),
 
-  prompt: (sessionId: string, message: string) =>
-    getSidecarApiSync().agent.prompt(sessionId, message),
+  prompt: (
+    sessionId: string,
+    message: string,
+    displayMessage?: Parameters<ReturnType<typeof getSidecarApiSync>["agent"]["prompt"]>[2],
+  ) =>
+    getSidecarApiSync().agent.prompt(sessionId, message, displayMessage),
 
   interrupt: (sessionId: string) =>
     getSidecarApiSync().agent.interrupt(sessionId),
@@ -1278,6 +1283,9 @@ export const aiAgentBridge = {
 
   getBackgroundMessages: (sessionId: string, afterSeq?: number) =>
     getSidecarApiSync().agent.getBackgroundMessages(sessionId, afterSeq),
+
+  getSessionHistory: (sessionId: string) =>
+    getSidecarApiSync().agent.getSessionHistory(sessionId),
 
   // Session reading
   readSession: (
