@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { AlertCircle, Eye, EyeOff, GitBranch, Globe, Key, Loader2, Lock, Pencil, Plus, Save, Trash2 } from 'lucide-react'
+import { AlertCircle, Eye, EyeOff, GitBranch, Key, Loader2, Pencil, Plus, Save, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { MobileOnly } from '@/app/components/common/FeatureGate'
@@ -9,7 +9,6 @@ import { Button } from '@/app/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/app/components/ui/dialog'
 import { ImageDropzone } from '@/app/components/ui/image-dropzone'
-import { Switch } from '@/app/components/ui/Switch'
 import { localProjectsStore } from '@/app/stores/local-projects'
 import { useStore } from '@/app/hooks/useStore'
 import { workbenchStore } from '@/app/stores/workbench'
@@ -143,7 +142,6 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
   const [iosBundleId, setIosBundleId] = useState(project.iosBundleId || '')
   const [iosAppId, setIosAppId] = useState(project.iosAppId || '')
   const [androidPackageName, setAndroidPackageName] = useState(project.androidPackageName || '')
-  const [isPublic, setIsPublic] = useState(project.isPublic || false)
   const [agentInstructions, setAgentInstructions] = useState(project.agentInstructions || '')
   const [gitRemoteUrl, setGitRemoteUrl] = useState(project.sourceUrl || '')
   const [gitRemoteBranch, setGitRemoteBranch] = useState(project.sourceBranch || 'main')
@@ -212,7 +210,6 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
     setIosBundleId(project.iosBundleId || '')
     setIosAppId(project.iosAppId || '')
     setAndroidPackageName(project.androidPackageName || '')
-    setIsPublic(project.isPublic || false)
     setAgentInstructions(project.agentInstructions || '')
     setGitRemoteUrl(project.sourceUrl || '')
     setGitRemoteBranch(project.sourceBranch || 'main')
@@ -821,7 +818,6 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         iosBundleId,
         iosAppId,
         androidPackageName,
-        isPublic,
         agentInstructions,
       }
 
@@ -873,15 +869,6 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
         </p>
         <div className="project-settings-badges">
           <span className="badge">{project.title}</span>
-          {isPublic ? (
-            <span className="badge badge-public">
-              <Globe size={12} /> Public
-            </span>
-          ) : (
-            <span className="badge badge-private">
-              <Lock size={12} /> Private
-            </span>
-          )}
         </div>
       </div>
 
@@ -993,38 +980,6 @@ export function ProjectSettings({ project, onProjectUpdate }: ProjectSettingsPro
                 </div>
               </div>
             </MobileOnly>
-          </CardContent>
-        </Card>
-
-        <Card className="settings-card">
-          <CardHeader>
-            <CardTitle>Visibility Settings</CardTitle>
-            <CardDescription>Control who can see your project</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="visibility-setting">
-              <div className="visibility-info">
-                <label htmlFor="project-visibility">Project Access</label>
-                <div className="visibility-description">
-                  {isPublic ? (
-                    <span className="visibility-status visibility-public">
-                      <Globe size={14} />
-                      Anyone can view this project
-                    </span>
-                  ) : (
-                    <span className="visibility-status visibility-private">
-                      <Lock size={14} />
-                      Only you can access this project
-                    </span>
-                  )}
-                </div>
-              </div>
-              <Switch
-                id="project-visibility"
-                checked={isPublic}
-                onCheckedChange={setIsPublic}
-              />
-            </div>
           </CardContent>
         </Card>
 
