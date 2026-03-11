@@ -740,7 +740,10 @@ export default function HomePage() {
       </div>
       <Dialog
         open={deleteConfirmProjectId !== null}
-        onOpenChange={(open) => { if (!open) setDeleteConfirmProjectId(null) }}
+        onOpenChange={(open) => {
+          if (deletingProjectId !== null) return
+          if (!open) setDeleteConfirmProjectId(null)
+        }}
       >
         <DialogContent>
           <DialogHeader>
@@ -765,30 +768,32 @@ export default function HomePage() {
             </div>
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', paddingTop: '16px', borderTop: '1px solid hsl(var(--border))' }}>
-            <Button
-              variant="outline"
-              onClick={() => setDeleteConfirmProjectId(null)}
-              disabled={deletingProjectId !== null}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => deleteConfirmProjectId && handleDeleteProject(deleteConfirmProjectId)}
-              disabled={deletingProjectId !== null}
-            >
-              {deletingProjectId ? (
-                <>
+            {deletingProjectId !== null ? (
+              <div key="deleting">
+                <Button type="button" variant="danger" disabled>
                   <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
                   Deleting...
-                </>
-              ) : (
-                <>
+                </Button>
+              </div>
+            ) : (
+              <div key="idle" style={{ display: 'flex', gap: '12px' }}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDeleteConfirmProjectId(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  onClick={() => deleteConfirmProjectId && handleDeleteProject(deleteConfirmProjectId)}
+                >
                   <Trash2 size={16} />
                   Yes, Delete Project
-                </>
-              )}
-            </Button>
+                </Button>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
