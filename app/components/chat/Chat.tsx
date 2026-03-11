@@ -196,6 +196,7 @@ export function Chat({
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages || [])
   const [isStreaming, setIsStreaming] = useState(false)
   const [isResumingSession, setIsResumingSession] = useState(false)
+  const [showReconnectNotice, setShowReconnectNotice] = useState(false)
   const [isLoadingSession, setIsLoadingSession] = useState(false)
   const [isProvisioning, setIsProvisioning] = useState(false)
   const [convexProvisioned, setConvexProvisioned] = useState(false)
@@ -707,6 +708,28 @@ export function Chat({
     [aiAgentApi, convertSessionMessage, initialMessages, provider, usableProjectPath]
   )
 
+  const canReadPersistedSession = useCallback(
+    async (sessionIdToCheck: string, sessionProvider: ProviderId) => {
+      const result = await aiAgentApi.readSession(sessionIdToCheck, sessionProvider, usableProjectPath || undefined)
+      return result.success
+    },
+    [aiAgentApi, usableProjectPath]
+  )
+
+  const hideReconnectNotice = useCallback(() => {
+    setShowReconnectNotice(false)
+  }, [])
+
+  useEffect(() => {
+    if (!showReconnectNotice) return
+
+    const timeoutId = window.setTimeout(() => {
+      setShowReconnectNotice(false)
+    }, 4000)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [showReconnectNotice])
+
   // Load session messages from local CLI storage
   // Only loads ONCE on component mount when we have a session ID from a PREVIOUS run
   // Uses initialSessionIdAtMount ref to ensure we don't load sessions started during this component's lifecycle
@@ -827,6 +850,7 @@ export function Chat({
         forcedFrontendDesignSessionIdRef.current = sessionId
       }
 
+      setIsResumingSession(false)
       setAgentSessionId(sessionId)
 
       // Mark session as loaded so the load-session effect won't re-run
@@ -845,22 +869,67 @@ export function Chat({
   )
 
   const handleReconnectSession = useCallback(
-    async (sessionId: string, source: 'mount' | 'tab') => {
-      console.log('[Chat] Reconnected to existing session:', { sessionId, source })
-      setAgentSessionId(sessionId)
-      setIsResumingSession(true)
-      saveSessionMutation.mutate({
-        sessionId,
-        provider: provider as 'claude' | 'codex',
-      })
+    async (info: { sessionId: string; provider: ProviderId; status: 'running' | 'completed' | 'error'; source: 'mount' | 'tab' }) => {
+      const { sessionId, provider: sessionProvider, status, source } = info
+      const selectedSessionId = agentSessionId ?? resolvedInitialSessionId
+      let nextVisibleSessionId = sessionId
+      let storageSessionIdToLoad: string | null = null
+      let shouldPersistReconnectSession = true
+      let staleAliasSessionId: string | null = null
 
-      if (source !== 'mount' || !usableProjectPath) {
+      if (selectedSessionId && selectedSessionId !== sessionId) {
+        const [selectedReadable, reconnectReadable] = await Promise.all([
+          canReadPersistedSession(selectedSessionId, sessionProvider),
+          canReadPersistedSession(sessionId, sessionProvider),
+        ])
+
+        if (selectedReadable && !reconnectReadable) {
+          nextVisibleSessionId = selectedSessionId
+          storageSessionIdToLoad = selectedSessionId
+          shouldPersistReconnectSession = false
+          staleAliasSessionId = sessionId
+        } else if (reconnectReadable) {
+          storageSessionIdToLoad = sessionId
+        } else if (selectedReadable) {
+          storageSessionIdToLoad = selectedSessionId
+        }
+      } else if (selectedSessionId === sessionId) {
+        storageSessionIdToLoad = sessionId
+      } else {
+        const reconnectReadable = await canReadPersistedSession(sessionId, sessionProvider)
+        storageSessionIdToLoad = reconnectReadable ? sessionId : null
+      }
+
+      console.log('[Chat] Reconnected to existing session:', info)
+
+      const providerDefaults: Record<ProviderId, string> = {
+        claude: 'claude-sonnet-4-20250514',
+        codex: 'gpt-5.3-codex',
+      }
+      if (sessionProvider !== provider) {
+        setSelectedModel(providerDefaults[sessionProvider] || '')
+      }
+      setProvider(sessionProvider)
+      setAgentSessionId(nextVisibleSessionId)
+      setIsResumingSession(status === 'running')
+      setShowReconnectNotice(status === 'running')
+      if (shouldPersistReconnectSession) {
+        saveSessionMutation.mutate({
+          sessionId: nextVisibleSessionId,
+          provider: sessionProvider as 'claude' | 'codex',
+        })
+      }
+      if (staleAliasSessionId && allSessions.some((session) => session.sessionId === staleAliasSessionId)) {
+        deleteSessionMutation.mutate(staleAliasSessionId)
+      }
+
+      if (source !== 'mount' || status !== 'running' || !storageSessionIdToLoad) {
         return
       }
 
       setIsLoadingSession(true)
       try {
-        const loadedMessages = await loadPersistedSession(sessionId, provider, { preserveInitialUserMessage: true })
+        const loadedMessages = await loadPersistedSession(storageSessionIdToLoad, sessionProvider, { preserveInitialUserMessage: true })
         hasLoadedSession.current = true
         setMessages(loadedMessages)
       } catch (err) {
@@ -869,7 +938,16 @@ export function Chat({
         setIsLoadingSession(false)
       }
     },
-    [loadPersistedSession, provider, saveSessionMutation, usableProjectPath]
+    [
+      agentSessionId,
+      allSessions,
+      canReadPersistedSession,
+      deleteSessionMutation,
+      loadPersistedSession,
+      provider,
+      resolvedInitialSessionId,
+      saveSessionMutation,
+    ]
   )
 
   // Compute system prompt (exploration + suggestions for new sessions, suggestions-only for resumed)
@@ -914,10 +992,12 @@ export function Chat({
           ])
           setAgentSessionId(null)
           setIsResumingSession(false)
+          hideReconnectNotice()
           setIsStreaming(false)
           return
         }
 
+        hideReconnectNotice()
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1]
           if (lastMsg && lastMsg.role === 'assistant') {
@@ -959,6 +1039,7 @@ export function Chat({
           }
         })
       } else if (msg.type === 'tool_call') {
+        hideReconnectNotice()
         // Convert to AI SDK tool part format
         const toolContent = msg.content as {
           id: string
@@ -1005,6 +1086,7 @@ export function Chat({
           }
         })
       } else if (msg.type === 'tool_result') {
+        hideReconnectNotice()
         // Update existing tool part with result
         const resultContent = msg.content as { callId: string; name: string; output: string; isError: boolean }
         console.log('[Chat] Tool result:', resultContent.callId, resultContent.isError ? 'ERROR' : 'SUCCESS')
@@ -1047,6 +1129,7 @@ export function Chat({
           })
         }
       } else if (msg.type === 'reasoning') {
+        hideReconnectNotice()
         // Handle reasoning messages (agent's thinking)
         const reasoningContent = msg.content as string
         console.log('[Chat] Reasoning:', reasoningContent?.substring(0, 100))
@@ -1080,6 +1163,7 @@ export function Chat({
       } else if (msg.type === 'init') {
         console.log('[Chat] Agent initialized:', msg.content)
       } else if (msg.type === 'done') {
+        hideReconnectNotice()
         console.log('[Chat] Agent completed:', msg.content)
         // Capture usage data from completion message
         if (msg.metadata?.tokens) {
@@ -1089,6 +1173,7 @@ export function Chat({
     },
     onError: (err) => {
       console.error('[Chat] Local agent error:', err)
+      hideReconnectNotice()
 
       // Detect poisoned conversation history (empty screenshot base64).
       // Once this enters the history, every subsequent API call fails because
@@ -1111,6 +1196,7 @@ export function Chat({
           },
         ])
         setAgentSessionId(null)
+        hideReconnectNotice()
         setIsStreaming(false)
         return
       }
@@ -1133,6 +1219,7 @@ export function Chat({
     },
     onComplete: () => {
       console.log('[Chat] Local agent completed')
+      hideReconnectNotice()
       setIsResumingSession(false)
       setIsStreaming(false)
       // Session is automatically persisted by the CLI tools (Claude/Codex)
@@ -1499,9 +1586,10 @@ export function Chat({
   const handleStop = useCallback(async () => {
     console.log('[Chat] Stopping agent')
     await localAgent.stop()
+    hideReconnectNotice()
     setIsResumingSession(false)
     setIsStreaming(false)
-  }, [localAgent])
+  }, [hideReconnectNotice, localAgent])
 
   // Handle session switching - load a different session from CLI storage
   const handleSelectSession = useCallback(
@@ -1519,6 +1607,7 @@ export function Chat({
       // Update session ID
       setAgentSessionId(session.sessionId)
       setError(null)
+      hideReconnectNotice()
       setIsResumingSession(false)
       setIsStreaming(false)
 
@@ -1553,7 +1642,7 @@ export function Chat({
         setIsStreaming(true)
       }
     },
-    [usableProjectPath, agentSessionId, provider, localAgent, loadPersistedSession, updateSessionMutation]
+    [usableProjectPath, agentSessionId, hideReconnectNotice, provider, localAgent, loadPersistedSession, updateSessionMutation]
   )
 
   // Handle session deletion - remove from projects.json
@@ -1610,6 +1699,7 @@ export function Chat({
 
     // Reset session and error state
     setError(null)
+    hideReconnectNotice()
     setIsResumingSession(false)
     setIsStreaming(false)
     setAgentSessionId(null)
@@ -1618,7 +1708,7 @@ export function Chat({
     hasLoadedSession.current = false
     initialSessionIdAtMount.current = null
     hasStartedInitialStream.current = false
-  }, [localAgent, agentSessionId, isStreaming])
+  }, [hideReconnectNotice, localAgent, agentSessionId, isStreaming])
 
   // Handle fix error - submit error to AI for fixing
   const handleFixError = useCallback(() => {
@@ -2024,7 +2114,7 @@ export function Chat({
         {/* Task Progress - shown above input when todos exist */}
         {todos && todos.length > 0 && <TaskProgress todos={todos} isStreaming={isStreaming} />}
 
-        {isStreaming && isResumingSession && (
+        {showReconnectNotice && (
           <div
             style={{
               margin: '0 16px 12px',

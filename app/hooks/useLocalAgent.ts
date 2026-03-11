@@ -41,6 +41,13 @@ interface LocalAgentState {
 
 type PermissionMode = 'default' | 'plan' | 'bypassPermissions' | 'delegate' | 'dontAsk'
 
+interface ReconnectSessionInfo {
+  sessionId: string
+  provider: ProviderId
+  status: 'running' | 'completed' | 'error'
+  source: 'mount' | 'tab'
+}
+
 interface UseLocalAgentOptions {
   cwd: string
   provider?: ProviderId
@@ -57,7 +64,7 @@ interface UseLocalAgentOptions {
   onError?: (error: string) => void
   onComplete?: () => void
   onSessionId?: (sessionId: string) => void // Called when we get a session ID from init
-  onReconnectSession?: (sessionId: string, source: 'mount' | 'tab') => void // Called when reattaching to an existing session
+  onReconnectSession?: (info: ReconnectSessionInfo) => void // Called when reattaching to an existing session
 }
 
 export function useLocalAgent(options: UseLocalAgentOptions) {
@@ -357,7 +364,12 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
         // Set the session ID so future prompts use the same session
         sessionIdRef.current = bgSession.sessionId
-        onReconnectSessionRef.current?.(bgSession.sessionId, 'mount')
+        onReconnectSessionRef.current?.({
+          sessionId: bgSession.sessionId,
+          provider: bgSession.provider,
+          status: bgSession.status,
+          source: 'mount',
+        })
         setState((prev) => ({
           ...prev,
           sessionId: bgSession.sessionId,
@@ -644,7 +656,12 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
         const canonicalSessionId = bgSession.sessionId
         sessionIdRef.current = canonicalSessionId
-        onReconnectSessionRef.current?.(canonicalSessionId, 'tab')
+        onReconnectSessionRef.current?.({
+          sessionId: canonicalSessionId,
+          provider: bgSession.provider,
+          status: bgSession.status,
+          source: 'tab',
+        })
         setState((prev) => ({ ...prev, sessionId: canonicalSessionId, isRunning: true }))
 
         console.log('[useLocalAgent] tab-reconnect: attaching to session', {
