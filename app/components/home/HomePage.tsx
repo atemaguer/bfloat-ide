@@ -25,6 +25,7 @@ import type { ProviderId, ProviderInfo } from '@/lib/conveyor/schemas/ai-agent-s
 import { ChatInput, type ImageAttachment } from '@/app/components/chat'
 import { HomeSidebar } from './HomeSidebar'
 import { HomeRightPanel } from './HomeRightPanel'
+import { preferencesStore } from '@/app/stores/preferences'
 import { themeStore } from '@/app/stores/theme'
 
 import './home-sidebar.css'
@@ -75,7 +76,6 @@ export default function HomePage() {
   const [isCreating, setIsCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [selectedProvider, _setSelectedProvider] = useState<ProviderId>('claude')
   const [selectedModel, setSelectedModel] = useState<string>('claude-sonnet-4-20250514')
 
@@ -99,6 +99,7 @@ export default function HomePage() {
 
   const projects = useStore(localProjectsStore.sortedProjects)
   const isLoadingProjects = useStore(localProjectsStore.isLoading)
+  const viewMode = useStore(preferencesStore.projectListView)
   const resolvedTheme = useStore(themeStore.resolvedTheme)
 
   // Load projects on mount
@@ -484,13 +485,13 @@ export default function HomePage() {
 
                   <div className="home-view-toggle">
                     <button
-                      onClick={() => setViewMode('grid')}
+                      onClick={() => preferencesStore.setProjectListView('grid')}
                       className={`home-view-toggle-btn ${viewMode === 'grid' ? 'active' : ''}`}
                     >
                       <LayoutGrid size={16} />
                     </button>
                     <button
-                      onClick={() => setViewMode('list')}
+                      onClick={() => preferencesStore.setProjectListView('list')}
                       className={`home-view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`}
                     >
                       <List size={16} />
