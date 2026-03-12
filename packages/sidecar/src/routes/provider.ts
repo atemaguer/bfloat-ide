@@ -106,6 +106,7 @@ interface BfloatSettings {
     openai?: { enabled: boolean; connectedAt?: number; accountId?: string };
     expo?: { enabled: boolean; connectedAt?: number; userId?: string; username?: string };
   };
+  credentials?: Partial<Record<"EXPO_TOKEN", string>>;
   cli?: { gitBashPath?: string };
 }
 
@@ -509,6 +510,17 @@ const SaveTokensSchema = z.object({
     subscriptionType: z.string().nullable().optional(),
     rateLimitTier: z.string().nullable().optional(),
   }),
+});
+
+const ProviderSettingsCredentialKeySchema = z.enum(["EXPO_TOKEN"]);
+
+const SaveProviderSettingsCredentialsSchema = z.object({
+  entries: z.array(
+    z.object({
+      key: ProviderSettingsCredentialKeySchema,
+      value: z.string(),
+    }),
+  ),
 });
 
 const ConnectExpoSchema = z.object({
@@ -1064,4 +1076,28 @@ providerRouter.post("/save-git-bash-path", async (c) => {
 // ---------------------------------------------------------------------------
 providerRouter.get("/settings", (c) => {
   return c.json(loadSettings());
+});
+
+providerRouter.post("/settings/credentials", async (c) => {
+  const body = await c.req.json();
+  const parsed = SaveProviderSettingsCredentialsSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.flatten() }, 400);
+  }
+
+  const settings = loadSettings();
+  const nextCredentials = { ...(settings.credentials ?? {}) };
+
+  for (const entry of parsed.data.entries) {
+    const trimmed = entry.value.trim();
+    if (trimmed) {
+      nextCredentials[entry.key] = trimmed;
+    } else {
+      delete nextCredentials[entry.key];
+    }
+  }
+
+  settings.credentials = Object.keys(nextCredentials).length > 0 ? nextCredentials : undefined;
+  saveSettings(settings);
+  return c.json(settings);
 });

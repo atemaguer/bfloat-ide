@@ -44,6 +44,7 @@ type UnsubscribeFn = () => void
 
 // ProviderApi types
 type ProviderType = "anthropic" | "openai" | "expo"
+type ProviderSettingsCredentialKey = "EXPO_TOKEN"
 
 interface OAuthTokens {
   type: "oauth"
@@ -114,6 +115,23 @@ interface DisconnectResult {
 interface CliInstalledResult {
   installed: boolean
   path?: string
+}
+
+interface ProviderSettings {
+  integrations?: {
+    anthropic?: { enabled: boolean; connectedAt?: number; accountId?: string }
+    openai?: { enabled: boolean; connectedAt?: number; accountId?: string }
+    expo?: { enabled: boolean; connectedAt?: number; userId?: string; username?: string }
+  }
+  credentials?: Partial<Record<ProviderSettingsCredentialKey, string>>
+  cli?: { gitBashPath?: string }
+}
+
+interface ProviderSettingsSavePayload {
+  entries: Array<{
+    key: ProviderSettingsCredentialKey
+    value: string
+  }>
 }
 
 // DeployApi types
@@ -1997,6 +2015,29 @@ export const providerBridge = {
     } catch (err) {
       console.warn("[conveyor-bridge] provider.loadTokens error:", err)
       return { anthropic: null, openai: null, expo: null }
+    }
+  },
+
+  getSettings: async (): Promise<ProviderSettings> => {
+    try {
+      return await getSidecarApiSync().http.get<ProviderSettings>(
+        "/api/provider/settings",
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] provider.getSettings error:", err)
+      return {}
+    }
+  },
+
+  saveSettingsCredentials: async (payload: ProviderSettingsSavePayload): Promise<ProviderSettings> => {
+    try {
+      return await getSidecarApiSync().http.post<ProviderSettings>(
+        "/api/provider/settings/credentials",
+        payload,
+      )
+    } catch (err) {
+      console.warn("[conveyor-bridge] provider.saveSettingsCredentials error:", err)
+      throw err
     }
   },
 
