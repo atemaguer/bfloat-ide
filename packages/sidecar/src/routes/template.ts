@@ -78,6 +78,10 @@ function getTemplatesBasePath(): string {
     path.join(binaryDir, "..", "Resources", "templates"),
     // Tauri Windows/Linux bundle
     path.join(binaryDir, "..", "resources", "templates"),
+    // Tauri relative resource layout fallback. If bundle.resources uses a relative
+    // path, Tauri may preserve the original traversal via "_up_" segments.
+    path.join(binaryDir, "..", "Resources", "_up_", "_up_", "_up_", "resources", "templates"),
+    path.join(binaryDir, "..", "resources", "_up_", "_up_", "_up_", "resources", "templates"),
     // Development (compiled binary in target/debug/):
     //   target/debug/ → target/ → src-tauri/ → desktop/ → packages/ → bfloat-ide/
     path.join(binaryDir, "..", "..", "..", "..", "..", "resources", "templates"),

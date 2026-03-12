@@ -945,8 +945,15 @@ projectFilesRouter.post("/open", async (c) => {
 
       const templateResult = await initializeFromTemplate(root, appType);
       if (!templateResult.success) {
-        // Template not found is OK for new projects — agent can still work in empty dir
-        console.warn(`[project-files] Template init failed: ${templateResult.error}, continuing with empty project`);
+        const templateError = templateResult.error || `Failed to initialize template for app type '${appType}'`;
+        console.error(`[project-files] Template init failed: ${templateError}`);
+        return c.json({
+          projectId,
+          projectPath: root,
+          status: "error" as const,
+          error: templateError,
+          fileTree: [],
+        });
       }
     }
 
