@@ -54,6 +54,8 @@ const BINARY_EXTS = new Set([
 ]);
 
 const IGNORED_DIRS = new Set([".git", "node_modules", ".expo"]);
+const HIDDEN_PROJECT_DIRS = new Set([".claude", ".agents"]);
+const HIDDEN_PROJECT_FILES = new Set(["AGENTS.md", "CLAUDE.md"]);
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -182,6 +184,14 @@ interface TreeEntry {
   isBinary?: boolean;
 }
 
+export function isUserVisibleProjectPath(relPath: string): boolean {
+  const parts = relPath.split("/").filter(Boolean);
+  if (parts.length === 0) return false;
+  if (HIDDEN_PROJECT_DIRS.has(parts[0])) return false;
+  if (parts.length === 1 && HIDDEN_PROJECT_FILES.has(parts[0])) return false;
+  return true;
+}
+
 async function walkTree(absDir: string, relBase: string, maxDepth: number, depth = 0): Promise<TreeEntry[]> {
   if (depth > maxDepth) return [];
   const results: TreeEntry[] = [];
@@ -196,6 +206,7 @@ async function walkTree(absDir: string, relBase: string, maxDepth: number, depth
   for (const entry of entries) {
     if (IGNORED_DIRS.has(entry.name)) continue;
     const relPath = relBase ? `${relBase}/${entry.name}` : entry.name;
+    if (!isUserVisibleProjectPath(relPath)) continue;
 
     if (entry.isDirectory()) {
       results.push({ name: entry.name, path: relPath, type: "directory" });

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 export const ProviderTypeSchema = z.enum(['anthropic', 'openai', 'expo'])
+export const ProviderSettingsCredentialKeySchema = z.enum(['EXPO_TOKEN'])
 
 // Simplified token schema - Claude Code manages the actual tokens
 export const OAuthTokensSchema = z.object({
@@ -81,6 +82,40 @@ export const DisconnectResultSchema = z.object({
   exitCode: z.number(),
 })
 
+export const ProviderSettingsCredentialsSchema = z
+  .object({
+    EXPO_TOKEN: z.string().optional(),
+  })
+  .partial()
+
+export const ProviderSettingsSchema = z.object({
+  integrations: z
+    .object({
+      anthropic: z.object({ enabled: z.boolean(), connectedAt: z.number().optional(), accountId: z.string().optional() }).optional(),
+      openai: z.object({ enabled: z.boolean(), connectedAt: z.number().optional(), accountId: z.string().optional() }).optional(),
+      expo: z
+        .object({
+          enabled: z.boolean(),
+          connectedAt: z.number().optional(),
+          userId: z.string().optional(),
+          username: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+  credentials: ProviderSettingsCredentialsSchema.optional(),
+  cli: z.object({ gitBashPath: z.string().optional() }).optional(),
+})
+
+export const ProviderSettingsSavePayloadSchema = z.object({
+  entries: z.array(
+    z.object({
+      key: ProviderSettingsCredentialKeySchema,
+      value: z.string(),
+    })
+  ),
+})
+
 
 export const providerApiSchema = {
   // Check if Claude Code CLI is installed system-wide (for Windows)
@@ -137,6 +172,14 @@ export const providerApiSchema = {
   'provider:load-tokens': {
     args: z.tuple([]),
     return: ProviderAuthStateSchema,
+  },
+  'provider:get-settings': {
+    args: z.tuple([]),
+    return: ProviderSettingsSchema,
+  },
+  'provider:save-settings-credentials': {
+    args: z.tuple([ProviderSettingsSavePayloadSchema]),
+    return: ProviderSettingsSchema,
   },
   // Legacy: No-op, Claude Code handles refresh automatically
   'provider:refresh-tokens': {
