@@ -2,8 +2,17 @@ name: Build Tauri App
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+    paths:
+      - 'packages/desktop/**'
+      - 'packages/sidecar/**'
+      - 'resources/templates/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/build-and-publish.yml'
   workflow_dispatch:
     inputs:
       version:
@@ -11,12 +20,53 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: write
+
 env:
   BUN_VERSION: '1.1'
   RUST_VERSION: 'stable'
 
 jobs:
+  version-bump:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          CURRENT=$(node -p "require('./packages/desktop/package.json').version")
+          NEW=$(node -p "const [a,b,c] = '$CURRENT'.split('.').map(Number); [a,b,c+1].join('.')")
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('packages/desktop/package.json', 'utf8'));
+            pkg.version = '$NEW';
+            fs.writeFileSync('packages/desktop/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          echo "version=$NEW" >> $GITHUB_OUTPUT
+          echo "Bumped version: $CURRENT -> $NEW"
+
+      - name: Commit version bump
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/desktop/package.json
+          git commit -m "chore: bump version to v${{ steps.bump.outputs.version }} [skip ci]"
+          git push
+          echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
   build-sidecar:
+    needs: version-bump
+    if: always() && (needs.version-bump.result == 'success' || needs.version-bump.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +87,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version-bump.outputs.commit_sha || github.sha }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -60,7 +112,8 @@ jobs:
           if-no-files-found: error
 
   build-tauri:
-    needs: build-sidecar
+    needs: [version-bump, build-sidecar]
+    if: always() && needs.build-sidecar.result == 'success' && (needs.version-bump.result == 'success' || needs.version-bump.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -81,6 +134,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version-bump.outputs.commit_sha || github.sha }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -117,6 +172,33 @@ jobs:
         working-directory: packages/desktop
         run: bun install
 
+      - name: Prepare Apple notarization API key
+        if: startsWith(matrix.platform, 'macos-')
+        id: apple_api_key
+        env:
+          APPLE_API_KEY_ID_SECRET: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_SECRET: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          key_id = os.environ["APPLE_API_KEY_ID_SECRET"].strip()
+          key_value = os.environ["APPLE_API_KEY_SECRET"].strip()
+          key_path = Path(os.environ["RUNNER_TEMP"]) / f"AuthKey_{key_id}.p8"
+
+          if "BEGIN PRIVATE KEY" in key_value:
+            key_bytes = key_value.encode("utf-8")
+          else:
+            key_bytes = base64.b64decode(key_value)
+
+          key_path.write_bytes(key_bytes)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+            fh.write(f"key_path={key_path}\n")
+          PY
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -126,9 +208,9 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_PATH: ${{ steps.apple_api_key.outputs.key_path }}
         with:
           projectPath: packages/desktop
           tauriScript: bunx tauri
@@ -149,12 +231,15 @@ jobs:
           if-no-files-found: warn
 
   release:
-    needs: [build-tauri]
+    needs: [version-bump, build-tauri]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    permissions:
-      contents: write
+    if: always() && needs.build-tauri.result == 'success' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version-bump.outputs.commit_sha || github.sha }}
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -169,8 +254,15 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
             echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/main" ] && [ -n "${{ needs.version-bump.outputs.version }}" ]; then
+            echo "version=${{ needs.version-bump.outputs.version }}" >> $GITHUB_OUTPUT
           else
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            REF_VERSION="${GITHUB_REF#refs/tags/v}"
+            if [ -n "$REF_VERSION" ] && [ "$REF_VERSION" != "$GITHUB_REF" ]; then
+              echo "version=$REF_VERSION" >> $GITHUB_OUTPUT
+            else
+              echo "version=$(node -p "require('./packages/desktop/package.json').version")" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Create Release
