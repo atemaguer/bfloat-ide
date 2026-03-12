@@ -1,8 +1,8 @@
 # Bfloat IDE
 
-A local-first, open-source AI-powered IDE for building software with integrated AI agents.
+Bfloat IDE is a local-first desktop IDE for building web and mobile apps with integrated AI agents, local project storage, a built-in terminal, live preview, and project-scoped setup flows for common integrations.
 
-<br />
+This README is the primary documentation for the repo. It covers how the codebase is structured, how to run it locally, how local storage works, how integrations are configured, and what deployment/build flows exist today.
 
 ![Tauri](https://img.shields.io/badge/Tauri-2-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
@@ -10,196 +10,458 @@ A local-first, open-source AI-powered IDE for building software with integrated 
 ![Bun](https://img.shields.io/badge/Bun-1.1-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-<br />
+## What It Is
 
-## Features
+- Local-first desktop app built with Tauri.
+- Bun sidecar process that exposes local HTTP and WebSocket APIs.
+- React renderer that drives the editor, preview, chat, settings, deploy flows, and project setup.
+- AI-assisted workflow built around locally installed Claude Code and Codex CLIs.
+- Project templates for mobile and web apps.
 
-- **AI Agent Integration** - Built-in support for Claude and OpenAI Codex agents
-- **Multi-Session Support** - Manage multiple chat sessions per project with local persistence
-- **Local-First Architecture** - All data stored locally in `~/.bfloat-ide/projects.json`
-- **Project Templates** - Start new projects with Expo or Next.js templates
-- **Git-First Project Workflow** - Import repositories, connect remotes, and push changes from inside the IDE
-- **Real-Time Preview** - Live preview for mobile and web applications
-- **Integrated Terminal** - Full terminal access within the IDE
-- **File Explorer** - Browse and edit project files with syntax highlighting
-- **Dark/Light Mode** - Built-in theme switching
+## What It Is Not
 
-<br />
+- Not a hosted SaaS backend.
+- Not a central cloud database that stores your IDE state.
+- Not dependent on OpenAI API keys for normal Codex usage inside the IDE.
+- Not dependent on Anthropic API keys for normal Claude usage inside the IDE.
 
-## Tech Stack
+For normal IDE use, Claude and Codex are expected to come from your local installed/authenticated CLIs.
 
-- **[Tauri](https://tauri.app)** - Lightweight cross-platform desktop shell (Rust)
-- **[Bun](https://bun.sh)** - Sidecar HTTP API server (replaces Electron main process)
-- **[Hono](https://hono.dev)** - Fast web framework for the sidecar API
-- **[React](https://react.dev)** - UI framework
-- **[TypeScript](https://www.typescriptlang.org)** - Type-safe JavaScript
-- **[Zustand](https://zustand-demo.pmnd.rs)** - State management
-- **[Shadcn UI](https://ui.shadcn.com)** - Component library
-- **[TailwindCSS](https://tailwindcss.com)** - Utility-first CSS framework
-- **[Vite](https://vite.dev)** - Fast build tool with HMR
-- **[Claude SDK](https://docs.anthropic.com)** - Anthropic's Claude AI integration
-- **[Codex SDK](https://openai.com)** - OpenAI's Codex integration
+## Architecture
 
-<br />
+The repo has three main layers:
 
-## Installation
+- `packages/desktop`
+  Tauri desktop shell plus the renderer bootstrap.
+- `packages/sidecar`
+  Bun sidecar server with routes for files, terminal, agents, deploy, secrets, templates, and preview.
+- `app` and `lib`
+  Shared React UI, stores, hooks, schemas, and agent/provider logic used by the desktop app.
 
-### Prerequisites
+Runtime model:
 
-- [Rust](https://rustup.rs) (for Tauri)
-- [Bun](https://bun.sh) (for the sidecar and package management)
-- [Node.js](https://nodejs.org) 20+ (for some tooling)
+1. The desktop app launches the bundled sidecar.
+2. The renderer waits for the sidecar to become ready.
+3. The renderer talks to the sidecar over local HTTP and WebSocket APIs.
+4. Projects, sessions, settings, and secrets are stored locally on the machine.
+
+## Repo Layout
+
+```text
+bfloat-ide/
+├── app/                        # Shared React UI, hooks, stores, API access
+├── lib/                        # Shared schemas, agents, launch logic, MCP integration
+├── packages/
+│   ├── desktop/                # Tauri shell and renderer entry
+│   │   └── src-tauri/          # Rust app + bundled sidecars/resources
+│   └── sidecar/                # Bun sidecar server
+├── resources/
+│   ├── skills/                 # Bundled agent skills
+│   └── templates/              # Starter project templates
+├── DEV.md                      # Supplemental dev notes
+├── DEVELOPER.md                # Supplemental troubleshooting notes
+└── RELEASE.md                  # Supplemental release notes
+```
+
+## Prerequisites
+
+You need all of the following installed locally:
+
+- Node.js 20+
+- `pnpm`
+- Bun
+- Rust toolchain via `rustup`
+- Tauri system dependencies for your OS
+
+Recommended checks:
 
 ```bash
-# Clone the repository
-git clone https://github.com/atemaguer/bfloat-ide.git
+node --version
+pnpm --version
+bun --version
+rustc --version
+cargo --version
+```
 
-# Change directory
+The project currently expects a modern Rust toolchain. If your Rust install is stale, update it:
+
+```bash
+rustup update stable
+rustup override set stable
+```
+
+## First-Time Setup
+
+Clone the repo and install dependencies:
+
+```bash
+git clone https://github.com/bfloat-inc/bfloat-ide.git
 cd bfloat-ide
 
-# Install root dependencies
 pnpm install
-
-# Install sidecar dependencies
 cd packages/sidecar && bun install && cd ../..
-
-# Install desktop dependencies
 cd packages/desktop && bun install && cd ../..
 ```
 
-<br />
+Why both `pnpm` and `bun install`:
 
-## Development
+- `pnpm install` installs the workspace dependencies.
+- `packages/sidecar` uses Bun directly for its runtime/build/test workflows.
+- `packages/desktop` uses the Tauri/Vite toolchain from its own package.
 
-Start the development server:
+## Running Locally
 
-```bash
-# Build and run the sidecar
-cd packages/sidecar && bun run build && cd ../..
+### Recommended dev workflow
 
-# Start the Tauri dev environment (launches the desktop app with hot-reload)
-cd packages/desktop && bunx tauri dev
-```
-
-<br />
-
-## Configuration
-
-### AI Provider Setup
-
-Bfloat IDE supports multiple AI providers. Configure them in the app settings:
-
-1. **Claude** - Requires Anthropic API key or Claude Max subscription
-2. **Codex** - Requires OpenAI API key
-
-### Environment Variables
-
-Copy `.env.example` to `.env` and configure:
+From the repo root:
 
 ```bash
-cp .env.example .env
+pnpm dev
 ```
 
-<br />
+That starts the Tauri development flow for the desktop app.
 
-## Publishing
+### Sidecar-only development
 
-In Bfloat IDE, "publish" depends on the type of app you are building.
-
-### iOS
-
-Bfloat IDE supports publishing iOS apps through the Expo/EAS toolchain.
-
-- Connect your Expo account in the app
-- Configure the required iOS/App Store Connect credentials
-- Run the iOS publish flow from Bfloat IDE
-
-This path is intended for shipping iOS apps to the App Store. Android publishing is not yet fully supported.
-
-### Web
-
-For web apps, the recommended workflow is git-based publishing.
-
-1. Create or connect a hosted git repository, ideally on GitHub
-2. Add that repository to your project in Bfloat IDE
-3. Commit and push your changes from the IDE
-4. Let your hosting provider deploy from that repository
-
-This works well with platforms that watch a GitHub repository and build automatically after each push. If your hosting platform supports another hosted git provider, that workflow can be used as well.
-
-### What "publish" means
-
-- **iOS publish**: Bfloat IDE runs the Expo/EAS-based build and submission workflow for you
-- **Web publish**: Bfloat IDE helps you ship by managing the git workflow; your hosting provider performs the actual deployment after push
-
-<br />
-
-## Project Structure
-
-```
-bfloat-ide/
-├── app/                    # Frontend (React UI)
-│   ├── api/                # Sidecar API client imports
-│   ├── components/         # React components
-│   ├── hooks/              # Custom React hooks
-│   ├── stores/             # Zustand state management
-│   └── styles/             # Global styles
-├── lib/
-│   ├── agents/             # AI agent providers (Claude, Codex)
-│   ├── conveyor/schemas/   # Shared TypeScript types/schemas
-│   ├── launch/             # System prompt and launch config
-│   ├── mcp/                # MCP server integrations
-│   └── platform/           # Platform utilities
-├── packages/
-│   ├── desktop/            # Tauri desktop shell
-│   │   ├── src/            # Conveyor bridge, entry point, platform layer
-│   │   └── src-tauri/      # Rust Tauri application
-│   └── sidecar/            # Bun HTTP API server (Hono)
-│       └── src/
-│           ├── routes/     # API route handlers
-│           └── services/   # Agent session management
-└── resources/
-    ├── skills/             # AI agent skills
-    └── templates/          # Project templates
-```
-
-<br />
-
-## Building for Production
+If you want to run the sidecar directly:
 
 ```bash
-# Build the sidecar binary for the current platform
+pnpm dev:sidecar
+```
+
+Or:
+
+```bash
 cd packages/sidecar
-bun build --compile src/server.ts --outfile dist/bfloat-sidecar
+bun run dev
+```
 
-# Copy the sidecar binary to the Tauri sidecars directory
-cp dist/bfloat-sidecar ../desktop/src-tauri/sidecars/
+### Two-terminal workflow
 
-# Build the Tauri app
-cd ../desktop
+If you want the sidecar and desktop app in separate terminals:
+
+```bash
+# Terminal 1
+cd packages/sidecar
+bun run dev
+
+# Terminal 2
+cd packages/desktop
+bunx tauri dev
+```
+
+### Useful commands
+
+```bash
+pnpm lint
+pnpm format
+pnpm check:templates
+
+cd packages/sidecar && bun test
+pnpm -s exec tsc --noEmit --pretty false
+```
+
+## Building
+
+### Build the sidecar
+
+```bash
+pnpm build:sidecar
+```
+
+Or directly:
+
+```bash
+cd packages/sidecar
+bun run build
+```
+
+Platform-specific sidecar builds:
+
+```bash
+cd packages/sidecar
+bun run build:mac-arm64
+bun run build:mac-x64
+bun run build:linux-x64
+bun run build:win-x64
+```
+
+### Build the desktop app
+
+```bash
+pnpm build
+```
+
+Or:
+
+```bash
+cd packages/desktop
 bunx tauri build
 ```
 
-Distribution files will be in `packages/desktop/src-tauri/target/release/bundle/`.
+Build output ends up under:
 
-<br />
+```text
+packages/desktop/src-tauri/target/release/bundle/
+```
 
-## Local Data Storage
+## AI Providers
 
-All project data is stored locally:
+### Claude and Codex
 
-- **Projects**: `~/.bfloat-ide/projects.json`
-- **Sessions**: Stored within each project's data
-- **Settings**: `~/.bfloat-ide/settings.json`
+The IDE is designed around locally installed/authenticated CLIs:
 
-<br />
+- Claude Code for Claude sessions
+- Codex for Codex/OpenAI sessions
+
+The important operational point:
+
+- You do not need to configure an OpenAI API key in the IDE to use Codex normally.
+- You do not need to configure an Anthropic API key in the IDE to use Claude normally.
+
+Instead, the IDE checks and uses the local CLI auth state on your machine.
+
+### Connected Accounts
+
+Today, the app-level Connected Accounts section is intentionally narrow:
+
+- Claude: local CLI auth status
+- Codex: local CLI auth status
+- Expo: app-level Expo token storage for deployment workflows
+
+Project-specific secrets such as Stripe, Convex, RevenueCat, and Firebase keys do not belong in global connected accounts. They belong in project settings.
+
+## Local Storage and "Database"
+
+There is no central hosted Bfloat IDE database required to run the app.
+
+The IDE is local-first.
+
+Key local storage locations:
+
+- Projects metadata:
+  `~/.bfloat-ide/projects.json`
+- Project workspaces:
+  `~/.bfloat-ide/projects/<projectId>/`
+- Provider/config settings:
+  `~/.bfloat-ide/config/settings.json`
+
+This means:
+
+- opening a project creates or reuses a local workspace directory
+- chat/session state is stored locally
+- secrets and project metadata are managed on the local machine
+
+### Database integrations for the apps you build
+
+When people say "database" in this codebase, it usually means database/backends for the app being built, not for the IDE itself.
+
+The current built-in project setup model supports:
+
+- Convex
+- Firebase
+
+These are configured per project through Project Settings and project secrets.
+
+## Integrations
+
+The IDE has project-scoped integration flows for:
+
+- Firebase
+- Convex
+- Stripe
+- RevenueCat
+
+These are configured in Project Settings and stored as project secrets, not as global app settings.
+
+### Firebase
+
+Firebase setup is local-first and credentials-based. The IDE does not provision a Firebase project for you.
+
+Expected project secrets:
+
+- Web:
+  - `NEXT_PUBLIC_FIREBASE_API_KEY`
+  - `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
+  - `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
+  - `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`
+  - `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`
+  - `NEXT_PUBLIC_FIREBASE_APP_ID`
+- Mobile:
+  - `EXPO_PUBLIC_FIREBASE_API_KEY`
+  - `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN`
+  - `EXPO_PUBLIC_FIREBASE_PROJECT_ID`
+  - `EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET`
+  - `EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`
+  - `EXPO_PUBLIC_FIREBASE_APP_ID`
+
+### Convex
+
+Convex is configured from project secrets. The IDE can then use those values to drive setup flows.
+
+Expected project secrets:
+
+- Web:
+  - `NEXT_PUBLIC_CONVEX_URL`
+  - `NEXT_PUBLIC_CONVEX_SITE_URL` (optional)
+  - `CONVEX_DEPLOY_KEY`
+- Mobile:
+  - `EXPO_PUBLIC_CONVEX_URL`
+  - `EXPO_PUBLIC_CONVEX_SITE_URL` (optional)
+  - `CONVEX_DEPLOY_KEY`
+
+### Stripe
+
+Stripe is project-scoped.
+
+Expected project secrets:
+
+- Web:
+  - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
+  - `STRIPE_SECRET_KEY`
+- Mobile:
+  - `EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY`
+  - `STRIPE_SECRET_KEY`
+
+### RevenueCat
+
+RevenueCat is also project-scoped.
+
+Expected project secret:
+
+- `REVENUECAT_API_KEY`
+
+For mobile runtime usage, projects may also need:
+
+- `EXPO_PUBLIC_REVENUECAT_API_KEY`
+
+## Payments
+
+Payments support today is integration-driven rather than platform-hosted.
+
+What exists:
+
+- Stripe project setup via secrets
+- RevenueCat project setup via secrets
+
+What that means in practice:
+
+- Bfloat IDE does not run your payments backend for you.
+- You add the necessary project secrets in Project Settings.
+- The app uses those secrets to run the corresponding setup flows and agent-assisted implementation work.
+
+Use Stripe when you need:
+
+- direct payments
+- billing
+- subscriptions on web/mobile with your own app logic
+
+Use RevenueCat when you need:
+
+- in-app purchases
+- subscription management for mobile apps
+
+## Deployment
+
+Deployment support is not symmetrical across targets.
+
+### iOS
+
+iOS deployment is the most developed built-in deployment path today.
+
+It uses:
+
+- Expo / EAS
+- App Store Connect credentials
+- App Store Connect API key support for non-interactive flows
+
+Relevant capabilities in the sidecar include:
+
+- saving App Store Connect API keys
+- checking ASC key configuration
+- running interactive and non-interactive iOS build flows
+- streaming deployment logs and status
+
+### Expo
+
+The IDE can store an app-level `EXPO_TOKEN` in Connected Accounts for Expo/EAS workflows.
+
+### Web
+
+Web deployment is currently not a hosted Bfloat deployment product.
+
+The practical workflow is:
+
+1. connect a git remote
+2. commit and push from the IDE
+3. let your hosting platform deploy from that repository
+
+The repo also contains an explicit local-first note in the web deploy UI that backend web deployment is not supported in local-first mode.
+
+### Android
+
+Android publishing is not documented as a first-class completed path in the current codebase. Do not present it as equivalent to the iOS flow.
+
+## Project Settings vs App Settings
+
+This distinction matters:
+
+### App Settings
+
+Use app settings for:
+
+- local Claude auth status
+- local Codex auth status
+- global Expo token
+- IDE preferences
+
+### Project Settings
+
+Use project settings for:
+
+- project secrets
+- Firebase configuration
+- Convex configuration
+- Stripe keys
+- RevenueCat keys
+- git remote configuration
+- app bundle/package identifiers
+- app icons and project metadata
+
+## Logging and Debugging
+
+Frontend console logs are persisted in debug builds under the app-local data directory.
+
+Example on macOS dev builds:
+
+```bash
+tail -F "$HOME/Library/Application Support/com.bfloat.ide.dev/logs/frontend-console.log"
+```
+
+Pretty-print:
+
+```bash
+tail -F "$HOME/Library/Application Support/com.bfloat.ide.dev/logs/frontend-console.log" | pnpm dlx pino-pretty --colorize
+```
+
+## Supplemental Docs
+
+This README is the primary doc, but these files still exist for deeper reference:
+
+- [`DEV.md`](DEV.md)
+- [`DEVELOPER.md`](DEVELOPER.md)
+- [`RELEASE.md`](RELEASE.md)
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome.
 
-<br />
+When making changes:
+
+- keep the local-first architecture intact
+- prefer repo-accurate docs over aspirational docs
+- verify commands against actual package scripts
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT. See [`LICENSE`](LICENSE).

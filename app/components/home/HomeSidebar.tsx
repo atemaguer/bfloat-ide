@@ -174,7 +174,7 @@ export function HomeSidebar({
         <div className="flex w-52 flex-col gap-1 border-t border-border px-2 py-1.5">
           <button
             className="flex h-7 w-full items-center gap-2.5 rounded-md px-2.5 text-muted-foreground hover:text-foreground hover:bg-muted"
-            onClick={() => window.open('https://github.com/bfloat-ai/bfloat-ide/issues', '_blank')}
+            onClick={() => window.open('https://discord.gg/s2XFRMWG', '_blank')}
           >
             <HelpCircle size={16} className="opacity-70" />
             <span className="text-sm">Help & Support</span>
