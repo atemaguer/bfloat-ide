@@ -18,6 +18,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/app/components/ui/collapsible'
+import { window as sidecarWindow } from '@/app/api/sidecar'
 import type { Project } from '@/app/types/project'
 
 
@@ -95,7 +96,7 @@ export function HomeSidebar({
             <span className="text-[13px]">Home</span>
           </button>
           <button
-            className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground hover:text-foreground hover:bg-muted"
+            className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-muted-foreground hover:text-foreground hover:bg-muted"
             onClick={handleSettingsClick}
           >
             <Settings size={16} className="opacity-70" />
@@ -111,7 +112,7 @@ export function HomeSidebar({
           <Collapsible open={projectsExpanded} onOpenChange={setProjectsExpanded}>
             <CollapsibleTrigger asChild>
               <button
-                className="flex h-6 w-full items-center gap-1.5 rounded-md px-2.5 text-muted-foreground hover:text-foreground"
+                className="flex h-6 w-full cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-muted-foreground hover:text-foreground"
               >
                 {projectsExpanded ? (
                   <ChevronDown size={12} />
@@ -146,7 +147,7 @@ export function HomeSidebar({
                 recentProjects.map((project) => (
                   <button
                     key={project.id}
-                    className="flex h-7 w-full items-center gap-2.5 rounded-md px-2.5 text-muted-foreground hover:text-foreground hover:bg-muted"
+                    className="flex h-7 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-muted-foreground hover:text-foreground hover:bg-muted"
                     onClick={() => onProjectClick(project)}
                   >
                     <span
@@ -173,8 +174,12 @@ export function HomeSidebar({
         {/* Footer */}
         <div className="flex w-52 flex-col gap-1 border-t border-border px-2 py-1.5">
           <button
-            className="flex h-7 w-full items-center gap-2.5 rounded-md px-2.5 text-muted-foreground hover:text-foreground hover:bg-muted"
-            onClick={() => window.open('https://discord.gg/s2XFRMWG', '_blank')}
+            className="flex h-7 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => {
+              sidecarWindow.webOpenUrl('https://discord.gg/s2XFRMWG').catch((error) => {
+                console.error('Failed to open support URL:', error)
+              })
+            }}
           >
             <HelpCircle size={16} className="opacity-70" />
             <span className="text-sm">Help & Support</span>

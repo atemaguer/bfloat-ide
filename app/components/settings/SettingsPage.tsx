@@ -95,7 +95,7 @@ export function SettingsPage() {
       {/* Left Sidebar */}
       <aside className="flex h-screen w-56 min-w-56 flex-col gap-6 border-r border-border bg-background px-2 py-4 overflow-hidden">
         <button
-          className="flex h-7 w-full items-center gap-2 rounded-md px-3 text-muted-foreground hover:text-foreground hover:bg-muted"
+          className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-3 text-muted-foreground hover:text-foreground hover:bg-muted"
           onClick={handleBackToApp}
         >
           <ArrowLeft size={16} />
@@ -107,7 +107,7 @@ export function SettingsPage() {
             <button
               key={item.id}
               className={cn(
-                'flex h-7 w-full items-center gap-2.5 rounded-md px-3 text-sm',
+                'flex h-7 w-full cursor-pointer items-center gap-2.5 rounded-md px-3 text-sm',
                 activeSection === item.id
                   ? 'bg-muted text-foreground'
                   : 'text-muted-foreground hover:text-foreground hover:bg-muted'
