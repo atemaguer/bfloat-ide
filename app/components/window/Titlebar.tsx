@@ -416,7 +416,13 @@ export const Titlebar = () => {
       <div className="window-titlebar-controls-container">
         <button
           className="window-titlebar-settings-btn"
-          onClick={() => navigate('/settings')}
+          onClick={() =>
+            navigate('/settings', {
+              state: {
+                returnTo: `${location.pathname}${location.search}${location.hash}`,
+              },
+            })
+          }
           title="Settings"
         >
           <Settings size={15} />

@@ -1,40 +1,38 @@
-# Task 2026-03-09_002_firebase-integration
+PLAN:
+- Rewrite `README.md` into a self-contained operator/developer guide that covers setup, local development, local data storage, database/integrations/payments setup, deployment constraints, release/build basics, and license.
+- Pull only from behavior that exists in the repo today so the README is accurate: local-first storage, Tauri + Bun sidecar architecture, project-scoped integration secrets, Expo/iOS deployment flow, and local Claude/Codex CLI auth.
+- Remove or correct misleading claims, especially around API key requirements for Claude/Codex and generic “publish” promises that the app does not fully support.
+- Verify the rewrite by reviewing the diff and checking for obvious command/path mismatches against package scripts and current docs.
 
-## Phase 2 Plan
+APPROACH:
+- Replace the current marketing-style README with a docs-first structure:
+  - What the IDE is
+  - Stack and architecture
+  - Setup / prerequisites
+  - Running locally
+  - How auth/providers work
+  - Local data and “database” model
+  - Payments and database integrations
+  - Deployment
+  - Build/release basics
+  - Repo layout
+  - License
+- Keep it concise but self-contained; prefer “what exists today” over aspirational docs.
 
-### Files to modify
-- `_SCRATCH.md`
-- `app/types/integrations.ts`
-- `app/types/project.ts`
-- `app/lib/integrations/credentials.ts`
-- `app/components/chat/Chat.tsx`
-- `app/components/integrations/FirebaseIntegration.tsx`
-- `app/components/chat/FirebaseSetupBanner.tsx`
-- Obsidian task note `2026-03-09_002_firebase-integration`
-- Obsidian board `BOARDS/IDE Tasks`
+ALTERNATIVES REJECTED:
+- Appending more sections onto the existing README: rejected because the current file has outdated and contradictory setup/auth guidance.
+- Splitting into multiple docs and linking out: rejected because the user explicitly wants the README to be the docs.
 
-### Order of operations and why
-1. Add Firebase to the shared integration registry and persisted project integration typing so UI and project state agree.
-2. Align the Firebase secret contract with the chosen local-first scope so connection state and settings modal match what the IDE can actually verify.
-3. Wire chat `Use` and keyword interception to the canonical `/add-firebase` flow, reusing the existing pending prompt pipeline instead of adding a new path.
-4. Tighten Firebase UI copy where it still implies account/OAuth style connection instead of manual credential setup.
-5. Run targeted verification, review the diff, commit, then update the task note and move the card from `In Progress` to `Review`.
+ASSUMPTIONS:
+1. “Database” in the README should explain both the IDE’s own local-first storage and the supported app database integrations (Firebase and Convex), rather than inventing a central app database setup.
+2. “Payments” should document the current Stripe and RevenueCat integration model via project secrets and setup flows, not claim a hosted payments backend managed by the IDE.
+3. The README should state that Claude Code and Codex use locally installed/authenticated CLIs and do not require OpenAI/Anthropic API keys for normal IDE usage.
 
-### Approach chosen (and alternatives rejected)
-- Chosen: implement the local-first/manual-credentials Firebase parity described in the task note, using `/add-firebase` as the only setup command.
-- Rejected: backend provisioning, OAuth/bootstrap work, or adding command aliases, because none of that exists in the current IDE architecture and it would expand scope materially.
+RISKS:
+- The repo contains older docs (`DEV.md`, `DEVELOPER.md`, `RELEASE.md`) that may now overlap with the rewritten README; the README should still be internally consistent even if those remain.
+- Deployment support is asymmetric today; the README must avoid overstating Android/web deployment capabilities.
 
-### Assumptions
-1. The current branch state is authoritative; the older 2026-03-04 handoff note is historical only.
-2. “Connected” for Firebase should mean full client config secrets are present for the current app type: `API_KEY`, `AUTH_DOMAIN`, `PROJECT_ID`, `STORAGE_BUCKET`, `MESSAGING_SENDER_ID`, and `APP_ID`.
-3. The IDE should support Firebase on both web and mobile in this pass, but only through manual secret entry plus `/add-firebase`.
-
-### Risk areas
-- Type drift between `Project.integrations`, the integration registry, and chat menu filtering.
-- Re-intercepting `/add-firebase` would block the setup flow and regress usability.
-- Copy that overstates Firebase support could imply provisioning/OAuth behavior the IDE does not provide.
-
-### Verification
-- Run targeted checks against the touched files and any available lint/type tooling that covers them.
-- Manually inspect the final diff to ensure only Firebase-local changes are included.
-- Confirm the task note handoff records the exact scope, limitations, and verification steps.
+VERIFY:
+- Review the final `README.md` diff carefully for accuracy.
+- Confirm referenced commands match current `package.json` / package scripts.
+- Keep the scope to `README.md` only.

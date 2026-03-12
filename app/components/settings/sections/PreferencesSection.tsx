@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Switch } from '@/app/components/ui/Switch'
+import { useStore } from '@/app/hooks/useStore'
+import { preferencesStore } from '@/app/stores/preferences'
 import { SettingsCard, SettingsRow, SettingsSelect } from '../components'
 
 export function PreferencesSection() {
@@ -7,9 +9,9 @@ export function PreferencesSection() {
   const [showLineNumbers, setShowLineNumbers] = useState(true)
   const [wordWrap, setWordWrap] = useState(false)
   const [formatOnSave, setFormatOnSave] = useState(true)
-  const [defaultView, setDefaultView] = useState('grid')
   const [editorFontSize, setEditorFontSize] = useState('14')
   const [defaultProvider, setDefaultProvider] = useState('claude')
+  const defaultView = useStore(preferencesStore.projectListView)
 
   return (
     <div className="flex flex-col gap-8">
@@ -23,7 +25,7 @@ export function PreferencesSection() {
         >
           <SettingsSelect
             value={defaultView}
-            onChange={setDefaultView}
+            onChange={preferencesStore.setProjectListView}
             options={[
               { value: 'grid', label: 'Grid view' },
               { value: 'list', label: 'List view' },

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
+import { window as sidecarWindow } from '@/app/api/sidecar'
 
 type DashboardHostStatus = 'loading' | 'ready' | 'error'
 type DashboardHostErrorCode = 'handshake_timeout' | 'iframe_load_error' | 'handshake_failed'
@@ -146,7 +147,9 @@ export function ConvexDashboard({
       onOpenExternal()
       return
     }
-    window.open(externalDashboardUrl, '_blank', 'noopener,noreferrer')
+    sidecarWindow.webOpenUrl(externalDashboardUrl).catch((error) => {
+      console.error('Failed to open Convex dashboard URL:', error)
+    })
   }
 
   const errorMessage =
