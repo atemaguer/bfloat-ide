@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
   Settings,
@@ -47,8 +47,13 @@ function ComingSoonSection({ title }: { title: string }) {
 
 export function SettingsPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [activeSection, setActiveSection] = useState<SettingsSection>('preferences')
   const [appVersion, setAppVersion] = useState<string>('')
+  const returnTo =
+    typeof (location.state as { returnTo?: unknown } | null)?.returnTo === 'string'
+      ? (location.state as { returnTo: string }).returnTo
+      : '/'
 
   // TODO: Update namespace doesn't exist in the new API - need to implement version fetching
   // Fetch app version on mount
@@ -58,7 +63,7 @@ export function SettingsPage() {
   }, [])
 
   const handleBackToApp = () => {
-    navigate('/')
+    navigate(returnTo)
   }
 
   useEffect(() => {
@@ -69,7 +74,7 @@ export function SettingsPage() {
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [returnTo])
 
   const renderSection = () => {
     switch (activeSection) {

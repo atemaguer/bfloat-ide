@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Home,
   FolderKanban,
@@ -47,13 +47,18 @@ export function HomeSidebar({
   onSearch,
 }: HomeSidebarProps) {
   const navigate = useNavigate()
+  const location = useLocation()
   const [projectsExpanded, setProjectsExpanded] = useState(true)
   const [isCollapsed, setIsCollapsed] = useState(false)
 
   const recentProjects = projects.slice(0, 10)
 
   const handleSettingsClick = () => {
-    navigate('/settings')
+    navigate('/settings', {
+      state: {
+        returnTo: `${location.pathname}${location.search}${location.hash}`,
+      },
+    })
   }
 
   return (
