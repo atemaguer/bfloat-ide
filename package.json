@@ -2,7 +2,7 @@
   "name": "bfloat-ide",
   "version": "0.2.10",
   "description": "AI-powered IDE for building web and mobile apps with Claude and ChatGPT",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": {
     "name": "Bfloat, Inc"
   },
