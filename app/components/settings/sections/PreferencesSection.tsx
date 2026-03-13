@@ -6,13 +6,13 @@ import type { EditorFontSize } from '@/app/stores/preferences'
 import { SettingsCard, SettingsRow, SettingsSelect } from '../components'
 
 export function PreferencesSection() {
-  const [autoSave, setAutoSave] = useState(true)
-  const [showLineNumbers, setShowLineNumbers] = useState(true)
-  const [wordWrap, setWordWrap] = useState(false)
-  const [formatOnSave, setFormatOnSave] = useState(true)
   const [defaultProvider, setDefaultProvider] = useState('claude')
   const defaultView = useStore(preferencesStore.projectListView)
   const editorFontSize = useStore(preferencesStore.editorFontSize)
+  const showLineNumbers = useStore(preferencesStore.showLineNumbers)
+  const wordWrap = useStore(preferencesStore.wordWrap)
+  const formatOnSave = useStore(preferencesStore.formatOnSave)
+  const autoSave = useStore(preferencesStore.autoSave)
 
   return (
     <div className="flex flex-col gap-8">
@@ -38,7 +38,7 @@ export function PreferencesSection() {
           description="Automatically save changes as you type"
           isLast
         >
-          <Switch checked={autoSave} onCheckedChange={setAutoSave} />
+          <Switch checked={autoSave} onCheckedChange={preferencesStore.setAutoSave} />
         </SettingsRow>
       </SettingsCard>
 
@@ -65,20 +65,20 @@ export function PreferencesSection() {
           title="Show line numbers"
           description="Display line numbers in the editor gutter"
         >
-          <Switch checked={showLineNumbers} onCheckedChange={setShowLineNumbers} />
+          <Switch checked={showLineNumbers} onCheckedChange={preferencesStore.setShowLineNumbers} />
         </SettingsRow>
         <SettingsRow
           title="Word wrap"
           description="Wrap long lines to fit the editor width"
         >
-          <Switch checked={wordWrap} onCheckedChange={setWordWrap} />
+          <Switch checked={wordWrap} onCheckedChange={preferencesStore.setWordWrap} />
         </SettingsRow>
         <SettingsRow
           title="Format on save"
           description="Automatically format code when saving files"
           isLast
         >
-          <Switch checked={formatOnSave} onCheckedChange={setFormatOnSave} />
+          <Switch checked={formatOnSave} onCheckedChange={preferencesStore.setFormatOnSave} />
         </SettingsRow>
       </SettingsCard>
 

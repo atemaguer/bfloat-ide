@@ -10,6 +10,14 @@ import { tags } from '@lezer/highlight'
 import { preferencesStore } from '@/app/stores/preferences'
 import { themeStore } from '@/app/stores/theme'
 
+function getEditorGutterExtensions(showLineNumbers: boolean) {
+  return showLineNumbers ? [lineNumbers(), highlightActiveLineGutter()] : []
+}
+
+function getEditorWrappingExtensions(wordWrap: boolean) {
+  return wordWrap ? [EditorView.lineWrapping] : []
+}
+
 // Custom dark theme matching the terminal aesthetic
 function createRefinedDarkTheme(fontSize: string) {
   return EditorView.theme({
@@ -242,6 +250,8 @@ interface CodeEditorProps {
   onChange?: (value: string) => void
   onSave?: () => void
   readOnly?: boolean
+  autoSave?: boolean
+  formatOnSave?: boolean
 }
 
 function getLanguageExtension(language?: string) {
@@ -260,14 +270,42 @@ function getLanguageExtension(language?: string) {
   }
 }
 
-export function CodeEditor({ value, language, onChange, onSave, readOnly = false }: CodeEditorProps) {
+export function CodeEditor({
+  value,
+  language,
+  onChange,
+  onSave,
+  readOnly = false,
+  autoSave = true,
+  formatOnSave = true,
+}: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const isUserChangeRef = useRef(false)
   const themeCompartmentRef = useRef(new Compartment())
   const hasThemeCompartmentRef = useRef(false)
+  const gutterCompartmentRef = useRef(new Compartment())
+  const hasGutterCompartmentRef = useRef(false)
+  const wrappingCompartmentRef = useRef(new Compartment())
+  const hasWrappingCompartmentRef = useRef(false)
+  const autoSaveRef = useRef(autoSave)
+  const formatOnSaveRef = useRef(formatOnSave)
+
+  useEffect(() => {
+    autoSaveRef.current = autoSave
+  }, [autoSave])
+
+  useEffect(() => {
+    formatOnSaveRef.current = formatOnSave
+  }, [formatOnSave])
 
   const handleSave = useCallback(() => {
+    // Autosave is not implemented yet, but keep the preference in the editor
+    // pipeline so editable mode can consume it later.
+    void autoSaveRef.current
+    // Formatting is not implemented yet, but keep the preference in the editor
+    // pipeline so save-time formatting can use it later.
+    void formatOnSaveRef.current
     onSave?.()
   }, [onSave])
 
@@ -276,7 +314,11 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
     if (!containerRef.current) return
 
     const themeCompartment = themeCompartmentRef.current
+    const gutterCompartment = gutterCompartmentRef.current
+    const wrappingCompartment = wrappingCompartmentRef.current
     hasThemeCompartmentRef.current = false
+    hasGutterCompartmentRef.current = false
+    hasWrappingCompartmentRef.current = false
 
     // Create save keymap
     const saveKeymap = keymap.of([
@@ -301,9 +343,9 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
       const startState = EditorState.create({
         doc: value,
         extensions: [
-          lineNumbers(),
+          gutterCompartment.of(getEditorGutterExtensions(preferencesStore.showLineNumbers.getState())),
+          wrappingCompartment.of(getEditorWrappingExtensions(preferencesStore.wordWrap.getState())),
           highlightActiveLine(),
-          highlightActiveLineGutter(),
           history(),
           foldGutter(),
           bracketMatching(),
@@ -326,6 +368,8 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
         parent: containerRef.current,
       })
       hasThemeCompartmentRef.current = true
+      hasGutterCompartmentRef.current = true
+      hasWrappingCompartmentRef.current = true
     } catch (error) {
       // Guard against runtime extension-set incompatibilities so the project page
       // remains usable even when a dependency mismatch occurs.
@@ -369,9 +413,27 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
       }
     })
 
+    const unsubShowLineNumbers = preferencesStore.showLineNumbers.subscribe((showLineNumbers) => {
+      if (viewRef.current && hasGutterCompartmentRef.current) {
+        viewRef.current.dispatch({
+          effects: gutterCompartment.reconfigure(getEditorGutterExtensions(showLineNumbers)),
+        })
+      }
+    })
+
+    const unsubWordWrap = preferencesStore.wordWrap.subscribe((wordWrap) => {
+      if (viewRef.current && hasWrappingCompartmentRef.current) {
+        viewRef.current.dispatch({
+          effects: wrappingCompartment.reconfigure(getEditorWrappingExtensions(wordWrap)),
+        })
+      }
+    })
+
     return () => {
       unsubTheme()
       unsubEditorFontSize()
+      unsubShowLineNumbers()
+      unsubWordWrap()
       view.destroy()
       viewRef.current = null
     }
