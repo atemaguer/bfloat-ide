@@ -63,7 +63,12 @@ export function SettingsPage() {
   }, [])
 
   const handleBackToApp = () => {
-    navigate(returnTo)
+    if ((location.state as { returnTo?: unknown } | null)?.returnTo && window.history.length > 1) {
+      navigate(-1)
+      return
+    }
+
+    navigate(returnTo, { replace: true })
   }
 
   useEffect(() => {

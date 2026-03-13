@@ -304,16 +304,17 @@
 }
 
 .window-titlebar-tab.deploy {
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.1);
+  color: hsl(var(--primary));
+  background: hsl(var(--primary-soft));
   margin-left: 0;
   border-left: 1px solid hsl(var(--border));
   padding-left: 16px;
 }
 
 .window-titlebar-tab.deploy:hover {
-  color: #c4b5fd;
-  background: rgba(167, 139, 250, 0.18);
+  color: hsl(var(--primary));
+  background: hsl(var(--primary-soft));
+  filter: brightness(0.98);
 }
 
 /* Settings button */
