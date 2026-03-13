@@ -31,6 +31,10 @@
   --color-popover-foreground: hsl(var(--popover-foreground));
   --color-primary: hsl(var(--primary));
   --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-soft: hsl(var(--primary-soft));
+  --color-support: hsl(var(--support));
+  --color-support-foreground: hsl(var(--support-foreground));
+  --color-support-soft: hsl(var(--support-soft));
   --color-secondary: hsl(var(--secondary));
   --color-secondary-foreground: hsl(var(--secondary-foreground));
   --color-muted: hsl(var(--muted));
@@ -89,7 +93,7 @@
   --color-dark-text-code: #737373;
 
   /* Accent colors */
-  --color-accent-blue: #4a9eff;
+  --color-accent-blue: hsl(var(--primary));
   --color-accent-amber: rgb(245, 158, 11);
 
   /* -------------------------------------------------------------------------
@@ -184,8 +188,12 @@
     --card-foreground: 0 0% 16%;
     --popover: 0 0% 100%;
     --popover-foreground: 0 0% 16%;
-    --primary: 0 0% 16%;
-    --primary-foreground: 0 0% 98%;
+    --primary: 270 95% 62%;
+    --primary-foreground: 0 0% 100%;
+    --primary-soft: 270 95% 62% / 0.14;
+    --support: 214 100% 60%;
+    --support-foreground: 0 0% 100%;
+    --support-soft: 214 100% 60% / 0.14;
     --secondary: 0 0% 100%;
     --secondary-foreground: 0 0% 18%;
     --muted: 0 0% 96%;
@@ -200,7 +208,7 @@
     --warning-foreground: 0 0% 100%;
     --border: 0 0% 90%;
     --input: 0 0% 100%;
-    --ring: 0 0% 16%;
+    --ring: 270 95% 62%;
     --radius: 0.75rem;
     --chart-1: 0 0% 20%;
     --chart-2: 0 0% 35%;
@@ -231,6 +239,12 @@
     --Button-primary-black: #282828;
     --text-onblack: #ffffff;
     --fill-tsp-white-dark: #e5e5e5;
+    --bfloat-accent: hsl(var(--primary));
+    --bfloat-accent-soft: hsl(var(--primary-soft));
+    --bfloat-bg-secondary: hsl(var(--card));
+    --bfloat-border: hsl(var(--border));
+    --bfloat-text-primary: hsl(var(--foreground));
+    --bfloat-text-secondary: hsl(var(--muted-foreground));
   }
 
   /* -------------------------------------------------------------------------
@@ -252,9 +266,13 @@
     --popover: 0 0% 12%;
     --popover-foreground: 0 0% 91%;
 
-    /* Primary (buttons, links) - White in dark mode */
-    --primary: 0 0% 100%;
-    --primary-foreground: 0 0% 9%;
+    /* Primary accent - resolved dynamically by theme store */
+    --primary: 258 90% 76%;
+    --primary-foreground: 222 47% 11%;
+    --primary-soft: 258 90% 76% / 0.18;
+    --support: 207 100% 65%;
+    --support-foreground: 222 47% 11%;
+    --support-soft: 207 100% 65% / 0.18;
 
     /* Secondary */
     --secondary: 0 0% 11%;
@@ -284,7 +302,7 @@
     /* #2a2a2a */
     --input: 0 0% 11%;
     /* #1c1c1c */
-    --ring: 0 0% 50%;
+    --ring: 258 90% 76%;
 
     /* Radius */
     --radius: 0.75rem;
@@ -319,6 +337,12 @@
     --Button-primary-black: #ffffff;
     --text-onblack: #171717;
     --fill-tsp-white-dark: #353535;
+    --bfloat-accent: hsl(var(--primary));
+    --bfloat-accent-soft: hsl(var(--primary-soft));
+    --bfloat-bg-secondary: hsl(var(--card));
+    --bfloat-border: hsl(var(--border));
+    --bfloat-text-primary: hsl(var(--foreground));
+    --bfloat-text-secondary: hsl(var(--muted-foreground));
   }
 }
 
@@ -366,14 +390,14 @@
      Buttons
      ------------------------------------------------------------------------- */
 
-  /* Primary button - solid white/black */
+  /* Primary button - accent driven */
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2;
     @apply px-4 py-2.5 rounded-lg;
-    @apply bg-foreground text-background;
+    @apply bg-primary text-primary-foreground;
     @apply text-sm font-medium;
     @apply transition-all duration-200;
-    @apply hover:bg-foreground/90 hover:-translate-y-0.5;
+    @apply hover:bg-primary/90 hover:-translate-y-0.5;
     @apply active:scale-[0.98];
     @apply disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0;
     box-shadow: var(--shadow-button);

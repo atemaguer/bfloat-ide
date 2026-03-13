@@ -246,14 +246,14 @@
 }
 
 .settings-btn-primary {
-  background-color: #3b82f6;
-  border-color: #3b82f6;
-  color: #ffffff;
+  background-color: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
 }
 
 .settings-btn-primary:hover {
-  background-color: #2563eb;
-  border-color: #2563eb;
+  background-color: hsl(var(--primary) / 0.9);
+  border-color: hsl(var(--primary) / 0.9);
 }
 
 .settings-btn-danger {
@@ -536,7 +536,7 @@
   align-items: center;
   gap: 4px;
   font-size: 13px;
-  color: #3b82f6;
+  color: hsl(var(--primary));
   text-decoration: none;
 }
 
@@ -580,7 +580,7 @@
 }
 
 .settings-theme-card.active {
-  border-color: #3b82f6;
+  border-color: hsl(var(--primary));
 }
 
 .settings-theme-preview {

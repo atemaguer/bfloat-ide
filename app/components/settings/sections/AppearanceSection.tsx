@@ -3,11 +3,11 @@ import { useStore } from '@/app/hooks/useStore'
 import { Switch } from '@/app/components/ui/Switch'
 import { SettingsCard, SettingsRow, SettingsSelect } from '../components'
 import { themeStore } from '@/app/stores/theme'
-import type { ThemePreference } from '@/app/stores/theme'
+import type { AccentColor, ThemePreference } from '@/app/stores/theme'
 
 export function AppearanceSection() {
   const theme = useStore(themeStore.theme)
-  const [accentColor, setAccentColor] = useState('purple')
+  const accentColor = useStore(themeStore.accentColor)
   const [compactMode, setCompactMode] = useState(false)
   const [showAnimations, setShowAnimations] = useState(true)
 
@@ -43,7 +43,7 @@ export function AppearanceSection() {
         >
           <SettingsSelect
             value={accentColor}
-            onChange={setAccentColor}
+            onChange={(value: string) => themeStore.setAccentColor(value as AccentColor)}
             options={[
               { value: 'purple', label: 'Purple' },
               { value: 'blue', label: 'Blue' },
