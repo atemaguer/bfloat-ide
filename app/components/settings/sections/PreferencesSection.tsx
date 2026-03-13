@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Switch } from '@/app/components/ui/Switch'
 import { useStore } from '@/app/hooks/useStore'
 import { preferencesStore } from '@/app/stores/preferences'
+import type { EditorFontSize } from '@/app/stores/preferences'
 import { SettingsCard, SettingsRow, SettingsSelect } from '../components'
 
 export function PreferencesSection() {
@@ -9,9 +10,9 @@ export function PreferencesSection() {
   const [showLineNumbers, setShowLineNumbers] = useState(true)
   const [wordWrap, setWordWrap] = useState(false)
   const [formatOnSave, setFormatOnSave] = useState(true)
-  const [editorFontSize, setEditorFontSize] = useState('14')
   const [defaultProvider, setDefaultProvider] = useState('claude')
   const defaultView = useStore(preferencesStore.projectListView)
+  const editorFontSize = useStore(preferencesStore.editorFontSize)
 
   return (
     <div className="flex flex-col gap-8">
@@ -49,7 +50,7 @@ export function PreferencesSection() {
         >
           <SettingsSelect
             value={editorFontSize}
-            onChange={setEditorFontSize}
+            onChange={(value) => preferencesStore.setEditorFontSize(value as EditorFontSize)}
             options={[
               { value: '12', label: '12px' },
               { value: '13', label: '13px' },

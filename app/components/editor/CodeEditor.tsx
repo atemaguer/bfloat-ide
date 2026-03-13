@@ -7,152 +7,157 @@ import { json } from '@codemirror/lang-json'
 import { css } from '@codemirror/lang-css'
 import { syntaxHighlighting, HighlightStyle, bracketMatching, foldGutter } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
+import { preferencesStore } from '@/app/stores/preferences'
 import { themeStore } from '@/app/stores/theme'
 
 // Custom dark theme matching the terminal aesthetic
-const refinedDarkTheme = EditorView.theme({
-  '&': {
-    backgroundColor: '#141414',
-    color: '#b8b8b8',
-    fontSize: '13px',
-    fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", "Monaco", "Consolas", monospace',
-  },
-  '.cm-content': {
-    caretColor: '#e0e0e0',
-    padding: '8px 0',
-    lineHeight: '1.5',
-  },
-  '.cm-cursor, .cm-dropCursor': {
-    borderLeftColor: '#e0e0e0',
-    borderLeftWidth: '2px',
-  },
-  '&.cm-focused .cm-cursor': {
-    borderLeftColor: '#e0e0e0',
-  },
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  '.cm-activeLine': {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-  },
-  '.cm-gutters': {
-    backgroundColor: '#141414',
-    color: '#4a4a4a',
-    border: 'none',
-    paddingRight: '8px',
-  },
-  '.cm-activeLineGutter': {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    color: '#6a6a6a',
-  },
-  '.cm-lineNumbers .cm-gutterElement': {
-    padding: '0 8px 0 12px',
-    minWidth: '32px',
-  },
-  '.cm-foldGutter .cm-gutterElement': {
-    padding: '0 4px',
-    color: '#4a4a4a',
-    transition: 'color 150ms ease',
-  },
-  '.cm-foldGutter .cm-gutterElement:hover': {
-    color: '#8a8a8a',
-  },
-  '.cm-matchingBracket': {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    outline: '1px solid rgba(255, 255, 255, 0.2)',
-  },
-  '.cm-scroller': {
-    fontFamily: 'inherit',
-    lineHeight: 'inherit',
-  },
-  // Scrollbar styling
-  '.cm-scroller::-webkit-scrollbar': {
-    width: '6px',
-    height: '6px',
-  },
-  '.cm-scroller::-webkit-scrollbar-track': {
-    background: 'transparent',
-  },
-  '.cm-scroller::-webkit-scrollbar-thumb': {
-    background: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: '3px',
-  },
-  '.cm-scroller::-webkit-scrollbar-thumb:hover': {
-    background: 'rgba(255, 255, 255, 0.15)',
-  },
-}, { dark: true })
+function createRefinedDarkTheme(fontSize: string) {
+  return EditorView.theme({
+    '&': {
+      backgroundColor: '#141414',
+      color: '#b8b8b8',
+      fontSize,
+      fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", "Monaco", "Consolas", monospace',
+    },
+    '.cm-content': {
+      caretColor: '#e0e0e0',
+      padding: '8px 0',
+      lineHeight: '1.5',
+    },
+    '.cm-cursor, .cm-dropCursor': {
+      borderLeftColor: '#e0e0e0',
+      borderLeftWidth: '2px',
+    },
+    '&.cm-focused .cm-cursor': {
+      borderLeftColor: '#e0e0e0',
+    },
+    '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
+      backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    },
+    '.cm-activeLine': {
+      backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    },
+    '.cm-gutters': {
+      backgroundColor: '#141414',
+      color: '#4a4a4a',
+      border: 'none',
+      paddingRight: '8px',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: 'rgba(255, 255, 255, 0.03)',
+      color: '#6a6a6a',
+    },
+    '.cm-lineNumbers .cm-gutterElement': {
+      padding: '0 8px 0 12px',
+      minWidth: '32px',
+    },
+    '.cm-foldGutter .cm-gutterElement': {
+      padding: '0 4px',
+      color: '#4a4a4a',
+      transition: 'color 150ms ease',
+    },
+    '.cm-foldGutter .cm-gutterElement:hover': {
+      color: '#8a8a8a',
+    },
+    '.cm-matchingBracket': {
+      backgroundColor: 'rgba(255, 255, 255, 0.1)',
+      outline: '1px solid rgba(255, 255, 255, 0.2)',
+    },
+    '.cm-scroller': {
+      fontFamily: 'inherit',
+      lineHeight: 'inherit',
+    },
+    // Scrollbar styling
+    '.cm-scroller::-webkit-scrollbar': {
+      width: '6px',
+      height: '6px',
+    },
+    '.cm-scroller::-webkit-scrollbar-track': {
+      background: 'transparent',
+    },
+    '.cm-scroller::-webkit-scrollbar-thumb': {
+      background: 'rgba(255, 255, 255, 0.08)',
+      borderRadius: '3px',
+    },
+    '.cm-scroller::-webkit-scrollbar-thumb:hover': {
+      background: 'rgba(255, 255, 255, 0.15)',
+    },
+  }, { dark: true })
+}
 
 // Custom light theme
-const refinedLightTheme = EditorView.theme({
-  '&': {
-    backgroundColor: '#fafafa',
-    color: '#383a42',
-    fontSize: '13px',
-    fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", "Monaco", "Consolas", monospace',
-  },
-  '.cm-content': {
-    caretColor: '#526eff',
-    padding: '8px 0',
-    lineHeight: '1.5',
-  },
-  '.cm-cursor, .cm-dropCursor': {
-    borderLeftColor: '#526eff',
-    borderLeftWidth: '2px',
-  },
-  '&.cm-focused .cm-cursor': {
-    borderLeftColor: '#526eff',
-  },
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
-    backgroundColor: 'rgba(0, 0, 0, 0.08)',
-  },
-  '.cm-activeLine': {
-    backgroundColor: 'rgba(0, 0, 0, 0.03)',
-  },
-  '.cm-gutters': {
-    backgroundColor: '#fafafa',
-    color: '#b0b0b0',
-    border: 'none',
-    paddingRight: '8px',
-  },
-  '.cm-activeLineGutter': {
-    backgroundColor: 'rgba(0, 0, 0, 0.03)',
-    color: '#8a8a8a',
-  },
-  '.cm-lineNumbers .cm-gutterElement': {
-    padding: '0 8px 0 12px',
-    minWidth: '32px',
-  },
-  '.cm-foldGutter .cm-gutterElement': {
-    padding: '0 4px',
-    color: '#b0b0b0',
-    transition: 'color 150ms ease',
-  },
-  '.cm-foldGutter .cm-gutterElement:hover': {
-    color: '#6a6a6a',
-  },
-  '.cm-matchingBracket': {
-    backgroundColor: 'rgba(0, 0, 0, 0.08)',
-    outline: '1px solid rgba(0, 0, 0, 0.15)',
-  },
-  '.cm-scroller': {
-    fontFamily: 'inherit',
-    lineHeight: 'inherit',
-  },
-  '.cm-scroller::-webkit-scrollbar': {
-    width: '6px',
-    height: '6px',
-  },
-  '.cm-scroller::-webkit-scrollbar-track': {
-    background: 'transparent',
-  },
-  '.cm-scroller::-webkit-scrollbar-thumb': {
-    background: 'rgba(0, 0, 0, 0.1)',
-    borderRadius: '3px',
-  },
-  '.cm-scroller::-webkit-scrollbar-thumb:hover': {
-    background: 'rgba(0, 0, 0, 0.18)',
-  },
-}, { dark: false })
+function createRefinedLightTheme(fontSize: string) {
+  return EditorView.theme({
+    '&': {
+      backgroundColor: '#fafafa',
+      color: '#383a42',
+      fontSize,
+      fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", "Monaco", "Consolas", monospace',
+    },
+    '.cm-content': {
+      caretColor: '#526eff',
+      padding: '8px 0',
+      lineHeight: '1.5',
+    },
+    '.cm-cursor, .cm-dropCursor': {
+      borderLeftColor: '#526eff',
+      borderLeftWidth: '2px',
+    },
+    '&.cm-focused .cm-cursor': {
+      borderLeftColor: '#526eff',
+    },
+    '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
+      backgroundColor: 'rgba(0, 0, 0, 0.08)',
+    },
+    '.cm-activeLine': {
+      backgroundColor: 'rgba(0, 0, 0, 0.03)',
+    },
+    '.cm-gutters': {
+      backgroundColor: '#fafafa',
+      color: '#b0b0b0',
+      border: 'none',
+      paddingRight: '8px',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: 'rgba(0, 0, 0, 0.03)',
+      color: '#8a8a8a',
+    },
+    '.cm-lineNumbers .cm-gutterElement': {
+      padding: '0 8px 0 12px',
+      minWidth: '32px',
+    },
+    '.cm-foldGutter .cm-gutterElement': {
+      padding: '0 4px',
+      color: '#b0b0b0',
+      transition: 'color 150ms ease',
+    },
+    '.cm-foldGutter .cm-gutterElement:hover': {
+      color: '#6a6a6a',
+    },
+    '.cm-matchingBracket': {
+      backgroundColor: 'rgba(0, 0, 0, 0.08)',
+      outline: '1px solid rgba(0, 0, 0, 0.15)',
+    },
+    '.cm-scroller': {
+      fontFamily: 'inherit',
+      lineHeight: 'inherit',
+    },
+    '.cm-scroller::-webkit-scrollbar': {
+      width: '6px',
+      height: '6px',
+    },
+    '.cm-scroller::-webkit-scrollbar-track': {
+      background: 'transparent',
+    },
+    '.cm-scroller::-webkit-scrollbar-thumb': {
+      background: 'rgba(0, 0, 0, 0.1)',
+      borderRadius: '3px',
+    },
+    '.cm-scroller::-webkit-scrollbar-thumb:hover': {
+      background: 'rgba(0, 0, 0, 0.18)',
+    },
+  }, { dark: false })
+}
 
 // Dark syntax highlighting matching terminal colors
 const refinedDarkHighlightStyle = HighlightStyle.define([
@@ -223,11 +228,12 @@ const refinedLightHighlightStyle = HighlightStyle.define([
 ])
 
 // Helper to get theme extensions for a given resolved theme
-function getEditorThemeExtensions(resolvedTheme: 'light' | 'dark') {
+function getEditorThemeExtensions(resolvedTheme: 'light' | 'dark', editorFontSize: string) {
+  const fontSize = `${editorFontSize}px`
   if (resolvedTheme === 'dark') {
-    return [refinedDarkTheme, syntaxHighlighting(refinedDarkHighlightStyle)]
+    return [createRefinedDarkTheme(fontSize), syntaxHighlighting(refinedDarkHighlightStyle)]
   }
-  return [refinedLightTheme, syntaxHighlighting(refinedLightHighlightStyle)]
+  return [createRefinedLightTheme(fontSize), syntaxHighlighting(refinedLightHighlightStyle)]
 }
 
 interface CodeEditorProps {
@@ -301,7 +307,12 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
           history(),
           foldGutter(),
           bracketMatching(),
-          themeCompartment.of(getEditorThemeExtensions(themeStore.resolvedTheme.getState())),
+          themeCompartment.of(
+            getEditorThemeExtensions(
+              themeStore.resolvedTheme.getState(),
+              preferencesStore.editorFontSize.getState()
+            )
+          ),
           getLanguageExtension(language),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           saveKeymap,
@@ -341,13 +352,26 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
     const unsubTheme = themeStore.resolvedTheme.subscribe((resolved) => {
       if (viewRef.current && hasThemeCompartmentRef.current) {
         viewRef.current.dispatch({
-          effects: themeCompartment.reconfigure(getEditorThemeExtensions(resolved)),
+          effects: themeCompartment.reconfigure(
+            getEditorThemeExtensions(resolved, preferencesStore.editorFontSize.getState())
+          ),
+        })
+      }
+    })
+
+    const unsubEditorFontSize = preferencesStore.editorFontSize.subscribe((fontSize) => {
+      if (viewRef.current && hasThemeCompartmentRef.current) {
+        viewRef.current.dispatch({
+          effects: themeCompartment.reconfigure(
+            getEditorThemeExtensions(themeStore.resolvedTheme.getState(), fontSize)
+          ),
         })
       }
     })
 
     return () => {
       unsubTheme()
+      unsubEditorFontSize()
       view.destroy()
       viewRef.current = null
     }
