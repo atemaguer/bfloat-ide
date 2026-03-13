@@ -56,6 +56,27 @@ let filesystemApi: {
   getTempPath: (projectId: string) => Promise<string>
 } | null = null
 
+function isHiddenPath(path: string): boolean {
+  return path.split('/').some((segment) => segment.startsWith('.'))
+}
+
+function getDefaultOpenFilePath(files: FileMap): string | undefined {
+  const filePaths = Object.entries(files)
+    .filter(([, dirent]) => dirent?.type === 'file')
+    .map(([filePath]) => filePath)
+
+  if (filePaths.length === 0) {
+    return undefined
+  }
+
+  if (filePaths.includes('package.json')) {
+    return 'package.json'
+  }
+
+  const visibleFile = filePaths.find((filePath) => !isHiddenPath(filePath))
+  return visibleFile ?? filePaths.find((filePath) => !filePath.startsWith('.')) ?? filePaths[0]
+}
+
 export class WorkbenchStore {
   #filesStore = new FilesStore()
   #editorStore = new EditorStore(this.#filesStore)
@@ -412,11 +433,9 @@ export class WorkbenchStore {
     this.#editorStore.setDocuments(files)
 
     if (this.#filesStore.filesCount > 0 && this.currentDocument.getState() === undefined) {
-      for (const [filePath, dirent] of Object.entries(files)) {
-        if (dirent?.type === 'file') {
-          this.setSelectedFile(filePath)
-          break
-        }
+      const defaultFilePath = getDefaultOpenFilePath(files)
+      if (defaultFilePath) {
+        this.setSelectedFile(defaultFilePath)
       }
     }
   }

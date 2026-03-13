@@ -612,8 +612,8 @@ export default function HomePage() {
                                   gap: '4px',
                                   padding: '2px 8px',
                                   borderRadius: '4px',
-                                  backgroundColor: project.appType === 'mobile' || project.appType === 'expo' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                                  color: project.appType === 'mobile' || project.appType === 'expo' ? '#a855f7' : '#3b82f6',
+                                  backgroundColor: 'hsl(var(--support-soft))',
+                                  color: 'hsl(var(--support))',
                                   fontSize: '11px',
                                   fontWeight: 500,
                                 }}
