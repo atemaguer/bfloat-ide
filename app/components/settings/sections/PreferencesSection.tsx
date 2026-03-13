@@ -1,18 +1,18 @@
-import { useState } from 'react'
 import { Switch } from '@/app/components/ui/Switch'
 import { useStore } from '@/app/hooks/useStore'
 import { preferencesStore } from '@/app/stores/preferences'
+import { providerAuthStore } from '@/app/stores/provider-auth'
 import type { EditorFontSize } from '@/app/stores/preferences'
 import { SettingsCard, SettingsRow, SettingsSelect } from '../components'
 
 export function PreferencesSection() {
-  const [defaultProvider, setDefaultProvider] = useState('claude')
   const defaultView = useStore(preferencesStore.projectListView)
   const editorFontSize = useStore(preferencesStore.editorFontSize)
   const showLineNumbers = useStore(preferencesStore.showLineNumbers)
   const wordWrap = useStore(preferencesStore.wordWrap)
   const formatOnSave = useStore(preferencesStore.formatOnSave)
   const autoSave = useStore(preferencesStore.autoSave)
+  const providerSettings = useStore(providerAuthStore.settings)
 
   return (
     <div className="flex flex-col gap-8">
@@ -90,10 +90,10 @@ export function PreferencesSection() {
           isLast
         >
           <SettingsSelect
-            value={defaultProvider}
-            onChange={setDefaultProvider}
+            value={providerSettings.defaultProvider}
+            onChange={(value) => providerAuthStore.setDefaultProvider(value as 'anthropic' | 'openai')}
             options={[
-              { value: 'claude', label: 'Claude' },
+              { value: 'anthropic', label: 'Claude' },
               { value: 'openai', label: 'ChatGPT' },
             ]}
           />

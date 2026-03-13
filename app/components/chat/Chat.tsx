@@ -27,7 +27,11 @@ import { TaskProgress, type TodoItem } from './TaskProgress'
 import { SuggestionChips } from './SuggestionChips'
 import { generateSuggestions } from './generateSuggestions'
 import { SessionTabs } from './SessionTabs'
-import { providerAuthStore } from '@/app/stores/provider-auth'
+import {
+  providerAuthStore,
+  providerTypeToAgentProviderId,
+  DEFAULT_MODEL_BY_AGENT_PROVIDER,
+} from '@/app/stores/provider-auth'
 import ConvexLogo from '@/app/components/ui/icons/convex-logo'
 import FirebaseLogo from '@/app/components/ui/icons/firebase-logo'
 import RevenueCatLogo from '@/app/components/ui/icons/revenuecat-logo'
@@ -161,6 +165,8 @@ export function Chat({
 }: ChatProps) {
   // Codex (OpenAI) provider is enabled by default
   const codexBetaEnabled = true
+  const providerSettings = useStore(providerAuthStore.settings)
+  const defaultProvider = providerTypeToAgentProviderId(providerSettings.defaultProvider)
 
   // Normalize appType to 'web' or 'mobile' for integration filtering
   const normalizedAppType: 'web' | 'mobile' = useMemo(() => {
@@ -193,8 +199,10 @@ export function Chat({
   const [resumeProviderSessionId, setResumeProviderSessionId] = useState<string | null>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
-  const [provider, setProvider] = useState<ProviderId>(initialProvider || 'claude')
-  const [selectedModel, setSelectedModel] = useState<string>(initialModel || 'claude-sonnet-4-20250514')
+  const [provider, setProvider] = useState<ProviderId>(initialProvider || defaultProvider)
+  const [selectedModel, setSelectedModel] = useState<string>(
+    initialModel || DEFAULT_MODEL_BY_AGENT_PROVIDER[initialProvider || defaultProvider]
+  )
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages || [])
   const [isStreaming, setIsStreaming] = useState(false)
   const [isResumingSession, setIsResumingSession] = useState(false)
@@ -240,6 +248,13 @@ export function Chat({
     () => detectConvexBootstrap(files) || detectConvexBootstrapInTree(projectFileTree),
     [files, projectFileTree]
   )
+
+  useEffect(() => {
+    if (!initialProvider) {
+      setProvider(defaultProvider)
+      setSelectedModel((current) => current || DEFAULT_MODEL_BY_AGENT_PROVIDER[defaultProvider])
+    }
+  }, [defaultProvider, initialProvider])
 
   const convexStage: ConvexIntegrationStage = useMemo(() => {
     if (!convexSecretStatus.isConfigured) return 'disconnected'
@@ -937,12 +952,8 @@ export function Chat({
       const { sessionId, provider: sessionProvider, status, source } = info
       console.log('[Chat] Reconnected to existing session:', info)
 
-      const providerDefaults: Record<ProviderId, string> = {
-        claude: 'claude-sonnet-4-20250514',
-        codex: 'gpt-5.3-codex',
-      }
       if (sessionProvider !== provider) {
-        setSelectedModel(providerDefaults[sessionProvider] || '')
+        setSelectedModel(DEFAULT_MODEL_BY_AGENT_PROVIDER[sessionProvider] || '')
       }
       setProvider(sessionProvider)
       setAgentSessionId(sessionId)
@@ -1610,7 +1621,9 @@ export function Chat({
     providerId?: 'claude' | 'codex',
     modelId?: string
   ) => {
-    console.log('[Chat] Creating new session', { providerId: providerId || provider })
+    const nextProvider = providerId || defaultProvider
+    const nextModel = modelId || DEFAULT_MODEL_BY_AGENT_PROVIDER[nextProvider]
+    console.log('[Chat] Creating new session', { providerId: nextProvider })
 
     // Detach from the current session - agent continues running in background
     // Do NOT call stop() here: that would kill the CLI process, preventing reconnect
@@ -1620,12 +1633,8 @@ export function Chat({
     didStartNewSession.current = true
 
     // Starting from tab "+" optionally sets provider/model for the next session
-    if (providerId) {
-      setProvider(providerId)
-    }
-    if (modelId) {
-      setSelectedModel(modelId)
-    }
+    setProvider(nextProvider)
+    setSelectedModel(nextModel)
 
     // Clear messages completely - each session tab is its own context
     setMessages([])
@@ -1642,7 +1651,7 @@ export function Chat({
     hasLoadedSession.current = false
     initialSessionIdAtMount.current = null
     hasStartedInitialStream.current = false
-  }, [hideReconnectNotice, localAgent, agentSessionId, isStreaming])
+  }, [defaultProvider, hideReconnectNotice, localAgent])
 
   // Handle fix error - submit error to AI for fixing
   const handleFixError = useCallback(() => {
@@ -1992,8 +2001,8 @@ export function Chat({
         sessions={allSessions}
         activeSessionId={agentSessionId}
         newSessionAgentOptions={newSessionAgentOptions}
-        selectedNewSessionProviderId={provider as 'claude' | 'codex'}
-        selectedNewSessionModelId={selectedModel}
+        selectedNewSessionProviderId={defaultProvider as 'claude' | 'codex'}
+        selectedNewSessionModelId={DEFAULT_MODEL_BY_AGENT_PROVIDER[defaultProvider]}
         onSelectSession={handleSelectSession}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
@@ -2084,8 +2093,7 @@ export function Chat({
               const pid = p as ProviderId
               setProvider(pid)
               // Reset model to the provider's default to avoid passing e.g. a Claude model to Codex
-              const defaults: Record<ProviderId, string> = { claude: 'claude-sonnet-4-20250514', codex: 'gpt-5.3-codex' }
-              setSelectedModel(defaults[pid] || '')
+              setSelectedModel(DEFAULT_MODEL_BY_AGENT_PROVIDER[pid] || '')
             },
             onModelChange: (modelId) => setSelectedModel(modelId),
             options: [
