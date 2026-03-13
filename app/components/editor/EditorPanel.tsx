@@ -4,6 +4,7 @@ import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'reac
 import { Save, RotateCcw, X, ChevronRight, ZoomIn, ZoomOut, RotateCw } from 'lucide-react'
 
 import { workbenchStore } from '@/app/stores/workbench'
+import { preferencesStore } from '@/app/stores/preferences'
 import type { FileMap, EditorDocument } from '@/app/types/project'
 import { FileTree } from './FileTree'
 import { CodeEditor } from './CodeEditor'
@@ -85,6 +86,8 @@ export function EditorPanel({
   projectName,
   isLoading = false,
 }: EditorPanelProps) {
+  const autoSave = useStore(preferencesStore.autoSave)
+  const formatOnSave = useStore(preferencesStore.formatOnSave)
   // Track open tabs
   const [openTabs, setOpenTabs] = useState<string[]>([])
 
@@ -338,6 +341,8 @@ export function EditorPanel({
                       onChange={handleEditorChange}
                       onSave={onFileSave}
                       readOnly={true}
+                      autoSave={autoSave}
+                      formatOnSave={formatOnSave}
                     />
                   )}
                 </div>
@@ -353,4 +358,3 @@ export function EditorPanel({
     </div>
   )
 }
-

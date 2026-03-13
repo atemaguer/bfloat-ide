@@ -26,6 +26,11 @@ import { ChatInput, type ImageAttachment } from '@/app/components/chat'
 import { HomeSidebar } from './HomeSidebar'
 import { HomeRightPanel } from './HomeRightPanel'
 import { preferencesStore } from '@/app/stores/preferences'
+import {
+  providerAuthStore,
+  providerTypeToAgentProviderId,
+  DEFAULT_MODEL_BY_AGENT_PROVIDER,
+} from '@/app/stores/provider-auth'
 import { themeStore } from '@/app/stores/theme'
 
 import './home-sidebar.css'
@@ -76,19 +81,15 @@ export default function HomePage() {
   const [isCreating, setIsCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedProvider, _setSelectedProvider] = useState<ProviderId>('claude')
-  const [selectedModel, setSelectedModel] = useState<string>('claude-sonnet-4-20250514')
-
-  // Default models per provider
-  const defaultModelForProvider: Record<ProviderId, string> = {
-    claude: 'claude-sonnet-4-20250514',
-    codex: 'gpt-5.3-codex',
-  }
+  const providerSettings = useStore(providerAuthStore.settings)
+  const defaultProvider = providerTypeToAgentProviderId(providerSettings.defaultProvider)
+  const [selectedProvider, _setSelectedProvider] = useState<ProviderId>(defaultProvider)
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL_BY_AGENT_PROVIDER[defaultProvider])
 
   // When switching providers, also update the model to the provider's default
   const setSelectedProvider = useCallback((id: ProviderId) => {
     _setSelectedProvider(id)
-    setSelectedModel(defaultModelForProvider[id] || '')
+    setSelectedModel(DEFAULT_MODEL_BY_AGENT_PROVIDER[id] || '')
   }, [])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null)
@@ -101,6 +102,10 @@ export default function HomePage() {
   const isLoadingProjects = useStore(localProjectsStore.isLoading)
   const viewMode = useStore(preferencesStore.projectListView)
   const resolvedTheme = useStore(themeStore.resolvedTheme)
+
+  useEffect(() => {
+    setSelectedProvider(defaultProvider)
+  }, [defaultProvider, setSelectedProvider])
 
   // Load projects on mount
   useEffect(() => {
@@ -133,10 +138,6 @@ export default function HomePage() {
       .getProviders()
       .then((providerList) => {
         setProviders(providerList)
-        const authenticatedProvider = providerList.find((p) => p.isAuthenticated)
-        if (authenticatedProvider) {
-          setSelectedProvider(authenticatedProvider.id)
-        }
       })
       .catch((error) => {
         console.error('Failed to fetch providers:', error)
