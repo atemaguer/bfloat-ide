@@ -1,5 +1,6 @@
 import { createStore } from 'zustand/vanilla'
 import { provider } from '@/app/api/sidecar'
+import type { ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
 
 export type ProviderType = 'anthropic' | 'openai' | 'expo'
 
@@ -26,6 +27,16 @@ export interface ProviderAuthState {
 
 export interface ProviderSettings {
   defaultProvider: ProviderType
+}
+
+export const DEFAULT_MODEL_BY_AGENT_PROVIDER: Record<ProviderId, string> = {
+  claude: 'claude-sonnet-4-20250514',
+  codex: 'gpt-5.3-codex',
+}
+
+export function providerTypeToAgentProviderId(providerType: ProviderType): ProviderId {
+  if (providerType === 'openai') return 'codex'
+  return 'claude'
 }
 
 function getStoredSettings(): ProviderSettings {

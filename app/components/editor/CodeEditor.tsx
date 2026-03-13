@@ -7,152 +7,165 @@ import { json } from '@codemirror/lang-json'
 import { css } from '@codemirror/lang-css'
 import { syntaxHighlighting, HighlightStyle, bracketMatching, foldGutter } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
+import { preferencesStore } from '@/app/stores/preferences'
 import { themeStore } from '@/app/stores/theme'
 
+function getEditorGutterExtensions(showLineNumbers: boolean) {
+  return showLineNumbers ? [lineNumbers(), highlightActiveLineGutter()] : []
+}
+
+function getEditorWrappingExtensions(wordWrap: boolean) {
+  return wordWrap ? [EditorView.lineWrapping] : []
+}
+
 // Custom dark theme matching the terminal aesthetic
-const refinedDarkTheme = EditorView.theme({
-  '&': {
-    backgroundColor: '#141414',
-    color: '#b8b8b8',
-    fontSize: '13px',
-    fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", "Monaco", "Consolas", monospace',
-  },
-  '.cm-content': {
-    caretColor: '#e0e0e0',
-    padding: '8px 0',
-    lineHeight: '1.5',
-  },
-  '.cm-cursor, .cm-dropCursor': {
-    borderLeftColor: '#e0e0e0',
-    borderLeftWidth: '2px',
-  },
-  '&.cm-focused .cm-cursor': {
-    borderLeftColor: '#e0e0e0',
-  },
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  '.cm-activeLine': {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-  },
-  '.cm-gutters': {
-    backgroundColor: '#141414',
-    color: '#4a4a4a',
-    border: 'none',
-    paddingRight: '8px',
-  },
-  '.cm-activeLineGutter': {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    color: '#6a6a6a',
-  },
-  '.cm-lineNumbers .cm-gutterElement': {
-    padding: '0 8px 0 12px',
-    minWidth: '32px',
-  },
-  '.cm-foldGutter .cm-gutterElement': {
-    padding: '0 4px',
-    color: '#4a4a4a',
-    transition: 'color 150ms ease',
-  },
-  '.cm-foldGutter .cm-gutterElement:hover': {
-    color: '#8a8a8a',
-  },
-  '.cm-matchingBracket': {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    outline: '1px solid rgba(255, 255, 255, 0.2)',
-  },
-  '.cm-scroller': {
-    fontFamily: 'inherit',
-    lineHeight: 'inherit',
-  },
-  // Scrollbar styling
-  '.cm-scroller::-webkit-scrollbar': {
-    width: '6px',
-    height: '6px',
-  },
-  '.cm-scroller::-webkit-scrollbar-track': {
-    background: 'transparent',
-  },
-  '.cm-scroller::-webkit-scrollbar-thumb': {
-    background: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: '3px',
-  },
-  '.cm-scroller::-webkit-scrollbar-thumb:hover': {
-    background: 'rgba(255, 255, 255, 0.15)',
-  },
-}, { dark: true })
+function createRefinedDarkTheme(fontSize: string) {
+  return EditorView.theme({
+    '&': {
+      backgroundColor: '#141414',
+      color: '#b8b8b8',
+      fontSize,
+      fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", "Monaco", "Consolas", monospace',
+    },
+    '.cm-content': {
+      caretColor: '#e0e0e0',
+      padding: '8px 0',
+      lineHeight: '1.5',
+    },
+    '.cm-cursor, .cm-dropCursor': {
+      borderLeftColor: '#e0e0e0',
+      borderLeftWidth: '2px',
+    },
+    '&.cm-focused .cm-cursor': {
+      borderLeftColor: '#e0e0e0',
+    },
+    '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
+      backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    },
+    '.cm-activeLine': {
+      backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    },
+    '.cm-gutters': {
+      backgroundColor: '#141414',
+      color: '#4a4a4a',
+      border: 'none',
+      paddingRight: '8px',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: 'rgba(255, 255, 255, 0.03)',
+      color: '#6a6a6a',
+    },
+    '.cm-lineNumbers .cm-gutterElement': {
+      padding: '0 8px 0 12px',
+      minWidth: '32px',
+    },
+    '.cm-foldGutter .cm-gutterElement': {
+      padding: '0 4px',
+      color: '#4a4a4a',
+      transition: 'color 150ms ease',
+    },
+    '.cm-foldGutter .cm-gutterElement:hover': {
+      color: '#8a8a8a',
+    },
+    '.cm-matchingBracket': {
+      backgroundColor: 'rgba(255, 255, 255, 0.1)',
+      outline: '1px solid rgba(255, 255, 255, 0.2)',
+    },
+    '.cm-scroller': {
+      fontFamily: 'inherit',
+      lineHeight: 'inherit',
+    },
+    // Scrollbar styling
+    '.cm-scroller::-webkit-scrollbar': {
+      width: '6px',
+      height: '6px',
+    },
+    '.cm-scroller::-webkit-scrollbar-track': {
+      background: 'transparent',
+    },
+    '.cm-scroller::-webkit-scrollbar-thumb': {
+      background: 'rgba(255, 255, 255, 0.08)',
+      borderRadius: '3px',
+    },
+    '.cm-scroller::-webkit-scrollbar-thumb:hover': {
+      background: 'rgba(255, 255, 255, 0.15)',
+    },
+  }, { dark: true })
+}
 
 // Custom light theme
-const refinedLightTheme = EditorView.theme({
-  '&': {
-    backgroundColor: '#fafafa',
-    color: '#383a42',
-    fontSize: '13px',
-    fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", "Monaco", "Consolas", monospace',
-  },
-  '.cm-content': {
-    caretColor: '#526eff',
-    padding: '8px 0',
-    lineHeight: '1.5',
-  },
-  '.cm-cursor, .cm-dropCursor': {
-    borderLeftColor: '#526eff',
-    borderLeftWidth: '2px',
-  },
-  '&.cm-focused .cm-cursor': {
-    borderLeftColor: '#526eff',
-  },
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
-    backgroundColor: 'rgba(0, 0, 0, 0.08)',
-  },
-  '.cm-activeLine': {
-    backgroundColor: 'rgba(0, 0, 0, 0.03)',
-  },
-  '.cm-gutters': {
-    backgroundColor: '#fafafa',
-    color: '#b0b0b0',
-    border: 'none',
-    paddingRight: '8px',
-  },
-  '.cm-activeLineGutter': {
-    backgroundColor: 'rgba(0, 0, 0, 0.03)',
-    color: '#8a8a8a',
-  },
-  '.cm-lineNumbers .cm-gutterElement': {
-    padding: '0 8px 0 12px',
-    minWidth: '32px',
-  },
-  '.cm-foldGutter .cm-gutterElement': {
-    padding: '0 4px',
-    color: '#b0b0b0',
-    transition: 'color 150ms ease',
-  },
-  '.cm-foldGutter .cm-gutterElement:hover': {
-    color: '#6a6a6a',
-  },
-  '.cm-matchingBracket': {
-    backgroundColor: 'rgba(0, 0, 0, 0.08)',
-    outline: '1px solid rgba(0, 0, 0, 0.15)',
-  },
-  '.cm-scroller': {
-    fontFamily: 'inherit',
-    lineHeight: 'inherit',
-  },
-  '.cm-scroller::-webkit-scrollbar': {
-    width: '6px',
-    height: '6px',
-  },
-  '.cm-scroller::-webkit-scrollbar-track': {
-    background: 'transparent',
-  },
-  '.cm-scroller::-webkit-scrollbar-thumb': {
-    background: 'rgba(0, 0, 0, 0.1)',
-    borderRadius: '3px',
-  },
-  '.cm-scroller::-webkit-scrollbar-thumb:hover': {
-    background: 'rgba(0, 0, 0, 0.18)',
-  },
-}, { dark: false })
+function createRefinedLightTheme(fontSize: string) {
+  return EditorView.theme({
+    '&': {
+      backgroundColor: '#fafafa',
+      color: '#383a42',
+      fontSize,
+      fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", "Monaco", "Consolas", monospace',
+    },
+    '.cm-content': {
+      caretColor: '#526eff',
+      padding: '8px 0',
+      lineHeight: '1.5',
+    },
+    '.cm-cursor, .cm-dropCursor': {
+      borderLeftColor: '#526eff',
+      borderLeftWidth: '2px',
+    },
+    '&.cm-focused .cm-cursor': {
+      borderLeftColor: '#526eff',
+    },
+    '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
+      backgroundColor: 'rgba(0, 0, 0, 0.08)',
+    },
+    '.cm-activeLine': {
+      backgroundColor: 'rgba(0, 0, 0, 0.03)',
+    },
+    '.cm-gutters': {
+      backgroundColor: '#fafafa',
+      color: '#b0b0b0',
+      border: 'none',
+      paddingRight: '8px',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: 'rgba(0, 0, 0, 0.03)',
+      color: '#8a8a8a',
+    },
+    '.cm-lineNumbers .cm-gutterElement': {
+      padding: '0 8px 0 12px',
+      minWidth: '32px',
+    },
+    '.cm-foldGutter .cm-gutterElement': {
+      padding: '0 4px',
+      color: '#b0b0b0',
+      transition: 'color 150ms ease',
+    },
+    '.cm-foldGutter .cm-gutterElement:hover': {
+      color: '#6a6a6a',
+    },
+    '.cm-matchingBracket': {
+      backgroundColor: 'rgba(0, 0, 0, 0.08)',
+      outline: '1px solid rgba(0, 0, 0, 0.15)',
+    },
+    '.cm-scroller': {
+      fontFamily: 'inherit',
+      lineHeight: 'inherit',
+    },
+    '.cm-scroller::-webkit-scrollbar': {
+      width: '6px',
+      height: '6px',
+    },
+    '.cm-scroller::-webkit-scrollbar-track': {
+      background: 'transparent',
+    },
+    '.cm-scroller::-webkit-scrollbar-thumb': {
+      background: 'rgba(0, 0, 0, 0.1)',
+      borderRadius: '3px',
+    },
+    '.cm-scroller::-webkit-scrollbar-thumb:hover': {
+      background: 'rgba(0, 0, 0, 0.18)',
+    },
+  }, { dark: false })
+}
 
 // Dark syntax highlighting matching terminal colors
 const refinedDarkHighlightStyle = HighlightStyle.define([
@@ -223,11 +236,12 @@ const refinedLightHighlightStyle = HighlightStyle.define([
 ])
 
 // Helper to get theme extensions for a given resolved theme
-function getEditorThemeExtensions(resolvedTheme: 'light' | 'dark') {
+function getEditorThemeExtensions(resolvedTheme: 'light' | 'dark', editorFontSize: string) {
+  const fontSize = `${editorFontSize}px`
   if (resolvedTheme === 'dark') {
-    return [refinedDarkTheme, syntaxHighlighting(refinedDarkHighlightStyle)]
+    return [createRefinedDarkTheme(fontSize), syntaxHighlighting(refinedDarkHighlightStyle)]
   }
-  return [refinedLightTheme, syntaxHighlighting(refinedLightHighlightStyle)]
+  return [createRefinedLightTheme(fontSize), syntaxHighlighting(refinedLightHighlightStyle)]
 }
 
 interface CodeEditorProps {
@@ -236,6 +250,8 @@ interface CodeEditorProps {
   onChange?: (value: string) => void
   onSave?: () => void
   readOnly?: boolean
+  autoSave?: boolean
+  formatOnSave?: boolean
 }
 
 function getLanguageExtension(language?: string) {
@@ -254,14 +270,42 @@ function getLanguageExtension(language?: string) {
   }
 }
 
-export function CodeEditor({ value, language, onChange, onSave, readOnly = false }: CodeEditorProps) {
+export function CodeEditor({
+  value,
+  language,
+  onChange,
+  onSave,
+  readOnly = false,
+  autoSave = true,
+  formatOnSave = true,
+}: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const isUserChangeRef = useRef(false)
   const themeCompartmentRef = useRef(new Compartment())
   const hasThemeCompartmentRef = useRef(false)
+  const gutterCompartmentRef = useRef(new Compartment())
+  const hasGutterCompartmentRef = useRef(false)
+  const wrappingCompartmentRef = useRef(new Compartment())
+  const hasWrappingCompartmentRef = useRef(false)
+  const autoSaveRef = useRef(autoSave)
+  const formatOnSaveRef = useRef(formatOnSave)
+
+  useEffect(() => {
+    autoSaveRef.current = autoSave
+  }, [autoSave])
+
+  useEffect(() => {
+    formatOnSaveRef.current = formatOnSave
+  }, [formatOnSave])
 
   const handleSave = useCallback(() => {
+    // Autosave is not implemented yet, but keep the preference in the editor
+    // pipeline so editable mode can consume it later.
+    void autoSaveRef.current
+    // Formatting is not implemented yet, but keep the preference in the editor
+    // pipeline so save-time formatting can use it later.
+    void formatOnSaveRef.current
     onSave?.()
   }, [onSave])
 
@@ -270,7 +314,11 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
     if (!containerRef.current) return
 
     const themeCompartment = themeCompartmentRef.current
+    const gutterCompartment = gutterCompartmentRef.current
+    const wrappingCompartment = wrappingCompartmentRef.current
     hasThemeCompartmentRef.current = false
+    hasGutterCompartmentRef.current = false
+    hasWrappingCompartmentRef.current = false
 
     // Create save keymap
     const saveKeymap = keymap.of([
@@ -295,13 +343,18 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
       const startState = EditorState.create({
         doc: value,
         extensions: [
-          lineNumbers(),
+          gutterCompartment.of(getEditorGutterExtensions(preferencesStore.showLineNumbers.getState())),
+          wrappingCompartment.of(getEditorWrappingExtensions(preferencesStore.wordWrap.getState())),
           highlightActiveLine(),
-          highlightActiveLineGutter(),
           history(),
           foldGutter(),
           bracketMatching(),
-          themeCompartment.of(getEditorThemeExtensions(themeStore.resolvedTheme.getState())),
+          themeCompartment.of(
+            getEditorThemeExtensions(
+              themeStore.resolvedTheme.getState(),
+              preferencesStore.editorFontSize.getState()
+            )
+          ),
           getLanguageExtension(language),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           saveKeymap,
@@ -315,6 +368,8 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
         parent: containerRef.current,
       })
       hasThemeCompartmentRef.current = true
+      hasGutterCompartmentRef.current = true
+      hasWrappingCompartmentRef.current = true
     } catch (error) {
       // Guard against runtime extension-set incompatibilities so the project page
       // remains usable even when a dependency mismatch occurs.
@@ -341,13 +396,44 @@ export function CodeEditor({ value, language, onChange, onSave, readOnly = false
     const unsubTheme = themeStore.resolvedTheme.subscribe((resolved) => {
       if (viewRef.current && hasThemeCompartmentRef.current) {
         viewRef.current.dispatch({
-          effects: themeCompartment.reconfigure(getEditorThemeExtensions(resolved)),
+          effects: themeCompartment.reconfigure(
+            getEditorThemeExtensions(resolved, preferencesStore.editorFontSize.getState())
+          ),
+        })
+      }
+    })
+
+    const unsubEditorFontSize = preferencesStore.editorFontSize.subscribe((fontSize) => {
+      if (viewRef.current && hasThemeCompartmentRef.current) {
+        viewRef.current.dispatch({
+          effects: themeCompartment.reconfigure(
+            getEditorThemeExtensions(themeStore.resolvedTheme.getState(), fontSize)
+          ),
+        })
+      }
+    })
+
+    const unsubShowLineNumbers = preferencesStore.showLineNumbers.subscribe((showLineNumbers) => {
+      if (viewRef.current && hasGutterCompartmentRef.current) {
+        viewRef.current.dispatch({
+          effects: gutterCompartment.reconfigure(getEditorGutterExtensions(showLineNumbers)),
+        })
+      }
+    })
+
+    const unsubWordWrap = preferencesStore.wordWrap.subscribe((wordWrap) => {
+      if (viewRef.current && hasWrappingCompartmentRef.current) {
+        viewRef.current.dispatch({
+          effects: wrappingCompartment.reconfigure(getEditorWrappingExtensions(wordWrap)),
         })
       }
     })
 
     return () => {
       unsubTheme()
+      unsubEditorFontSize()
+      unsubShowLineNumbers()
+      unsubWordWrap()
       view.destroy()
       viewRef.current = null
     }
