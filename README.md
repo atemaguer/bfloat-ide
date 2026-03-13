@@ -8,7 +8,7 @@ This README is the primary documentation for the repo. It covers how the codebas
 ![React](https://img.shields.io/badge/React-19-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
 ![Bun](https://img.shields.io/badge/Bun-1.1-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
+![License](https://img.shields.io/badge/License-Apache%202.0-green)
 
 ## What It Is
 
@@ -464,4 +464,4 @@ When making changes:
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+Apache-2.0. See [`LICENSE`](LICENSE).

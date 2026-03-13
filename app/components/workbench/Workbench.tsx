@@ -16,7 +16,7 @@ import { ConvexIntegration } from '@/app/components/integrations/ConvexIntegrati
 import { ProjectSettings } from '@/app/components/project/ProjectSettings'
 import { PaymentsOverview } from '@/app/components/payments/PaymentsOverview'
 import { AppTypeProvider } from '@/app/contexts/AppTypeContext'
-import { terminal, filesystem, aiAgent, projectSync, projectFiles, secrets as secretsApi, workbench as workbenchApi } from '@/app/api/sidecar'
+import { terminal, filesystem, aiAgent, projectSync, projectFiles, secrets as secretsApi, workbench as workbenchApi, window as sidecarWindow } from '@/app/api/sidecar'
 import {
   getConvexDashboardConfigFromSecrets,
   getConvexSecretStatusFromSecrets,
@@ -1348,11 +1348,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
                         workbenchStore.setActiveTab('settings')
                       }}
                       onOpenExternal={() => {
-                        window.open(
-                          `https://dashboard.convex.dev/d/${convexDashboardConfig.deploymentName}`,
-                          '_blank',
-                          'noopener,noreferrer'
-                        )
+                        sidecarWindow
+                          .webOpenUrl(`https://dashboard.convex.dev/d/${convexDashboardConfig.deploymentName}`)
+                          .catch((error) => {
+                            console.error('Failed to open Convex dashboard:', error)
+                          })
                       }}
                     />
                   ) : (

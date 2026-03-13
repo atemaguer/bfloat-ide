@@ -25,7 +25,7 @@ import { Button } from '../ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import type { AppType } from '@/app/types/project'
 import { WebPreview, WebPreviewNavigation, WebPreviewNavigationButton } from '../ai-elements/web-preview'
-import { screenshot, getPreviewProxyUrl } from '@/app/api/sidecar'
+import { screenshot, getPreviewProxyUrl, window as sidecarWindow } from '@/app/api/sidecar'
 import { workbenchStore } from '@/app/stores/workbench'
 
 // Electron webview element type
@@ -481,7 +481,9 @@ export function Preview(props: PreviewProps) {
 
   const handleOpenExternal = useCallback(() => {
     if (currentUrl) {
-      window.open(currentUrl, '_blank')
+      sidecarWindow.webOpenUrl(currentUrl).catch((error) => {
+        console.error('Failed to open preview URL:', error)
+      })
     }
   }, [currentUrl])
 

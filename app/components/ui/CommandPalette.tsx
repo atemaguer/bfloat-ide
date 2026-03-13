@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search,
@@ -27,6 +27,7 @@ interface CommandPaletteProps {
 
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const navigate = useNavigate()
+  const location = useLocation()
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -60,7 +61,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       icon: Settings,
       shortcut: '⌘ ,',
       action: () => {
-        navigate('/settings')
+        navigate('/settings', {
+          state: {
+            returnTo: `${location.pathname}${location.search}${location.hash}`,
+          },
+        })
         onOpenChange(false)
       },
       category: 'navigation',

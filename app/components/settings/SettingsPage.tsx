@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
   Settings,
@@ -47,8 +47,13 @@ function ComingSoonSection({ title }: { title: string }) {
 
 export function SettingsPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [activeSection, setActiveSection] = useState<SettingsSection>('preferences')
   const [appVersion, setAppVersion] = useState<string>('')
+  const returnTo =
+    typeof (location.state as { returnTo?: unknown } | null)?.returnTo === 'string'
+      ? (location.state as { returnTo: string }).returnTo
+      : '/'
 
   // TODO: Update namespace doesn't exist in the new API - need to implement version fetching
   // Fetch app version on mount
@@ -58,7 +63,7 @@ export function SettingsPage() {
   }, [])
 
   const handleBackToApp = () => {
-    navigate('/')
+    navigate(returnTo)
   }
 
   useEffect(() => {
@@ -69,7 +74,7 @@ export function SettingsPage() {
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [returnTo])
 
   const renderSection = () => {
     switch (activeSection) {
@@ -95,7 +100,7 @@ export function SettingsPage() {
       {/* Left Sidebar */}
       <aside className="flex h-screen w-56 min-w-56 flex-col gap-6 border-r border-border bg-background px-2 py-4 overflow-hidden">
         <button
-          className="flex h-7 w-full items-center gap-2 rounded-md px-3 text-muted-foreground hover:text-foreground hover:bg-muted"
+          className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-3 text-muted-foreground hover:text-foreground hover:bg-muted"
           onClick={handleBackToApp}
         >
           <ArrowLeft size={16} />
@@ -107,7 +112,7 @@ export function SettingsPage() {
             <button
               key={item.id}
               className={cn(
-                'flex h-7 w-full items-center gap-2.5 rounded-md px-3 text-sm',
+                'flex h-7 w-full cursor-pointer items-center gap-2.5 rounded-md px-3 text-sm',
                 activeSection === item.id
                   ? 'bg-muted text-foreground'
                   : 'text-muted-foreground hover:text-foreground hover:bg-muted'
