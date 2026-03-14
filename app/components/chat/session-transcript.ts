@@ -20,6 +20,9 @@ export function applyAgentMessageToTranscript(
   messages: ChatMessage[],
   msg: AgentMessage,
 ): ChatMessage[] {
+  const messageTimestamp =
+    typeof msg.timestamp === 'string' && msg.timestamp.length > 0 ? new Date(msg.timestamp).toISOString() : new Date().toISOString()
+
   if (msg.type === 'text') {
     const textContent = msg.content as string
     const lastMsg = messages[messages.length - 1]
@@ -52,7 +55,7 @@ export function applyAgentMessageToTranscript(
         role: 'assistant',
         content: textContent,
         parts: [{ type: 'text', text: textContent }],
-        createdAt: new Date().toISOString(),
+        createdAt: messageTimestamp,
       },
     ]
   }
@@ -93,7 +96,7 @@ export function applyAgentMessageToTranscript(
         role: 'assistant',
         content: '',
         parts: [toolPart],
-        createdAt: new Date().toISOString(),
+        createdAt: messageTimestamp,
       },
     ]
   }
@@ -145,7 +148,63 @@ export function applyAgentMessageToTranscript(
         role: 'assistant',
         content: reasoningContent || '',
         parts: [{ type: 'reasoning', text: reasoningContent || '' }],
-        createdAt: new Date().toISOString(),
+        createdAt: messageTimestamp,
+      },
+    ]
+  }
+
+  if (msg.type === 'done') {
+    const doneContent = msg.content as { result?: string; interrupted?: boolean } | undefined
+    const finalResult = typeof doneContent?.result === 'string' ? doneContent.result : ''
+    if (!finalResult || doneContent?.interrupted) {
+      return messages
+    }
+
+    const lastMsg = messages[messages.length - 1]
+    if (lastMsg && lastMsg.role === 'assistant') {
+      const existingParts = lastMsg.parts || []
+      const textPartIndex = existingParts.findLastIndex((part) => part.type === 'text')
+      const existingText =
+        textPartIndex >= 0 && existingParts[textPartIndex] && 'text' in existingParts[textPartIndex]
+          ? (existingParts[textPartIndex].text || '')
+          : lastMsg.content || ''
+
+      if (existingText === finalResult) {
+        return messages
+      }
+
+      const nextText =
+        existingText && finalResult.startsWith(existingText)
+          ? finalResult
+          : existingText && existingText.startsWith(finalResult)
+            ? existingText
+            : finalResult
+
+      const nextParts =
+        textPartIndex >= 0
+          ? existingParts.map((part, index) =>
+              index === textPartIndex ? { type: 'text' as const, text: nextText } : part
+            )
+          : [...existingParts, { type: 'text' as const, text: nextText }]
+
+      return [
+        ...messages.slice(0, -1),
+        {
+          ...lastMsg,
+          content: nextText,
+          parts: nextParts,
+        },
+      ]
+    }
+
+    return [
+      ...messages,
+      {
+        id: generateId(),
+        role: 'assistant',
+        content: finalResult,
+        parts: [{ type: 'text', text: finalResult }],
+        createdAt: messageTimestamp,
       },
     ]
   }

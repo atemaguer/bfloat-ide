@@ -99,6 +99,8 @@ export interface AgentSession {
   id: string
   projectId: string
   sessionId: string  // The CLI session ID
+  runtimeSessionId?: string | null
+  providerSessionId?: string | null
   provider: 'claude' | 'codex'
   model?: string  // The model ID used for this session (e.g., 'claude-sonnet-4-20250514')
   name?: string | null

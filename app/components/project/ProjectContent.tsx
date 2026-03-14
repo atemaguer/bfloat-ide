@@ -4,17 +4,21 @@ import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'reac
 import { generateId } from 'ai'
 
 import type { Project, ChatMessage, AgentSession } from '@/app/types/project'
-import type { BackgroundSessionData, ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
+import type { BackgroundSessionInfo, ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { Chat } from '@/app/components/chat/Chat'
 import { Workbench, WorkbenchHandle } from '@/app/components/workbench/Workbench'
 import { workbenchStore } from '@/app/stores/workbench'
 import { deployStore } from '@/app/stores/deploy'
 import { providerAuthStore, providerTypeToAgentProviderId } from '@/app/stores/provider-auth'
+import { projectSessionsStore } from '@/app/stores/project-sessions'
 import { aiAgent, localProjects } from '@/app/api/sidecar'
 
 // Local session info - unified format for SessionTabs
 interface LocalSessionInfo {
   sessionId: string
+  runtimeSessionId?: string | null
+  providerSessionId?: string | null
+  createdAt: number
   lastModified: number
   name?: string
   provider?: 'claude' | 'codex'
@@ -64,11 +68,16 @@ export function ProjectContent({
   const refreshPreviewRef = useRef<(() => void) | null>(null)
   const workbenchRef = useRef<WorkbenchHandle>(null)
   const defaultProvider = providerTypeToAgentProviderId(providerSettings.defaultProvider)
+  const selectedSessionStore = useMemo(
+    () => projectSessionsStore.getSelectedSessionStore(project.id, initialProvider || defaultProvider),
+    [defaultProvider, initialProvider, project.id]
+  )
+  const selectedSessionId = useStore(selectedSessionStore)
 
   // Session state - loaded from projects.json with CLI fallback
   const [sessions, setSessions] = useState<LocalSessionInfo[]>([])
   const [discoveredSessionId, setDiscoveredSessionId] = useState<string | null>(null)
-  const [activeBackgroundSession, setActiveBackgroundSession] = useState<BackgroundSessionData | null>(null)
+  const [projectBackgroundSessions, setProjectBackgroundSessions] = useState<BackgroundSessionInfo[]>([])
   const hasLoadedSessions = useRef(false)
   const hasAlignedProjectPath = !!projectPath && storeProjectId === project.id
 
@@ -76,37 +85,40 @@ export function ProjectContent({
   const loadSessions = useCallback(async () => {
     try {
       console.log('[ProjectContent] Loading sessions from projects.json for:', project.id)
-      const [projectSessions, backgroundResult] = await Promise.all([
+      const [projectSessions, backgroundSessions] = await Promise.all([
         localProjects.listSessions(project.id),
-        aiAgent.getBackgroundSession(project.id),
+        aiAgent.listBackgroundSessions(),
       ])
 
-      const runningBackgroundSession =
-        backgroundResult.success && backgroundResult.session?.status === 'running'
-          ? backgroundResult.session
-          : null
-      setActiveBackgroundSession(runningBackgroundSession)
+      const matchingBackgroundSessions = backgroundSessions
+        .filter((session) => session.projectId === project.id)
+        .sort((a, b) => b.startedAt - a.startedAt)
+      setProjectBackgroundSessions(matchingBackgroundSessions)
 
       if (projectSessions && projectSessions.length > 0) {
         let normalizedProjectSessions = projectSessions
 
-        if (hasAlignedProjectPath && projectPath && runningBackgroundSession) {
-          const activePersistedSession = projectSessions.find(
-            (session: AgentSession) => session.sessionId === runningBackgroundSession.sessionId
-          )
+        if (hasAlignedProjectPath && projectPath && matchingBackgroundSessions.length > 0) {
+          for (const backgroundSession of matchingBackgroundSessions) {
+            const persistedSession = normalizedProjectSessions.find(
+              (session: AgentSession) => session.sessionId === backgroundSession.sessionId
+            )
 
-          if (activePersistedSession?.provider === 'claude') {
+            if (persistedSession?.provider !== 'claude') {
+              continue
+            }
+
             const persistedResult = await aiAgent.readSession(
-              runningBackgroundSession.sessionId,
-              activePersistedSession.provider,
+              backgroundSession.sessionId,
+              persistedSession.provider,
               projectPath
             )
 
             if (!persistedResult.success) {
-              normalizedProjectSessions = projectSessions.filter(
-                (session: AgentSession) => session.sessionId !== runningBackgroundSession.sessionId
+              normalizedProjectSessions = normalizedProjectSessions.filter(
+                (session: AgentSession) => session.sessionId !== backgroundSession.sessionId
               )
-              localProjects.deleteSession(project.id, runningBackgroundSession.sessionId).catch((error) => {
+              localProjects.deleteSession(project.id, backgroundSession.sessionId).catch((error) => {
                 console.warn('[ProjectContent] Failed to delete stale sidecar session alias:', error)
               })
             }
@@ -116,21 +128,51 @@ export function ProjectContent({
         // Convert AgentSession to LocalSessionInfo format
         const sessionInfos: LocalSessionInfo[] = normalizedProjectSessions.map((s: AgentSession) => ({
           sessionId: s.sessionId,
+          runtimeSessionId: s.runtimeSessionId ?? null,
+          providerSessionId: s.providerSessionId ?? null,
+          createdAt: new Date(s.createdAt).getTime(),
           lastModified: new Date(s.lastUsedAt || s.createdAt).getTime(),
           name: s.name || undefined,
           provider: s.provider,
         }))
 
-        // Sort by lastModified descending (newest first)
-        sessionInfos.sort((a, b) => b.lastModified - a.lastModified)
+        // Keep chat tabs stable by creation order.
+        sessionInfos.sort((a, b) => a.createdAt - b.createdAt)
 
         console.log('[ProjectContent] Loaded sessions from projects.json:', sessionInfos.length)
+        console.log('[ProjectContent] Stable session order:', sessionInfos.map((session) => ({
+          sessionId: session.sessionId,
+          runtimeSessionId: session.runtimeSessionId ?? null,
+          providerSessionId: session.providerSessionId ?? null,
+          createdAt: session.createdAt,
+          lastModified: session.lastModified,
+        })))
         setSessions(sessionInfos)
 
-        // Set the most recent session if we don't have one yet
-        if (!discoveredSessionId && sessionInfos.length > 0) {
-          setDiscoveredSessionId(sessionInfos[0].sessionId)
-          console.log('[ProjectContent] Most recent session:', sessionInfos[0].sessionId)
+        const initialStableSessionId = sessionInfos[0]?.sessionId || null
+        const nextSelectedSessionId =
+          selectedSessionId && sessionInfos.some((session) => session.sessionId === selectedSessionId)
+            ? selectedSessionId
+            : initialStableSessionId
+        const nextDiscoveredSessionId =
+          discoveredSessionId && sessionInfos.some((session) => session.sessionId === discoveredSessionId)
+            ? discoveredSessionId
+            : initialStableSessionId
+        console.log('[ProjectContent] Persisted session selection reconciliation', {
+          initialStableSessionId,
+          previousSelectedSessionId: selectedSessionId,
+          nextSelectedSessionId,
+          previousDiscoveredSessionId: discoveredSessionId,
+          nextDiscoveredSessionId,
+        })
+
+        if (nextDiscoveredSessionId !== discoveredSessionId) {
+          setDiscoveredSessionId(nextDiscoveredSessionId)
+          console.log('[ProjectContent] Stable discovered session updated:', nextDiscoveredSessionId)
+        }
+        if (nextSelectedSessionId !== selectedSessionId) {
+          projectSessionsStore.setSelectedSessionId(project.id, nextSelectedSessionId, initialProvider || defaultProvider)
+          console.log('[ProjectContent] Active session aligned to persisted session catalog:', nextSelectedSessionId)
         }
       } else {
         console.log('[ProjectContent] No sessions in projects.json, trying CLI storage...')
@@ -140,19 +182,66 @@ export function ProjectContent({
           const result = await aiAgent.listSessions(provider, projectPath)
           if (result.success && result.sessions && result.sessions.length > 0) {
             console.log('[ProjectContent] Found sessions in CLI storage:', result.sessions.length)
-            setSessions(result.sessions)
-            if (!discoveredSessionId) {
-              setDiscoveredSessionId(result.sessions[0].sessionId)
+            const cliSessions: LocalSessionInfo[] = result.sessions.map((session) => ({
+              ...session,
+              createdAt: session.lastModified,
+            })).sort((a, b) => a.createdAt - b.createdAt)
+            console.log('[ProjectContent] Stable CLI session order:', cliSessions.map((session) => ({
+              sessionId: session.sessionId,
+              runtimeSessionId: session.runtimeSessionId ?? null,
+              createdAt: session.createdAt,
+              lastModified: session.lastModified,
+            })))
+            setSessions(cliSessions)
+            const initialCliSessionId = cliSessions[0]?.sessionId || null
+            const nextSelectedCliSessionId =
+              selectedSessionId && cliSessions.some((session) => session.sessionId === selectedSessionId)
+                ? selectedSessionId
+                : initialCliSessionId
+            const nextDiscoveredCliSessionId =
+              discoveredSessionId && cliSessions.some((session) => session.sessionId === discoveredSessionId)
+                ? discoveredSessionId
+                : initialCliSessionId
+            console.log('[ProjectContent] CLI session selection reconciliation', {
+              initialCliSessionId,
+              previousSelectedSessionId: selectedSessionId,
+              nextSelectedSessionId: nextSelectedCliSessionId,
+              previousDiscoveredSessionId: discoveredSessionId,
+              nextDiscoveredSessionId: nextDiscoveredCliSessionId,
+            })
+            if (nextDiscoveredCliSessionId !== discoveredSessionId) {
+              setDiscoveredSessionId(nextDiscoveredCliSessionId)
+            }
+            if (nextSelectedCliSessionId !== selectedSessionId) {
+              projectSessionsStore.setSelectedSessionId(project.id, nextSelectedCliSessionId, initialProvider || defaultProvider)
+              console.log('[ProjectContent] Active session aligned to CLI session catalog:', nextSelectedCliSessionId)
             }
           } else {
             console.log('[ProjectContent] No sessions found anywhere')
+            setSessions([])
+            if (discoveredSessionId !== null) {
+              setDiscoveredSessionId(null)
+            }
+            if (selectedSessionId !== null) {
+              projectSessionsStore.setSelectedSessionId(project.id, null, initialProvider || defaultProvider)
+              console.log('[ProjectContent] Cleared stale selected session because no sessions remain')
+            }
+          }
+        } else {
+          setSessions([])
+          if (discoveredSessionId !== null) {
+            setDiscoveredSessionId(null)
+          }
+          if (selectedSessionId !== null) {
+            projectSessionsStore.setSelectedSessionId(project.id, null, initialProvider || defaultProvider)
+            console.log('[ProjectContent] Cleared stale selected session because no aligned session sources remain')
           }
         }
       }
     } catch (err) {
       console.error('[ProjectContent] Failed to load sessions:', err)
     }
-  }, [project.id, projectPath, hasAlignedProjectPath, initialProvider, defaultProvider, discoveredSessionId])
+  }, [project.id, projectPath, hasAlignedProjectPath, initialProvider, defaultProvider, discoveredSessionId, selectedSessionId])
 
   // Initial session + deployment load
   useEffect(() => {
@@ -185,13 +274,24 @@ export function ProjectContent({
   }, [])
 
   // Get current provider (prefer active running background session).
+  const selectedStableSession = useMemo(() => {
+    const preferredSessionId =
+      (selectedSessionId && sessions.some((session) => session.sessionId === selectedSessionId) ? selectedSessionId : null) ??
+      (discoveredSessionId && sessions.some((session) => session.sessionId === discoveredSessionId) ? discoveredSessionId : null)
+
+    return preferredSessionId
+      ? sessions.find((session) => session.sessionId === preferredSessionId) ?? null
+      : null
+  }, [discoveredSessionId, selectedSessionId, sessions])
+
   const currentProvider = useMemo(() => {
-    return activeBackgroundSession?.provider || initialProvider || project.latestAgentSession?.provider || defaultProvider
-  }, [activeBackgroundSession?.provider, initialProvider, project.latestAgentSession?.provider, defaultProvider])
+    return selectedStableSession?.provider || initialProvider || project.latestAgentSession?.provider || defaultProvider
+  }, [defaultProvider, initialProvider, project.latestAgentSession?.provider, selectedStableSession?.provider])
 
   const hasExistingSession = sessions.length > 0 || !!(
-    activeBackgroundSession?.sessionId ||
+    projectBackgroundSessions.length > 0 ||
     project.latestAgentSession?.sessionId ||
+    selectedSessionId ||
     discoveredSessionId
   )
 
@@ -211,24 +311,27 @@ export function ProjectContent({
     return []
   }, [initialProvider, project.description, hasExistingSession])
 
-  // Calculate autoStart flag
-  const shouldAutoStart = !!initialProvider && hasAlignedProjectPath && syncStatus === 'ready' && initialMessages.length > 0
+  // Auto-start should remain armed for new Home-created projects even before the
+  // workspace path is usable. Chat waits to actually send until the path is ready.
+  const shouldAutoStart = !!initialProvider && syncStatus === 'ready' && initialMessages.length > 0
 
-  // Resolve session ID: prefer persisted/provider session IDs for tab selection,
-  // then fall back to the active background sidecar session if nothing is stored yet.
+  // Resolve session ID from stable persisted session identity.
+  // Background sessions are used for provider/runtime state, not visible tab selection.
   const resolvedSessionId =
-    sessions[0]?.sessionId ?? project.latestAgentSession?.sessionId ?? discoveredSessionId ?? activeBackgroundSession?.sessionId
+    selectedStableSession?.sessionId ?? project.latestAgentSession?.sessionId
 
   // Debug: Log the auto-start decision factors
   console.log('[ProjectContent] Auto-start decision:', {
     initialProvider,
     hasProjectPath: hasAlignedProjectPath,
+    projectPath,
     initialMessagesLength: initialMessages.length,
     latestAgentSession: project.latestAgentSession?.sessionId,
     discoveredSessionId,
     resolvedSessionId,
     sessionsCount: sessions.length,
     shouldAutoStart,
+    activeSessionId: selectedSessionId,
     projectDescription: project.description?.substring(0, 50),
   })
 
@@ -264,6 +367,14 @@ export function ProjectContent({
                 initialModel={initialModel}
                 autoStart={shouldAutoStart}
                 initialSessionId={resolvedSessionId}
+                onSessionIdChange={(sessionId) => {
+                  console.log('[ProjectContent] onSessionIdChange:', {
+                    previousActiveSessionId: selectedSessionId,
+                    nextSessionId: sessionId,
+                  })
+                  projectSessionsStore.setSelectedSessionId(project.id, sessionId, initialProvider || defaultProvider)
+                  setDiscoveredSessionId(sessionId)
+                }}
                 projectHasConvex={!!convexUrl}
                 projectHasFirebase={!!project.firebaseProjectId}
                 projectHasRevenuecat={!!project.revenuecatProjectId}
