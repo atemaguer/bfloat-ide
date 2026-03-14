@@ -61,6 +61,16 @@ interface ReconnectSessionInfo {
   source: 'mount' | 'tab'
 }
 
+interface ReconnectResult {
+  attached: boolean
+  canonicalSessionId: string | null
+}
+
+interface SendPromptOptions {
+  forceNewSession?: boolean
+  retryConflictWithFreshSession?: boolean
+}
+
 interface UseLocalAgentOptions {
   cwd: string
   provider?: ProviderId
@@ -79,6 +89,7 @@ interface UseLocalAgentOptions {
   onComplete?: () => void
   onSessionId?: (sessionId: string) => void // Called when we get a session ID from init
   onReconnectSession?: (info: ReconnectSessionInfo) => Promise<number | undefined> | number | undefined // Called when reattaching to an existing session
+  enableMountReconnect?: boolean
 }
 
 export function useLocalAgent(options: UseLocalAgentOptions) {
@@ -118,13 +129,27 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
     requestedResumeSessionIdRef.current = options.resumeProviderSessionId || null
     if (options.sessionId && sessionIdRef.current !== options.sessionId) {
+      console.log('[useLocalAgent] Syncing internal live session ref from options.sessionId', {
+        previousSessionId: sessionIdRef.current,
+        nextSessionId: options.sessionId,
+      })
       sessionIdRef.current = options.sessionId
+      setState((prev) => ({ ...prev, sessionId: options.sessionId }))
     }
-    if (
+    if (!skipResumeOnceRef.current && options.resumeProviderSessionId === null && providerSessionIdRef.current !== null) {
+      console.log('[useLocalAgent] Clearing provider resume session ref from options.resumeProviderSessionId=null', {
+        previousProviderSessionId: providerSessionIdRef.current,
+      })
+      providerSessionIdRef.current = null
+    } else if (
       !skipResumeOnceRef.current &&
       options.resumeProviderSessionId &&
       providerSessionIdRef.current !== options.resumeProviderSessionId
     ) {
+      console.log('[useLocalAgent] Syncing provider resume session ref from options.resumeProviderSessionId', {
+        previousProviderSessionId: providerSessionIdRef.current,
+        nextProviderSessionId: options.resumeProviderSessionId,
+      })
       providerSessionIdRef.current = options.resumeProviderSessionId
     }
   })
@@ -373,34 +398,48 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
   // Reconnect to a background session on mount (if one exists for this project)
   useEffect(() => {
-    if (!options.projectId || hasReconnected.current) return
+    if (!options.projectId || !options.enableMountReconnect || hasReconnected.current) return
     hasReconnected.current = true
 
     const reconnect = async () => {
       try {
-        console.log('[useLocalAgent] Checking for background session for project:', options.projectId)
-        const result = await aiAgent.getBackgroundSession(options.projectId!)
+        console.log('[useLocalAgent] Checking for background sessions for project:', options.projectId)
+        const sessions = await aiAgent.listBackgroundSessions()
+        const projectSessions = sessions
+          .filter((session) => session.projectId === options.projectId)
+          .sort((a, b) => b.startedAt - a.startedAt)
 
-        if (!result.success || !result.session) {
+        if (projectSessions.length === 0) {
           console.log('[useLocalAgent] No background session found')
           return
         }
 
-        const bgSession = result.session
+        if (projectSessions.length > 1) {
+          console.log('[useLocalAgent] Skipping mount reconnect because project has multiple background sessions', {
+            projectId: options.projectId,
+            sessions: projectSessions.map((session) => ({
+              sessionId: session.sessionId,
+              provider: session.provider,
+              status: session.status,
+              startedAt: session.startedAt,
+            })),
+          })
+          return
+        }
+
+        const bgSession = projectSessions[0]
         console.log('[useLocalAgent] Found background session:', {
           sessionId: bgSession.sessionId,
           status: bgSession.status,
-          streamChannel: bgSession.streamChannel,
         })
 
-        // Set the session ID so future prompts use the same session
-        sessionIdRef.current = bgSession.sessionId
-        setState((prev) => ({
-          ...prev,
-          sessionId: bgSession.sessionId,
-        }))
-
         if (bgSession.status === 'running') {
+          // Only running background sessions should seed the live session ref.
+          sessionIdRef.current = bgSession.sessionId
+          setState((prev) => ({
+            ...prev,
+            sessionId: bgSession.sessionId,
+          }))
           setState((prev) => ({ ...prev, isRunning: true }))
           const afterSeq = await onReconnectSessionRef.current?.({
             sessionId: bgSession.sessionId,
@@ -417,6 +456,8 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         } else if (bgSession.status === 'completed') {
           // Session completed while user was away
           console.log('[useLocalAgent] Background session already completed')
+          sessionIdRef.current = null
+          setState((prev) => ({ ...prev, sessionId: null, isRunning: false }))
           await onReconnectSessionRef.current?.({
             sessionId: bgSession.sessionId,
             provider: bgSession.provider,
@@ -430,6 +471,8 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         } else if (bgSession.status === 'error') {
           // Session errored while user was away
           console.log('[useLocalAgent] Background session errored')
+          sessionIdRef.current = null
+          setState((prev) => ({ ...prev, sessionId: null, isRunning: false }))
           await onReconnectSessionRef.current?.({
             sessionId: bgSession.sessionId,
             provider: bgSession.provider,
@@ -448,7 +491,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
     reconnect()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options.projectId, reconnectToRunningSession])
+  }, [options.enableMountReconnect, options.projectId, reconnectToRunningSession])
 
   // Invalidate session when cwd changes to a DIFFERENT project
   // Don't terminate if transitioning from empty string to valid path (initial load)
@@ -582,21 +625,33 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
   // Send a prompt to the agent
   const sendPrompt = useCallback(
-    async (message: string, displayMessage?: PromptDisplayMessage) => {
+    async (message: string, displayMessage?: PromptDisplayMessage, sendOptions?: SendPromptOptions) => {
       console.log('[useLocalAgent] sendPrompt called with:', message)
       try {
         setState((prev) => ({ ...prev, isRunning: true, error: null }))
 
         // Create session if not exists OR if there are pending env vars
         // Pending env vars (e.g., Apple credentials for iOS deployment) require a new session
-        let sessionId = sessionIdRef.current
+        const shouldForceNewSession = sendOptions?.forceNewSession === true
+        let sessionId = shouldForceNewSession ? null : sessionIdRef.current
         const hasPendingEnvVars = workbenchStore.hasPendingEnvVars()
 
         console.log('[useLocalAgent] Has pending env vars:', hasPendingEnvVars)
+        if (shouldForceNewSession) {
+          console.log('[useLocalAgent] sendPrompt forcing a fresh runtime session', {
+            previousSessionId: sessionIdRef.current,
+            resumeProviderSessionId: providerSessionIdRef.current || options.resumeProviderSessionId || null,
+          })
+        }
 
-        if (!sessionId || hasPendingEnvVars) {
-          if (hasPendingEnvVars && sessionId) {
+        if (!sessionId || hasPendingEnvVars || shouldForceNewSession) {
+          if (hasPendingEnvVars && sessionIdRef.current) {
             console.log('[useLocalAgent] Creating new session to pick up pending env vars')
+          }
+          if (shouldForceNewSession && sessionIdRef.current) {
+            console.log('[useLocalAgent] Ignoring currently attached runtime session for fresh prompt', {
+              attachedSessionId: sessionIdRef.current,
+            })
           }
           sessionId = await createSession()
         }
@@ -621,6 +676,18 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
             result = await aiAgent.prompt(sessionId, message, displayMessage)
             if (!result.success || !result.streamChannel) {
               throw new Error(result.error || 'Failed to send prompt after session recovery')
+            }
+          } else if (result.error === 'Conflict' && sendOptions?.retryConflictWithFreshSession) {
+            console.warn('[useLocalAgent] Session conflict, retrying with a fresh runtime session:', {
+              oldSessionId: sessionId,
+              resumeProviderSessionId: providerSessionIdRef.current || options.resumeProviderSessionId || null,
+            })
+            sessionIdRef.current = null
+            setState((prev) => ({ ...prev, sessionId: null }))
+            sessionId = await createSession()
+            result = await aiAgent.prompt(sessionId, message, displayMessage)
+            if (!result.success || !result.streamChannel) {
+              throw new Error(result.error || 'Failed to send prompt after conflict recovery')
             }
           } else {
             throw new Error(result.error || 'Failed to send prompt')
@@ -677,7 +744,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   // Reconnect to a specific background session by session ID
   // Used when switching back to a session tab that was previously detached
   const reconnectToSession = useCallback(
-    async (sessionId: string, afterSeq?: number): Promise<boolean> => {
+    async (sessionId: string, afterSeq?: number): Promise<ReconnectResult> => {
       try {
         console.log('[useLocalAgent] reconnectToSession called for:', sessionId)
         const result = await aiAgent.getBackgroundSessionById(sessionId)
@@ -689,7 +756,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
             success: result.success,
             status: bgSession?.status || null,
           })
-          return false
+          return { attached: false, canonicalSessionId: null }
         }
 
         const canonicalSessionId = bgSession.sessionId
@@ -702,10 +769,14 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
           streamChannel: bgSession.streamChannel || null,
         })
 
-        return reconnectToRunningSession(canonicalSessionId, { afterSeq })
+        const attached = await reconnectToRunningSession(canonicalSessionId, { afterSeq })
+        return {
+          attached,
+          canonicalSessionId,
+        }
       } catch (error) {
         console.error('[useLocalAgent] Failed to reconnect to session:', error)
-        return false
+        return { attached: false, canonicalSessionId: null }
       }
     },
     [reconnectToRunningSession]

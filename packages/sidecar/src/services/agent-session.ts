@@ -928,8 +928,10 @@ const MAX_BUFFERED_FRAMES = 500;
 const REVENUECAT_MCP_URL = "https://mcp.revenuecat.ai/mcp";
 const STRIPE_MCP_URL = "https://mcp.stripe.com";
 
-/** projectId → BackgroundSession */
+/** runtime sessionId → BackgroundSession */
 const backgroundSessions = new Map<string, BackgroundSession>();
+/** projectId → Set<runtime sessionId> */
+const projectToSessions = new Map<string, Set<string>>();
 /** sessionId → projectId  (reverse lookup) */
 const sessionToProject = new Map<string, string>();
 /** realSessionId (provider's ID, e.g., Claude CLI UUID) → sidecar sessionId */
@@ -951,15 +953,16 @@ function registerBackgroundSession(
     startedAt: Date.now(),
     frames: [],
   };
-  backgroundSessions.set(projectId, bg);
+  backgroundSessions.set(sessionId, bg);
   sessionToProject.set(sessionId, projectId);
+  const projectSessions = projectToSessions.get(projectId) ?? new Set<string>();
+  projectSessions.add(sessionId);
+  projectToSessions.set(projectId, projectSessions);
   console.log(`[AgentSession] Registered background session ${sessionId} for project ${projectId}`);
 }
 
 function bufferFrame(sessionId: string, frame: AgentFrame): void {
-  const projectId = sessionToProject.get(sessionId);
-  if (!projectId) return;
-  const bg = backgroundSessions.get(projectId);
+  const bg = backgroundSessions.get(sessionId);
   if (!bg) return;
   bg.frames.push(frame);
   if (bg.frames.length > MAX_BUFFERED_FRAMES) {
@@ -982,13 +985,30 @@ function bufferFrame(sessionId: string, frame: AgentFrame): void {
 }
 
 export function getBackgroundSessionByProject(projectId: string): BackgroundSession | null {
-  return backgroundSessions.get(projectId) ?? null;
+  const sessionIds = projectToSessions.get(projectId);
+  if (!sessionIds || sessionIds.size === 0) return null;
+
+  let bestRunning: BackgroundSession | null = null;
+  let bestOther: BackgroundSession | null = null;
+
+  for (const sessionId of sessionIds) {
+    const session = backgroundSessions.get(sessionId);
+    if (!session) continue;
+
+    if (session.status === "running") {
+      if (!bestRunning || session.startedAt > bestRunning.startedAt) {
+        bestRunning = session;
+      }
+    } else if (!bestOther || session.startedAt > bestOther.startedAt) {
+      bestOther = session;
+    }
+  }
+
+  return bestRunning ?? bestOther;
 }
 
 export function getBackgroundSessionById(sessionId: string): BackgroundSession | null {
-  const projectId = sessionToProject.get(sessionId);
-  if (!projectId) return null;
-  return backgroundSessions.get(projectId) ?? null;
+  return backgroundSessions.get(sessionId) ?? null;
 }
 
 /**
@@ -1009,8 +1029,15 @@ export function listBackgroundSessions(): BackgroundSession[] {
 export function unregisterBackgroundSession(sessionId: string): boolean {
   const projectId = sessionToProject.get(sessionId);
   if (!projectId) return false;
-  backgroundSessions.delete(projectId);
+  backgroundSessions.delete(sessionId);
   sessionToProject.delete(sessionId);
+  const projectSessions = projectToSessions.get(projectId);
+  if (projectSessions) {
+    projectSessions.delete(sessionId);
+    if (projectSessions.size === 0) {
+      projectToSessions.delete(projectId);
+    }
+  }
   // Clean up realId → sessionId mapping
   for (const [realId, intId] of realIdToSessionId) {
     if (intId === sessionId) {

@@ -20,6 +20,9 @@ export function applyAgentMessageToTranscript(
   messages: ChatMessage[],
   msg: AgentMessage,
 ): ChatMessage[] {
+  const messageTimestamp =
+    typeof msg.timestamp === 'string' && msg.timestamp.length > 0 ? new Date(msg.timestamp).toISOString() : new Date().toISOString()
+
   if (msg.type === 'text') {
     const textContent = msg.content as string
     const lastMsg = messages[messages.length - 1]
@@ -52,7 +55,7 @@ export function applyAgentMessageToTranscript(
         role: 'assistant',
         content: textContent,
         parts: [{ type: 'text', text: textContent }],
-        createdAt: new Date().toISOString(),
+        createdAt: messageTimestamp,
       },
     ]
   }
@@ -93,7 +96,7 @@ export function applyAgentMessageToTranscript(
         role: 'assistant',
         content: '',
         parts: [toolPart],
-        createdAt: new Date().toISOString(),
+        createdAt: messageTimestamp,
       },
     ]
   }
@@ -145,7 +148,7 @@ export function applyAgentMessageToTranscript(
         role: 'assistant',
         content: reasoningContent || '',
         parts: [{ type: 'reasoning', text: reasoningContent || '' }],
-        createdAt: new Date().toISOString(),
+        createdAt: messageTimestamp,
       },
     ]
   }
