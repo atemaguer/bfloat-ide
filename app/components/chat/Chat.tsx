@@ -1968,6 +1968,7 @@ export function Chat({
           hideReconnectNotice()
         }
         console.log('[Chat] Agent completed:', msg.content)
+        setSessionMessages(targetSessionKey, (prev) => applyAgentMessageToTranscript(prev, msg))
         // Capture usage data from completion message
         if (msg.metadata?.tokens) {
           usageRef.current.outputTokens += msg.metadata.tokens as number
