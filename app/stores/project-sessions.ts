@@ -8,6 +8,7 @@ export type ProjectSessionStatus = 'idle' | 'hydrating' | 'running' | 'completed
 export interface ProjectSessionViewState {
   messages: ChatMessage[]
   status: ProjectSessionStatus
+  isAttachedToTransport: boolean
   isHydrated: boolean
   lastHydratedAt: number | null
   lastRuntimeSeenAt: number | null
@@ -17,7 +18,8 @@ export interface ProjectSessionViewState {
   runtimeSessionId: string | null
   providerSessionId: string | null
   provider: ProviderId
-  lastSeq: number
+  transcriptLastSeq: number
+  runtimeLastSeq: number
   error: string | null
 }
 
@@ -27,6 +29,7 @@ function createSessionViewState(provider: ProviderId, messages: ChatMessage[] = 
   return {
     messages,
     status: 'idle',
+    isAttachedToTransport: false,
     isHydrated: messages.length > 0,
     lastHydratedAt: messages.length > 0 ? Date.now() : null,
     lastRuntimeSeenAt: null,
@@ -36,7 +39,8 @@ function createSessionViewState(provider: ProviderId, messages: ChatMessage[] = 
     runtimeSessionId: null,
     providerSessionId: null,
     provider,
-    lastSeq: 0,
+    transcriptLastSeq: 0,
+    runtimeLastSeq: 0,
     error: null,
   }
 }

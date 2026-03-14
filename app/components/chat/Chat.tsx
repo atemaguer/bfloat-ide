@@ -266,6 +266,7 @@ export function Chat({
   const [projectSecrets, setProjectSecrets] = useState<SecretEntry[]>([])
   const activePendingPromptIdRef = useRef<string | null>(null)
   const pendingSessionPromotionRef = useRef<{ stableSessionId: string; provider: ProviderId } | null>(null)
+  const suppressedCompletionGateRuntimeIdsRef = useRef<Set<string>>(new Set())
   // Flag to prevent session restoration effects from undoing explicit new-session actions
   const didStartNewSession = useRef(false)
   const shouldPreserveInitialUserMessage = useCallback(
@@ -388,8 +389,10 @@ export function Chat({
       options?: {
         providerSessionId?: string | null
         runtimeSessionId?: string | null
-        lastSeq?: number
+        transcriptLastSeq?: number
+        runtimeLastSeq?: number
         status?: ProjectSessionStatus
+        isAttachedToTransport?: boolean
         isResumingSession?: boolean
         isLoadingSession?: boolean
         error?: string | null
@@ -399,6 +402,7 @@ export function Chat({
       return {
         messages,
         status: options?.status ?? 'completed',
+        isAttachedToTransport: options?.isAttachedToTransport ?? false,
         isHydrated: true,
         lastHydratedAt: now,
         lastRuntimeSeenAt: options?.runtimeSessionId ? now : null,
@@ -408,7 +412,8 @@ export function Chat({
         runtimeSessionId: options?.runtimeSessionId ?? null,
         providerSessionId: options?.providerSessionId ?? null,
         provider: sessionProvider,
-        lastSeq: options?.lastSeq ?? 0,
+        transcriptLastSeq: options?.transcriptLastSeq ?? 0,
+        runtimeLastSeq: options?.runtimeLastSeq ?? 0,
         error: options?.error ?? null,
       }
     },
@@ -447,7 +452,32 @@ export function Chat({
       updateSessionViewState(sessionKey, (prev) => ({
         ...prev,
         status: isStreamingValue ? 'running' : prev.error ? 'error' : 'completed',
+        isAttachedToTransport: isStreamingValue,
         lastRuntimeSeenAt: isStreamingValue ? Date.now() : prev.lastRuntimeSeenAt,
+      }))
+    },
+    [updateSessionViewState]
+  )
+
+  const setSessionTransportAttached = useCallback(
+    (sessionKey: string, isAttachedToTransport: boolean) => {
+      updateSessionViewState(sessionKey, (prev) => ({
+        ...prev,
+        isAttachedToTransport,
+      }))
+    },
+    [updateSessionViewState]
+  )
+
+  const markSessionRuntimeActive = useCallback(
+    (sessionKey: string, runtimeSessionId: string | null, isAttachedToTransport?: boolean) => {
+      updateSessionViewState(sessionKey, (prev) => ({
+        ...prev,
+        status: 'running',
+        runtimeSessionId: runtimeSessionId ?? prev.runtimeSessionId,
+        isAttachedToTransport: isAttachedToTransport ?? prev.isAttachedToTransport,
+        lastRuntimeSeenAt: Date.now(),
+        needsRefresh: false,
       }))
     },
     [updateSessionViewState]
@@ -533,6 +563,7 @@ export function Chat({
       updateSessionViewState(sessionKey, (prev) => ({
         ...prev,
         runtimeSessionId,
+        runtimeLastSeq: runtimeSessionId === prev.runtimeSessionId ? prev.runtimeLastSeq : 0,
         lastRuntimeSeenAt: runtimeSessionId ? Date.now() : prev.lastRuntimeSeenAt,
         needsRefresh: false,
       }))
@@ -547,9 +578,9 @@ export function Chat({
     [activeSessionKey, setSessionRuntimeSessionId]
   )
 
-  const setSessionLastSeq = useCallback(
-    (sessionKey: string, lastSeq: number) => {
-      updateSessionViewState(sessionKey, (prev) => ({ ...prev, lastSeq }))
+  const setSessionRuntimeLastSeq = useCallback(
+    (sessionKey: string, runtimeLastSeq: number) => {
+      updateSessionViewState(sessionKey, (prev) => ({ ...prev, runtimeLastSeq }))
     },
     [updateSessionViewState]
   )
@@ -620,10 +651,7 @@ export function Chat({
 
       const stableSession = resolveStableSessionRecord(sessionId)
       const stableSessionId = stableSession?.sessionId ?? sessionId
-      const runtimeSessionId =
-        stableSession?.runtimeSessionId && stableSession.runtimeSessionId !== stableSessionId
-          ? stableSession.runtimeSessionId
-          : null
+      const runtimeSessionId = stableSession?.runtimeSessionId ?? null
       const resolved = {
         stableSession,
         stableSessionId,
@@ -642,6 +670,41 @@ export function Chat({
       return resolved
     },
     [provider, resolveStableSessionRecord]
+  )
+
+  const resolveCallbackTargetSessionKey = useCallback(
+    (runtimeSessionId: string | null | undefined) => {
+      const fallbackSessionKey = activeStreamSessionKeyRef.current || activeSessionKey
+      if (!runtimeSessionId) {
+        return fallbackSessionKey
+      }
+
+      const stableSession = resolveStableSessionRecord(runtimeSessionId)
+      if (stableSession) {
+        console.log('[Chat] Resolved callback target from persisted session metadata', {
+          runtimeSessionId,
+          stableSessionId: stableSession.sessionId,
+        })
+        return stableSession.sessionId
+      }
+
+      for (const [sessionKey, state] of Object.entries(sessionViewStatesRef.current)) {
+        if (state.runtimeSessionId === runtimeSessionId) {
+          console.log('[Chat] Resolved callback target from in-memory session state', {
+            runtimeSessionId,
+            stableSessionId: sessionKey,
+          })
+          return sessionKey
+        }
+      }
+
+      console.log('[Chat] Falling back to active callback target for runtime session event', {
+        runtimeSessionId,
+        fallbackSessionKey,
+      })
+      return fallbackSessionKey
+    },
+    [activeSessionKey, resolveStableSessionRecord]
   )
 
   useEffect(() => {
@@ -1182,9 +1245,9 @@ export function Chat({
 
       let mergedMessages = stableTranscript.messages
       let resumeSessionId = stableTranscript.providerSessionId || null
-      let lastSeq = stableTranscript.lastSeq
+      let transcriptLastSeq = stableTranscript.lastSeq
 
-      if (identity.runtimeSessionId) {
+      if (identity.runtimeSessionId && identity.runtimeSessionId !== identity.stableSessionId) {
         const runtimeTranscript = await loadSessionTranscript(identity.runtimeSessionId, identity.provider, {
           preserveInitialUserMessage: false,
         }).catch((error) => {
@@ -1199,7 +1262,7 @@ export function Chat({
         if (runtimeTranscript) {
           mergedMessages = mergeTranscriptMessages(stableTranscript.messages, runtimeTranscript.messages)
           resumeSessionId = runtimeTranscript.providerSessionId || stableTranscript.providerSessionId || null
-          lastSeq = Math.max(stableTranscript.lastSeq, runtimeTranscript.lastSeq)
+          transcriptLastSeq = Math.max(stableTranscript.lastSeq, runtimeTranscript.lastSeq)
         }
       }
 
@@ -1217,7 +1280,7 @@ export function Chat({
         provider: identity.provider,
         messages: mergedMessages,
         resumeProviderSessionId: resumeSessionId,
-        lastSeq,
+        transcriptLastSeq,
       }
     },
     [loadSessionTranscript, mergeTranscriptMessages, provider, resolveSessionIdentity]
@@ -1262,8 +1325,9 @@ export function Chat({
         setSessionLoading(stableSessionId, true)
       }
 
-      let transcriptLastSeq = cachedSessionState.lastSeq
+      let transcriptLastSeq = cachedSessionState.transcriptLastSeq
       let reconnectSessionId = options?.persistedRuntimeSessionId ?? cachedSessionState.runtimeSessionId ?? null
+      let runtimeReplayLastSeq = cachedSessionState.runtimeLastSeq
       let loadedProviderSessionId: string | null = cachedSessionState.providerSessionId ?? null
 
       try {
@@ -1307,24 +1371,34 @@ export function Chat({
         if (cachedSessionState.isHydrated && preferredTranscriptSource === 'persisted-divergence') {
           console.warn('[Chat] Persisted transcript won due to cache divergence', {
             stableSessionId,
-            cachedLastSeq: cachedSessionState.lastSeq,
-            persistedLastSeq: sessionState.lastSeq,
+            cachedTranscriptLastSeq: cachedSessionState.transcriptLastSeq,
+            persistedTranscriptLastSeq: sessionState.transcriptLastSeq,
             cachedMessageCount: cachedSessionState.messages.length,
             persistedMessageCount: sessionState.messages.length,
           })
         }
 
-        transcriptLastSeq = Math.max(cachedSessionState.lastSeq, sessionState.lastSeq)
-        reconnectSessionId = sessionState.runtimeSessionId || null
+        reconnectSessionId =
+          sessionState.runtimeSessionId ??
+          options?.persistedRuntimeSessionId ??
+          cachedSessionState.runtimeSessionId ??
+          null
+        runtimeReplayLastSeq =
+          reconnectSessionId && cachedSessionState.runtimeSessionId === reconnectSessionId
+            ? cachedSessionState.runtimeLastSeq
+            : 0
+        transcriptLastSeq = Math.max(cachedSessionState.transcriptLastSeq, sessionState.transcriptLastSeq)
         loadedProviderSessionId = sessionState.resumeProviderSessionId ?? cachedSessionState.providerSessionId
 
         replaceSessionViewState(
           stableSessionId,
           createHydratedSessionViewState(sessionState.provider, mergedMessages, {
             providerSessionId: loadedProviderSessionId,
-            runtimeSessionId: null,
-            lastSeq: transcriptLastSeq,
-            status: 'completed',
+            runtimeSessionId: reconnectSessionId,
+            transcriptLastSeq,
+            runtimeLastSeq: runtimeReplayLastSeq,
+            status: reconnectSessionId ? 'running' : 'completed',
+            isAttachedToTransport: false,
           })
         )
 
@@ -1335,6 +1409,7 @@ export function Chat({
           mergedMessageCount: mergedMessages.length,
           preferredTranscriptSource,
           transcriptLastSeq,
+          runtimeReplayLastSeq,
           reconnectSessionId,
         })
 
@@ -1344,7 +1419,11 @@ export function Chat({
             sessionState.runtimeSessionId,
             sessionState.resumeProviderSessionId ?? null
           )
-        } else if (!sessionState.runtimeSessionId && options?.persistedRuntimeSessionId) {
+        } else if (
+          !sessionState.runtimeSessionId &&
+          options?.persistedRuntimeSessionId &&
+          options.persistedRuntimeSessionId !== cachedSessionState.runtimeSessionId
+        ) {
           console.log('[Chat] Clearing stale persisted runtime session ID during reconcile', {
             stableSessionId,
             staleRuntimeSessionId: options.persistedRuntimeSessionId,
@@ -1363,7 +1442,8 @@ export function Chat({
             createHydratedSessionViewState(sessionProvider, [], {
               providerSessionId: null,
               runtimeSessionId: null,
-              lastSeq: 0,
+              transcriptLastSeq: 0,
+              runtimeLastSeq: 0,
               status: 'error',
               error: err instanceof Error ? err.message : 'Failed to load session',
             })
@@ -1383,7 +1463,7 @@ export function Chat({
 
       const reconnectResult =
         reconnectSessionId && reconnectToSessionRef.current
-          ? await reconnectToSessionRef.current(reconnectSessionId, transcriptLastSeq)
+          ? await reconnectToSessionRef.current(reconnectSessionId, runtimeReplayLastSeq)
           : { attached: false, canonicalSessionId: null }
 
       if (
@@ -1400,6 +1480,7 @@ export function Chat({
           ...prev,
           runtimeSessionId: reconnectSessionId,
           status: 'running',
+          isAttachedToTransport: true,
           isResumingSession: true,
           lastRuntimeSeenAt: Date.now(),
           needsRefresh: false,
@@ -1419,6 +1500,7 @@ export function Chat({
           ...prev,
           runtimeSessionId: null,
           status: prev.error ? 'error' : 'completed',
+          isAttachedToTransport: false,
           isResumingSession: false,
         }))
       } else {
@@ -1433,6 +1515,7 @@ export function Chat({
             ...prev,
             runtimeSessionId: null,
             status: prev.error ? 'error' : 'completed',
+            isAttachedToTransport: false,
             isResumingSession: false,
             needsRefresh: false,
           }))
@@ -1603,13 +1686,17 @@ export function Chat({
       console.log('[Chat] Provider:', provider)
       console.log('[Chat] ========================================')
 
+      const existingSessionKey = Object.entries(sessionViewStatesRef.current).find(
+        ([sessionKey, state]) => sessionKey !== DRAFT_SESSION_KEY && state.runtimeSessionId === sessionId
+      )?.[0] ?? null
+
       if (isNewProjectAtMount.current && forcedFrontendDesignSessionIdRef.current === null) {
         forcedFrontendDesignSessionIdRef.current = sessionId
       }
 
       const pendingPromotion = pendingSessionPromotionRef.current
-      const stableSessionId = pendingPromotion?.stableSessionId ?? sessionId
-      const sourceSessionKey = pendingPromotion?.stableSessionId ?? activeStreamSessionKeyRef.current ?? DRAFT_SESSION_KEY
+      const stableSessionId = pendingPromotion?.stableSessionId ?? existingSessionKey ?? sessionId
+      const sourceSessionKey = pendingPromotion?.stableSessionId ?? existingSessionKey ?? activeStreamSessionKeyRef.current ?? DRAFT_SESSION_KEY
       const providerSessionId =
         sessionViewStatesRef.current[sourceSessionKey]?.providerSessionId ??
         sessionViewStatesRef.current[DRAFT_SESSION_KEY]?.providerSessionId ??
@@ -1619,10 +1706,12 @@ export function Chat({
       moveSessionViewState(sourceSessionKey, stableSessionId, (prev) => ({
         ...prev,
         status: 'running',
+        isAttachedToTransport: true,
         isHydrated: true,
         provider,
         runtimeSessionId: sessionId,
         providerSessionId,
+        runtimeLastSeq: prev.runtimeSessionId === sessionId ? prev.runtimeLastSeq : 0,
         isResumingSession: false,
         isLoadingSession: false,
         error: null,
@@ -1633,12 +1722,12 @@ export function Chat({
       // Mark session as loaded so the load-session effect won't re-run
       hasLoadedSession.current = true
 
-      if (pendingPromotion) {
+      if (pendingPromotion || existingSessionKey) {
         console.log('[Chat] Linking stable session to new live sidecar session', {
           stableSessionId,
           runtimeSessionId: sessionId,
           providerSessionId,
-          provider: pendingPromotion.provider,
+          provider: pendingPromotion?.provider ?? provider,
         })
         persistRuntimeSessionId(stableSessionId, sessionId, providerSessionId)
       } else {
@@ -1683,14 +1772,19 @@ export function Chat({
         replaceSessionViewState(stableSessionId, {
           messages: sessionState.messages,
           status: status === 'running' ? 'running' : 'completed',
+          isAttachedToTransport: status === 'running',
           isHydrated: true,
+          lastHydratedAt: Date.now(),
+          lastRuntimeSeenAt: runtimeSessionId ? Date.now() : null,
+          needsRefresh: false,
           isResumingSession: status === 'running',
           isLoadingSession: false,
           error: null,
           providerSessionId: sessionState.resumeProviderSessionId,
           runtimeSessionId,
           provider: sessionState.provider,
-          lastSeq: sessionState.lastSeq,
+          transcriptLastSeq: sessionState.transcriptLastSeq,
+          runtimeLastSeq: 0,
         })
         if (status !== 'running' && sessionState.resumeProviderSessionId) {
           pendingSessionPromotionRef.current = {
@@ -1713,7 +1807,7 @@ export function Chat({
             sessionState.resumeProviderSessionId ?? null
           )
         }
-        return sessionState.lastSeq
+        return runtimeSessionId ? 0 : sessionState.transcriptLastSeq
       } catch (err) {
         console.error('[Chat] Error restoring resumed session:', err)
         return 0
@@ -1749,9 +1843,38 @@ export function Chat({
     resumeProviderSessionId,
     onSessionId: handleSessionIdChange, // Capture session ID from init message
     onReconnectSession: handleReconnectSession,
-    onMessage: (msg) => {
-      const targetSessionKey = activeStreamSessionKeyRef.current || activeSessionKey
-      console.log('[Chat] Local agent message:', msg.type, msg.content)
+    onMessage: (msg, context) => {
+      const targetSessionKey = resolveCallbackTargetSessionKey(context.runtimeSessionId)
+      const shouldMarkSessionRunning =
+        !!context.runtimeSessionId &&
+        (msg.type === 'connected' ||
+          msg.type === 'init' ||
+          msg.type === 'text' ||
+          msg.type === 'reasoning' ||
+          msg.type === 'tool_call' ||
+          msg.type === 'tool_result')
+      const shouldMarkAttached =
+        shouldMarkSessionRunning &&
+        targetSessionKey === activeSessionKey &&
+        !!context.runtimeSessionId &&
+        context.runtimeSessionId === agentSessionId
+
+      console.log('[Chat] Local agent message:', msg.type, msg.content, {
+        runtimeSessionId: context.runtimeSessionId,
+        targetSessionKey,
+      })
+
+      if (shouldMarkSessionRunning) {
+        markSessionRuntimeActive(
+          targetSessionKey,
+          context.runtimeSessionId,
+          shouldMarkAttached ? true : undefined
+        )
+        const runtimeSeq = msg.metadata?.seq
+        if (typeof runtimeSeq === 'number' && Number.isFinite(runtimeSeq)) {
+          setSessionRuntimeLastSeq(targetSessionKey, runtimeSeq)
+        }
+      }
 
       if (msg.type === 'text') {
         const textContent = msg.content as string
@@ -1764,7 +1887,11 @@ export function Chat({
         ) {
           console.warn('[Chat] Detected poisoned conversation history (empty screenshot base64) in message stream')
           showErrorToast('Screenshot issue detected. Starting a fresh session.', { id: 'agent-error' })
-          localAgent.terminate()
+          if (context.runtimeSessionId) {
+            void localAgent.terminateSession(context.runtimeSessionId)
+          } else {
+            void localAgent.terminate()
+          }
           setSessionMessages(targetSessionKey, (prev) => [
             ...prev,
             {
@@ -1782,15 +1909,21 @@ export function Chat({
           return
         }
 
-        hideReconnectNotice()
+        if (targetSessionKey === activeSessionKey) {
+          hideReconnectNotice()
+        }
         setSessionMessages(targetSessionKey, (prev) => applyAgentMessageToTranscript(prev, msg))
       } else if (msg.type === 'tool_call') {
-        hideReconnectNotice()
+        if (targetSessionKey === activeSessionKey) {
+          hideReconnectNotice()
+        }
         const toolContent = msg.content as { name: string; input: Record<string, unknown> }
         console.log('[Chat] Tool call:', toolContent.name, toolContent.input)
         setSessionMessages(targetSessionKey, (prev) => applyAgentMessageToTranscript(prev, msg))
       } else if (msg.type === 'tool_result') {
-        hideReconnectNotice()
+        if (targetSessionKey === activeSessionKey) {
+          hideReconnectNotice()
+        }
         const resultContent = msg.content as { callId: string; name: string; output: string; isError: boolean }
         console.log('[Chat] Tool result:', resultContent.callId, resultContent.isError ? 'ERROR' : 'SUCCESS')
         setSessionMessages(targetSessionKey, (prev) => applyAgentMessageToTranscript(prev, msg))
@@ -1798,6 +1931,18 @@ export function Chat({
         const queuedContent = msg.content as { prompt?: string; reason?: string; source?: string }
         const prompt = typeof queuedContent.prompt === 'string' ? queuedContent.prompt.trim() : ''
         if (prompt.length > 0) {
+          if (
+            queuedContent.source === 'completion_verification_gate' &&
+            context.runtimeSessionId &&
+            suppressedCompletionGateRuntimeIdsRef.current.has(context.runtimeSessionId)
+          ) {
+            console.log('[Chat] Suppressing completion verification follow-up after manual stop', {
+              runtimeSessionId: context.runtimeSessionId,
+              targetSessionKey,
+            })
+            return
+          }
+
           console.log('[Chat] Queueing user prompt from stream:', {
             source: queuedContent.source ?? 'unknown',
             reason: queuedContent.reason ?? null,
@@ -1808,7 +1953,9 @@ export function Chat({
           })
         }
       } else if (msg.type === 'reasoning') {
-        hideReconnectNotice()
+        if (targetSessionKey === activeSessionKey) {
+          hideReconnectNotice()
+        }
         const reasoningContent = msg.content as string
         console.log('[Chat] Reasoning:', reasoningContent?.substring(0, 100))
         setSessionMessages(targetSessionKey, (prev) => applyAgentMessageToTranscript(prev, msg))
@@ -1817,7 +1964,9 @@ export function Chat({
         const initContent = msg.content as { providerSessionId?: string }
         setSessionResumeProvider(targetSessionKey, initContent.providerSessionId || null)
       } else if (msg.type === 'done') {
-        hideReconnectNotice()
+        if (targetSessionKey === activeSessionKey) {
+          hideReconnectNotice()
+        }
         console.log('[Chat] Agent completed:', msg.content)
         // Capture usage data from completion message
         if (msg.metadata?.tokens) {
@@ -1825,10 +1974,18 @@ export function Chat({
         }
       }
     },
-    onError: (err) => {
-      const targetSessionKey = activeStreamSessionKeyRef.current || activeSessionKey
-      console.error('[Chat] Local agent error:', err)
-      hideReconnectNotice()
+    onError: (err, context) => {
+      const targetSessionKey = resolveCallbackTargetSessionKey(context.runtimeSessionId)
+      if (context.runtimeSessionId) {
+        suppressedCompletionGateRuntimeIdsRef.current.delete(context.runtimeSessionId)
+      }
+      console.error('[Chat] Local agent error:', err, {
+        runtimeSessionId: context.runtimeSessionId,
+        targetSessionKey,
+      })
+      if (targetSessionKey === activeSessionKey) {
+        hideReconnectNotice()
+      }
 
       // Detect poisoned conversation history (empty screenshot base64).
       // Once this enters the history, every subsequent API call fails because
@@ -1839,7 +1996,11 @@ export function Chat({
       ) {
         console.warn('[Chat] Detected poisoned conversation history — terminating session')
         showErrorToast('Screenshot data corrupted the conversation. Starting a fresh session.', { id: 'agent-error' })
-        localAgent.terminate()
+        if (context.runtimeSessionId) {
+          void localAgent.terminateSession(context.runtimeSessionId)
+        } else {
+          void localAgent.terminate()
+        }
         setSessionMessages(targetSessionKey, (prev) => [
           ...prev,
           {
@@ -1855,7 +2016,9 @@ export function Chat({
       if (targetSessionKey !== DRAFT_SESSION_KEY) {
         persistRuntimeSessionId(targetSessionKey, null, null)
       }
-      hideReconnectNotice()
+      if (targetSessionKey === activeSessionKey) {
+        hideReconnectNotice()
+      }
         setSessionStreaming(targetSessionKey, false)
         return
       }
@@ -1881,10 +2044,18 @@ export function Chat({
         })
       }
     },
-    onComplete: () => {
-      const targetSessionKey = activeStreamSessionKeyRef.current || activeSessionKey
-      console.log('[Chat] Local agent completed')
-      hideReconnectNotice()
+    onComplete: (context) => {
+      const targetSessionKey = resolveCallbackTargetSessionKey(context.runtimeSessionId)
+      if (context.runtimeSessionId) {
+        suppressedCompletionGateRuntimeIdsRef.current.delete(context.runtimeSessionId)
+      }
+      console.log('[Chat] Local agent completed', {
+        runtimeSessionId: context.runtimeSessionId,
+        targetSessionKey,
+      })
+      if (targetSessionKey === activeSessionKey) {
+        hideReconnectNotice()
+      }
       setSessionResuming(targetSessionKey, false)
       setSessionStreaming(targetSessionKey, false)
       setSessionRuntimeSessionId(targetSessionKey, null)
@@ -1900,6 +2071,18 @@ export function Chat({
   useEffect(() => {
     reconnectToSessionRef.current = localAgent.reconnectToSession
   }, [localAgent.reconnectToSession])
+
+  useEffect(() => {
+    if (!hasLoadedSessionCatalog) return
+
+    for (const session of allSessions) {
+      if (!session.runtimeSessionId) continue
+      if (session.sessionId === selectedSessionId) continue
+
+      const sessionState = getStoredSessionViewState(session.sessionId)
+      void localAgent.watchSession(session.runtimeSessionId, sessionState.runtimeLastSeq)
+    }
+  }, [allSessions, getStoredSessionViewState, hasLoadedSessionCatalog, localAgent.watchSession, selectedSessionId])
 
   // Scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -2229,12 +2412,26 @@ export function Chat({
       setIsStreaming(true)
 
       try {
-        const shouldForceFreshRuntime = selectedSessionId !== null && !agentSessionId && !!resumeProviderSessionId
+        const isDraftSession = selectedSessionId === null
+        const shouldForceFreshRuntime = isDraftSession || (selectedSessionId !== null && !agentSessionId && !!resumeProviderSessionId)
+        if (shouldForceFreshRuntime) {
+          if (selectedSessionId !== null) {
+            pendingSessionPromotionRef.current = {
+              stableSessionId: selectedSessionId,
+              provider,
+            }
+          } else {
+            pendingSessionPromotionRef.current = null
+          }
+        } else if (isDraftSession) {
+          pendingSessionPromotionRef.current = null
+        }
         console.log('[Chat] Submitting prompt with session context', {
           selectedSessionId,
           agentSessionId,
           resumeProviderSessionId,
           provider,
+          isDraftSession,
           shouldForceFreshRuntime,
         })
         console.log('[Chat] About to call localAgent.sendPrompt')
@@ -2298,11 +2495,18 @@ export function Chat({
 
   const handleStop = useCallback(async () => {
     console.log('[Chat] Stopping agent')
+    if (agentSessionId) {
+      suppressedCompletionGateRuntimeIdsRef.current.add(agentSessionId)
+      console.log('[Chat] Suppressing completion verification follow-up for manually stopped runtime', {
+        runtimeSessionId: agentSessionId,
+        activeSessionKey,
+      })
+    }
     await localAgent.stop()
     hideReconnectNotice()
     setIsResumingSession(false)
     setIsStreaming(false)
-  }, [hideReconnectNotice, localAgent])
+  }, [activeSessionKey, agentSessionId, hideReconnectNotice, localAgent])
 
   // Handle session switching - load a different session from CLI storage
   const handleSelectSession = useCallback(
@@ -2312,6 +2516,7 @@ export function Chat({
       console.log('[Chat] Switching to session:', session.sessionId)
 
       // Detach from current session (keeps it running in background)
+      setSessionTransportAttached(activeSessionKey, false)
       await localAgent.detach()
 
       // Prevent session restoration effects from undoing this action
@@ -2324,12 +2529,11 @@ export function Chat({
       updateSessionViewState(session.sessionId, (prev) => ({
         ...prev,
         provider: (session.provider || provider) as ProviderId,
-        runtimeSessionId: null,
+        isAttachedToTransport: false,
         error: null,
         isResumingSession: false,
       }))
       hideReconnectNotice()
-      pendingSessionPromotionRef.current = null
 
       // Restore provider from session (if available)
       if (session.provider) {
@@ -2369,6 +2573,7 @@ export function Chat({
       provider,
       reconcileSessionState,
       setSessionLoading,
+      setSessionTransportAttached,
       shouldPreserveInitialUserMessage,
       updateSessionMutation,
       updateSessionViewState,
@@ -2444,12 +2649,12 @@ export function Chat({
 
     // Detach from the current session - agent continues running in background
     // Do NOT call stop() here: that would kill the CLI process, preventing reconnect
+    setSessionTransportAttached(activeSessionKey, false)
     await localAgent.detach()
 
     // Prevent session restoration effects from undoing this action
     didStartNewSession.current = true
     suppressInitialSessionRestore.current = true
-    pendingSessionPromotionRef.current = null
 
     // Starting from tab "+" optionally sets provider/model for the next session
     setProvider(nextProvider)
@@ -2472,7 +2677,7 @@ export function Chat({
     hasLoadedSession.current = false
     initialSessionIdAtMount.current = null
     hasStartedInitialStream.current = false
-  }, [defaultProvider, hideReconnectNotice, localAgent, replaceSessionViewState])
+  }, [activeSessionKey, defaultProvider, hideReconnectNotice, localAgent, replaceSessionViewState, setSessionTransportAttached])
 
   // Handle fix error - submit error to AI for fixing
   const handleFixError = useCallback(() => {
