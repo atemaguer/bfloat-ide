@@ -87,4 +87,25 @@ describe('session transcript hydration', () => {
     expect(afterSecondChunk[0]?.content).toBe('Hello world')
     expect(afterSecondChunk[0]?.parts).toEqual([{ type: 'text', text: 'Hello world' }])
   })
+
+  it('finalizes the assistant transcript from done.result when the stream ends cleanly', () => {
+    const afterPartialText = applyAgentMessageToTranscript([], {
+      type: 'text',
+      content: 'Overall assessment',
+      metadata: { seq: 1 },
+    })
+
+    const afterDone = applyAgentMessageToTranscript(afterPartialText, {
+      type: 'done',
+      content: {
+        result: 'Overall assessment: secure',
+        interrupted: false,
+      },
+      metadata: { seq: 2 },
+    } satisfies AgentMessage)
+
+    expect(afterDone).toHaveLength(1)
+    expect(afterDone[0]?.content).toBe('Overall assessment: secure')
+    expect(afterDone[0]?.parts).toEqual([{ type: 'text', text: 'Overall assessment: secure' }])
+  })
 })

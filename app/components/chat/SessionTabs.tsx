@@ -11,6 +11,8 @@ import { Plus, X } from 'lucide-react'
 // Local session info (adapted from CLI storage)
 interface LocalSessionInfo {
   sessionId: string
+  runtimeSessionId?: string | null
+  createdAt: number
   lastModified: number
   name?: string
   provider?: 'claude' | 'codex'
@@ -52,8 +54,16 @@ export const SessionTabs = memo(function SessionTabs({
 }: SessionTabsProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Sort sessions by lastModified ascending (oldest first)
-  const sortedSessions = [...sessions].sort((a, b) => a.lastModified - b.lastModified)
+  useEffect(() => {
+    console.log('[SessionTabs] Render order:', sessions.map((session, index) => ({
+      index,
+      sessionId: session.sessionId,
+      runtimeSessionId: session.runtimeSessionId ?? null,
+      createdAt: session.createdAt,
+      lastModified: session.lastModified,
+      isActive: session.sessionId === activeSessionId,
+    })))
+  }, [activeSessionId, sessions])
 
   // Auto-scroll to the active tab when it changes
   useEffect(() => {
@@ -72,7 +82,7 @@ export const SessionTabs = memo(function SessionTabs({
   return (
     <div className="session-tabs">
       <div className="session-tabs-scroll" ref={scrollRef}>
-        {sortedSessions.map((session, index) => {
+        {sessions.map((session, index) => {
           const isActive = session.sessionId === activeSessionId
           const label = session.name || `Session ${index + 1}`
           const modelLabel = sessionModelLabelById?.[session.sessionId]

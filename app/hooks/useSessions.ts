@@ -10,6 +10,9 @@ import type { AgentSession } from '@/app/types/project'
 // Local session info format for SessionTabs
 export interface LocalSessionInfo {
   sessionId: string
+  runtimeSessionId?: string | null
+  providerSessionId?: string | null
+  createdAt: number
   lastModified: number
   name?: string
   provider?: 'claude' | 'codex'
@@ -22,6 +25,7 @@ export interface LocalSessionInfo {
 export function useSessions(projectId: string | undefined) {
   const [sessions, setSessions] = useState<LocalSessionInfo[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
   const hasLoaded = useRef(false)
 
   // Load sessions from projects.json
@@ -36,13 +40,23 @@ export function useSessions(projectId: string | undefined) {
         // Convert AgentSession to LocalSessionInfo format
         const sessionInfos: LocalSessionInfo[] = projectSessions.map((s: AgentSession) => ({
           sessionId: s.sessionId,
+          runtimeSessionId: s.runtimeSessionId ?? null,
+          providerSessionId: s.providerSessionId ?? null,
+          createdAt: new Date(s.createdAt).getTime(),
           lastModified: new Date(s.lastUsedAt || s.createdAt).getTime(),
           name: s.name || undefined,
           provider: s.provider,
         }))
 
-        // Sort by lastModified descending (newest first)
-        sessionInfos.sort((a, b) => b.lastModified - a.lastModified)
+        // Keep tabs stable by session creation order (oldest first, newest on the right)
+        sessionInfos.sort((a, b) => a.createdAt - b.createdAt)
+        console.log('[useSessions] Session order by createdAt:', sessionInfos.map((session) => ({
+          sessionId: session.sessionId,
+          runtimeSessionId: session.runtimeSessionId ?? null,
+          providerSessionId: session.providerSessionId ?? null,
+          createdAt: session.createdAt,
+          lastModified: session.lastModified,
+        })))
         setSessions(sessionInfos)
         console.log('[useSessions] Loaded sessions from projects.json:', sessionInfos.length)
       } else {
@@ -54,6 +68,7 @@ export function useSessions(projectId: string | undefined) {
       setSessions([])
     } finally {
       setIsLoading(false)
+      setHasLoadedOnce(true)
     }
   }, [projectId])
 
@@ -72,6 +87,7 @@ export function useSessions(projectId: string | undefined) {
   return {
     sessions,
     isLoading,
+    hasLoadedOnce,
     refresh,
   }
 }
@@ -90,6 +106,8 @@ export function useSaveSession(
   const mutate = useCallback(
     async (params: {
       sessionId: string
+      runtimeSessionId?: string | null
+      providerSessionId?: string | null
       provider: 'claude' | 'codex'
       model?: string
       name?: string | null
@@ -115,16 +133,36 @@ export function useSaveSession(
 
       try {
         const now = new Date().toISOString()
+        const existingSessions = await localProjects.listSessions(projectId)
+        const existingSession = existingSessions.find((session) => session.sessionId === params.sessionId)
+        console.log('[useSaveSession] Existing session lookup:', {
+          sessionId: params.sessionId,
+          foundExisting: !!existingSession,
+          existingCreatedAt: existingSession?.createdAt ?? null,
+          existingLastUsedAt: existingSession?.lastUsedAt ?? null,
+          existingProviderSessionId: existingSession?.providerSessionId ?? null,
+        })
         const session: AgentSession = {
           id: params.sessionId,
           projectId,
           sessionId: params.sessionId,
+          runtimeSessionId: params.runtimeSessionId ?? params.sessionId,
+          providerSessionId: params.providerSessionId ?? existingSession?.providerSessionId ?? null,
           provider: params.provider,
           model: params.model,
           name: params.name,
-          createdAt: now,
+          createdAt: existingSession?.createdAt || now,
           lastUsedAt: now,
         }
+
+        console.log('[useSaveSession] Upsert payload:', {
+          sessionId: session.sessionId,
+          runtimeSessionId: session.runtimeSessionId ?? null,
+          providerSessionId: session.providerSessionId ?? null,
+          createdAt: session.createdAt,
+          lastUsedAt: session.lastUsedAt,
+          provider: session.provider,
+        })
 
         console.log('[useSaveSession] Calling localProjects.addSession...')
         await localProjects.addSession(projectId, session)
@@ -184,6 +222,7 @@ export function useDeleteSession(
         const errorMsg = err instanceof Error ? err.message : 'Failed to delete session'
         console.error('[useDeleteSession] Error:', errorMsg)
         setError(errorMsg)
+        throw err instanceof Error ? err : new Error(errorMsg)
       } finally {
         setIsLoading(false)
       }

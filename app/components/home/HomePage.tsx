@@ -118,7 +118,7 @@ export default function HomePage() {
       aiAgent
         .listBackgroundSessions()
         .then((sessions) => {
-          const activeIds = new Set(sessions.map((s) => s.projectId))
+          const activeIds = new Set(sessions.filter((s) => s.status === 'running').map((s) => s.projectId))
           setBackgroundProjectIds(activeIds)
         })
         .catch((error) => {
