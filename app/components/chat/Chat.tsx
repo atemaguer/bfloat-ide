@@ -37,10 +37,7 @@ import FirebaseLogo from '@/app/components/ui/icons/firebase-logo'
 import RevenueCatLogo from '@/app/components/ui/icons/revenuecat-logo'
 import StripeLogo from '@/app/components/ui/icons/stripe-logo'
 import { isIntegrationAvailableForAppType, type IntegrationId } from '@/app/types/integrations'
-import {
-  detectIntegrationSecretsPresence,
-  type IntegrationSecretsPresence,
-} from '@/app/lib/integrations/secrets'
+import { detectIntegrationSecretsPresence, type IntegrationSecretsPresence } from '@/app/lib/integrations/secrets'
 import {
   detectConvexBootstrap,
   detectConvexBootstrapInTree,
@@ -51,11 +48,12 @@ import {
 } from '@/app/lib/integrations/convex'
 import toast from 'react-hot-toast'
 import { showErrorToast } from '@/app/components/ui/ErrorToast'
+import { sessionContainsSetupPrompt, type IntegrationSetupPromptType } from './integrationSetupPolicy'
 import {
-  sessionContainsSetupPrompt,
-  type IntegrationSetupPromptType,
-} from './integrationSetupPolicy'
-import { applyAgentMessageToTranscript, hydrateTranscriptFromHistory, type SessionHistoryEntry } from './session-transcript'
+  applyAgentMessageToTranscript,
+  hydrateTranscriptFromHistory,
+  type SessionHistoryEntry,
+} from './session-transcript'
 import {
   DRAFT_SESSION_KEY,
   createSessionViewState,
@@ -79,7 +77,12 @@ const SETUP_PROMPT_BY_INTEGRATION: Record<string, IntegrationSetupPromptType> = 
 
 function appendSetupPromptIfMissing(
   messages: ChatMessage[],
-  promptType: IntegrationSetupPromptType
+  promptType: IntegrationSetupPromptType,
+  metadata?: {
+    integrationId?: string
+    originalPrompt?: string
+    forceFrontendDesignSkill?: boolean
+  }
 ): ChatMessage[] {
   if (sessionContainsSetupPrompt(messages, promptType)) {
     return messages
@@ -89,7 +92,7 @@ function appendSetupPromptIfMissing(
     id: generateId(),
     role: 'assistant',
     content: '',
-    parts: [{ type: promptType } as MessagePart],
+    parts: [{ type: promptType, ...metadata } as MessagePart],
     createdAt: new Date().toISOString(),
   }
 
@@ -99,7 +102,10 @@ function appendSetupPromptIfMissing(
 function extractCommitDraftFromMessage(message: ChatMessage): string | null {
   const content = (message.content || '').trim()
   if (content) {
-    const firstLine = content.split('\n').map(line => line.trim()).find(Boolean)
+    const firstLine = content
+      .split('\n')
+      .map((line) => line.trim())
+      .find(Boolean)
     return firstLine || null
   }
 
@@ -107,7 +113,10 @@ function extractCommitDraftFromMessage(message: ChatMessage): string | null {
     if (part?.type === 'text') {
       const text = (part.text || '').trim()
       if (!text) continue
-      const firstLine = text.split('\n').map(line => line.trim()).find(Boolean)
+      const firstLine = text
+        .split('\n')
+        .map((line) => line.trim())
+        .find(Boolean)
       if (firstLine) return firstLine
     }
   }
@@ -235,11 +244,17 @@ export function Chat({
     ((sessionId: string, afterSeq?: number) => Promise<{ attached: boolean; canonicalSessionId: string | null }>) | null
   >(null)
   const selectedSessionStore = useMemo(
-    () => projectSessionsStore.getSelectedSessionStore(projectId, initialProvider || defaultProvider, initialMessages || []),
+    () =>
+      projectSessionsStore.getSelectedSessionStore(
+        projectId,
+        initialProvider || defaultProvider,
+        initialMessages || []
+      ),
     [defaultProvider, initialMessages, initialProvider, projectId]
   )
   const sessionStatesStore = useMemo(
-    () => projectSessionsStore.getSessionStatesStore(projectId, initialProvider || defaultProvider, initialMessages || []),
+    () =>
+      projectSessionsStore.getSessionStatesStore(projectId, initialProvider || defaultProvider, initialMessages || []),
     [defaultProvider, initialMessages, initialProvider, projectId]
   )
   const selectedSessionId = useStore(selectedSessionStore)
@@ -247,7 +262,12 @@ export function Chat({
   const sessionViewStatesRef = useRef(sessionViewStates)
   const setSelectedSessionId = useCallback(
     (sessionId: string | null) => {
-      projectSessionsStore.setSelectedSessionId(projectId, sessionId, initialProvider || defaultProvider, initialMessages || [])
+      projectSessionsStore.setSelectedSessionId(
+        projectId,
+        sessionId,
+        initialProvider || defaultProvider,
+        initialMessages || []
+      )
     },
     [defaultProvider, initialMessages, initialProvider, projectId]
   )
@@ -431,7 +451,8 @@ export function Chat({
     (sessionKey: string, updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
       updateSessionViewState(sessionKey, (prev) => ({
         ...prev,
-        messages: typeof updater === 'function' ? (updater as (prev: ChatMessage[]) => ChatMessage[])(prev.messages) : updater,
+        messages:
+          typeof updater === 'function' ? (updater as (prev: ChatMessage[]) => ChatMessage[])(prev.messages) : updater,
         isHydrated: true,
         lastHydratedAt: Date.now(),
         needsRefresh: false,
@@ -623,14 +644,23 @@ export function Chat({
   // Session management hooks (local-first storage in projects.json)
   // Mirrors workbench pattern but reads from projects.json instead of backend API
   console.log('[Chat] Calling useSessions with projectId:', projectId)
-  const { sessions: allSessions, hasLoadedOnce: hasLoadedSessionCatalog, refresh: refreshSessions } = useSessions(projectId)
+  const {
+    sessions: allSessions,
+    hasLoadedOnce: hasLoadedSessionCatalog,
+    refresh: refreshSessions,
+  } = useSessions(projectId)
   const activeTab = useStore(workbenchStore.activeTab)
   const secretsVersion = useStore(workbenchStore.secretsVersion)
   const pendingIntegrationChoice = useStore(workbenchStore.pendingIntegrationChoice)
 
   // Debug: Log sessions when they change
   useEffect(() => {
-    console.log('[Chat] allSessions updated:', allSessions.length, 'sessions', allSessions.map(s => s.sessionId?.slice(0, 8)))
+    console.log(
+      '[Chat] allSessions updated:',
+      allSessions.length,
+      'sessions',
+      allSessions.map((s) => s.sessionId?.slice(0, 8))
+    )
   }, [allSessions])
 
   const resolveStableSessionRecord = useCallback(
@@ -885,7 +915,8 @@ export function Chat({
         setMessages((prev) => {
           const lastMessage = prev[prev.length - 1]
           const isDuplicatePrompt =
-            lastMessage?.role === 'assistant' && !!lastMessage.parts?.some((part) => part?.type === 'convex-intent-prompt')
+            lastMessage?.role === 'assistant' &&
+            !!lastMessage.parts?.some((part) => part?.type === 'convex-intent-prompt')
 
           if (isDuplicatePrompt) {
             return prev
@@ -905,7 +936,9 @@ export function Chat({
       }
       if (id === 'revenuecat') {
         const revenuecatApiKey = projectSecrets.find((secret) => secret.key === 'REVENUECAT_API_KEY')?.value
-        const revenuecatPublicKey = projectSecrets.find((secret) => secret.key === 'EXPO_PUBLIC_REVENUECAT_API_KEY')?.value
+        const revenuecatPublicKey = projectSecrets.find(
+          (secret) => secret.key === 'EXPO_PUBLIC_REVENUECAT_API_KEY'
+        )?.value
         const pendingRevenuecatEnv: Record<string, string> = {}
         if (revenuecatApiKey) {
           pendingRevenuecatEnv.REVENUECAT_API_KEY = revenuecatApiKey
@@ -1196,37 +1229,41 @@ export function Chat({
     [initialMessages, loadPersistedSession, provider]
   )
 
-  const mergeTranscriptMessages = useCallback((stableMessages: ChatMessage[], runtimeMessages: ChatMessage[]): ChatMessage[] => {
-    const messageSignature = (message: ChatMessage) => JSON.stringify({
-      role: message.role,
-      content: message.content,
-      parts: message.parts || [],
-    })
+  const mergeTranscriptMessages = useCallback(
+    (stableMessages: ChatMessage[], runtimeMessages: ChatMessage[]): ChatMessage[] => {
+      const messageSignature = (message: ChatMessage) =>
+        JSON.stringify({
+          role: message.role,
+          content: message.content,
+          parts: message.parts || [],
+        })
 
-    const stableSignatures = stableMessages.map(messageSignature)
-    const runtimeSignatures = runtimeMessages.map(messageSignature)
-    const maxOverlap = Math.min(stableSignatures.length, runtimeSignatures.length)
+      const stableSignatures = stableMessages.map(messageSignature)
+      const runtimeSignatures = runtimeMessages.map(messageSignature)
+      const maxOverlap = Math.min(stableSignatures.length, runtimeSignatures.length)
 
-    let overlapCount = 0
-    for (let candidate = maxOverlap; candidate > 0; candidate -= 1) {
-      const stableTail = stableSignatures.slice(stableSignatures.length - candidate)
-      const runtimeHead = runtimeSignatures.slice(0, candidate)
-      if (stableTail.every((signature, index) => signature === runtimeHead[index])) {
-        overlapCount = candidate
-        break
+      let overlapCount = 0
+      for (let candidate = maxOverlap; candidate > 0; candidate -= 1) {
+        const stableTail = stableSignatures.slice(stableSignatures.length - candidate)
+        const runtimeHead = runtimeSignatures.slice(0, candidate)
+        if (stableTail.every((signature, index) => signature === runtimeHead[index])) {
+          overlapCount = candidate
+          break
+        }
       }
-    }
 
-    const merged = [...stableMessages, ...runtimeMessages.slice(overlapCount)]
-    console.log('[Chat] Merged transcript tail', {
-      stableMessageCount: stableMessages.length,
-      runtimeMessageCount: runtimeMessages.length,
-      overlapCount,
-      mergedMessageCount: merged.length,
-    })
+      const merged = [...stableMessages, ...runtimeMessages.slice(overlapCount)]
+      console.log('[Chat] Merged transcript tail', {
+        stableMessageCount: stableMessages.length,
+        runtimeMessageCount: runtimeMessages.length,
+        overlapCount,
+        mergedMessageCount: merged.length,
+      })
 
-    return merged
-  }, [])
+      return merged
+    },
+    []
+  )
 
   const loadStableSessionState = useCallback(
     async (
@@ -1428,11 +1465,7 @@ export function Chat({
             stableSessionId,
             staleRuntimeSessionId: options.persistedRuntimeSessionId,
           })
-          persistRuntimeSessionId(
-            stableSessionId,
-            null,
-            sessionState.resumeProviderSessionId ?? null
-          )
+          persistRuntimeSessionId(stableSessionId, null, sessionState.resumeProviderSessionId ?? null)
         }
       } catch (err) {
         console.error('[Chat] Error reconciling session:', err)
@@ -1466,11 +1499,7 @@ export function Chat({
           ? await reconnectToSessionRef.current(reconnectSessionId, runtimeReplayLastSeq)
           : { attached: false, canonicalSessionId: null }
 
-      if (
-        reconnectSessionId &&
-        reconnectResult.attached &&
-        reconnectResult.canonicalSessionId === reconnectSessionId
-      ) {
+      if (reconnectSessionId && reconnectResult.attached && reconnectResult.canonicalSessionId === reconnectSessionId) {
         console.log('[Chat] Reconnected to running background session', {
           stableSessionId,
           reconnectSessionId,
@@ -1522,11 +1551,14 @@ export function Chat({
         }
 
         if (loadedProviderSessionId) {
-          console.log('[Chat] Session is transcript-only after reconcile; next prompt will resume it with a fresh live session', {
-            stableSessionId,
-            reconnectSessionId,
-            resumeProviderSessionId: loadedProviderSessionId,
-          })
+          console.log(
+            '[Chat] Session is transcript-only after reconcile; next prompt will resume it with a fresh live session',
+            {
+              stableSessionId,
+              reconnectSessionId,
+              resumeProviderSessionId: loadedProviderSessionId,
+            }
+          )
           pendingSessionPromotionRef.current = {
             stableSessionId,
             provider: sessionProvider,
@@ -1686,9 +1718,10 @@ export function Chat({
       console.log('[Chat] Provider:', provider)
       console.log('[Chat] ========================================')
 
-      const existingSessionKey = Object.entries(sessionViewStatesRef.current).find(
-        ([sessionKey, state]) => sessionKey !== DRAFT_SESSION_KEY && state.runtimeSessionId === sessionId
-      )?.[0] ?? null
+      const existingSessionKey =
+        Object.entries(sessionViewStatesRef.current).find(
+          ([sessionKey, state]) => sessionKey !== DRAFT_SESSION_KEY && state.runtimeSessionId === sessionId
+        )?.[0] ?? null
 
       if (isNewProjectAtMount.current && forcedFrontendDesignSessionIdRef.current === null) {
         forcedFrontendDesignSessionIdRef.current = sessionId
@@ -1696,7 +1729,11 @@ export function Chat({
 
       const pendingPromotion = pendingSessionPromotionRef.current
       const stableSessionId = pendingPromotion?.stableSessionId ?? existingSessionKey ?? sessionId
-      const sourceSessionKey = pendingPromotion?.stableSessionId ?? existingSessionKey ?? activeStreamSessionKeyRef.current ?? DRAFT_SESSION_KEY
+      const sourceSessionKey =
+        pendingPromotion?.stableSessionId ??
+        existingSessionKey ??
+        activeStreamSessionKeyRef.current ??
+        DRAFT_SESSION_KEY
       const providerSessionId =
         sessionViewStatesRef.current[sourceSessionKey]?.providerSessionId ??
         sessionViewStatesRef.current[DRAFT_SESSION_KEY]?.providerSessionId ??
@@ -1747,7 +1784,12 @@ export function Chat({
   )
 
   const handleReconnectSession = useCallback(
-    async (info: { sessionId: string; provider: ProviderId; status: 'running' | 'completed' | 'error'; source: 'mount' | 'tab' }) => {
+    async (info: {
+      sessionId: string
+      provider: ProviderId
+      status: 'running' | 'completed' | 'error'
+      source: 'mount' | 'tab'
+    }) => {
       const { sessionId, provider: sessionProvider, status, source } = info
       console.log('[Chat] Reconnected to existing session:', info)
 
@@ -1865,11 +1907,7 @@ export function Chat({
       })
 
       if (shouldMarkSessionRunning) {
-        markSessionRuntimeActive(
-          targetSessionKey,
-          context.runtimeSessionId,
-          shouldMarkAttached ? true : undefined
-        )
+        markSessionRuntimeActive(targetSessionKey, context.runtimeSessionId, shouldMarkAttached ? true : undefined)
         const runtimeSeq = msg.metadata?.seq
         if (typeof runtimeSeq === 'number' && Number.isFinite(runtimeSeq)) {
           setSessionRuntimeLastSeq(targetSessionKey, runtimeSeq)
@@ -1881,10 +1919,7 @@ export function Chat({
 
         // Detect poisoned conversation history — the SDK may emit the API error
         // as assistant text rather than throwing.
-        if (
-          textContent?.includes('image cannot be empty') ||
-          textContent?.includes('image.source.base64')
-        ) {
+        if (textContent?.includes('image cannot be empty') || textContent?.includes('image.source.base64')) {
           console.warn('[Chat] Detected poisoned conversation history (empty screenshot base64) in message stream')
           showErrorToast('Screenshot issue detected. Starting a fresh session.', { id: 'agent-error' })
           if (context.runtimeSessionId) {
@@ -1897,8 +1932,14 @@ export function Chat({
             {
               id: generateId(),
               role: 'assistant',
-              content: 'A corrupted screenshot was in the conversation history. I\'ve started a fresh session — please resend your message.',
-              parts: [{ type: 'text', text: 'A corrupted screenshot was in the conversation history. I\'ve started a fresh session — please resend your message.' }],
+              content:
+                "A corrupted screenshot was in the conversation history. I've started a fresh session — please resend your message.",
+              parts: [
+                {
+                  type: 'text',
+                  text: "A corrupted screenshot was in the conversation history. I've started a fresh session — please resend your message.",
+                },
+              ],
               createdAt: new Date().toISOString(),
             },
           ])
@@ -1991,10 +2032,7 @@ export function Chat({
       // Detect poisoned conversation history (empty screenshot base64).
       // Once this enters the history, every subsequent API call fails because
       // the full history is resent. Recover by terminating the session.
-      if (
-        err.includes('image cannot be empty') ||
-        err.includes('image.source.base64')
-      ) {
+      if (err.includes('image cannot be empty') || err.includes('image.source.base64')) {
         console.warn('[Chat] Detected poisoned conversation history — terminating session')
         showErrorToast('Screenshot data corrupted the conversation. Starting a fresh session.', { id: 'agent-error' })
         if (context.runtimeSessionId) {
@@ -2007,19 +2045,25 @@ export function Chat({
           {
             id: generateId(),
             role: 'assistant',
-            content: 'The previous session had a corrupted screenshot in its history. I\'ve started a fresh session — please resend your message.',
-            parts: [{ type: 'text', text: 'The previous session had a corrupted screenshot in its history. I\'ve started a fresh session — please resend your message.' }],
+            content:
+              "The previous session had a corrupted screenshot in its history. I've started a fresh session — please resend your message.",
+            parts: [
+              {
+                type: 'text',
+                text: "The previous session had a corrupted screenshot in its history. I've started a fresh session — please resend your message.",
+              },
+            ],
             createdAt: new Date().toISOString(),
           },
         ])
         setSessionRuntimeSessionId(targetSessionKey, null)
-      setSessionResumeProvider(targetSessionKey, null)
-      if (targetSessionKey !== DRAFT_SESSION_KEY) {
-        persistRuntimeSessionId(targetSessionKey, null, null)
-      }
-      if (targetSessionKey === activeSessionKey) {
-        hideReconnectNotice()
-      }
+        setSessionResumeProvider(targetSessionKey, null)
+        if (targetSessionKey !== DRAFT_SESSION_KEY) {
+          persistRuntimeSessionId(targetSessionKey, null, null)
+        }
+        if (targetSessionKey === activeSessionKey) {
+          hideReconnectNotice()
+        }
         setSessionStreaming(targetSessionKey, false)
         return
       }
@@ -2244,7 +2288,11 @@ export function Chat({
   }, [isStreaming])
 
   const handleSubmit = useCallback(
-    async (text: string, attachments: ImageAttachment[] = [], options?: { hideUserMessage?: boolean }) => {
+    async (
+      text: string,
+      attachments: ImageAttachment[] = [],
+      options?: { hideUserMessage?: boolean; forceFrontendDesignSkill?: boolean }
+    ) => {
       console.log('[Chat] handleSubmit called with:', text.substring(0, 100), 'attachments:', attachments.length)
 
       const hasContent = text.trim().length > 0 || attachments.length > 0
@@ -2307,6 +2355,7 @@ export function Chat({
       }
 
       const fullPrompt = text + attachmentText
+      const forceFrontendDesignSkill = options?.forceFrontendDesignSkill ?? shouldForceFrontendDesignForCurrentSession()
       console.log(
         '[DEBUG-IMG] Full prompt length:',
         fullPrompt.length,
@@ -2353,7 +2402,13 @@ export function Chat({
           !hasIntegrationSecrets.firebase &&
           !/\/add-firebase\b/i.test(text)
         ) {
-          setMessages((prev) => appendSetupPromptIfMissing([...prev, userMessage], 'firebase-setup-prompt'))
+          setMessages((prev) =>
+            appendSetupPromptIfMissing([...prev, userMessage], 'firebase-setup-prompt', {
+              integrationId: 'firebase',
+              originalPrompt: fullPrompt,
+              forceFrontendDesignSkill,
+            })
+          )
           setInput('')
           return
         }
@@ -2376,19 +2431,32 @@ export function Chat({
         }
 
         // Intercept Convex-related prompts when Convex is not provisioned and secrets are not configured
-        if (
-          /\bconvex\b/i.test(text) &&
-          convexStage === 'disconnected' &&
-          !/\/convex-auth\b/i.test(text)
-        ) {
-          setMessages((prev) => appendSetupPromptIfMissing([...prev, userMessage], 'convex-setup-prompt'))
+        if (/\bconvex\b/i.test(text) && convexStage === 'disconnected' && !/\/convex-auth\b/i.test(text)) {
+          setMessages((prev) =>
+            appendSetupPromptIfMissing([...prev, userMessage], 'convex-setup-prompt', {
+              integrationId: 'convex',
+              originalPrompt: fullPrompt,
+              forceFrontendDesignSkill,
+            })
+          )
           setInput('')
           return
         }
 
         // Intercept Stripe-related prompts when Stripe is not provisioned and secrets are not configured
-        if (/\bstripe\b/i.test(text) && !projectHasStripe && !hasIntegrationSecrets.stripe && !/\/add-stripe\b/i.test(text)) {
-          setMessages((prev) => appendSetupPromptIfMissing([...prev, userMessage], 'stripe-setup-prompt'))
+        if (
+          /\bstripe\b/i.test(text) &&
+          !projectHasStripe &&
+          !hasIntegrationSecrets.stripe &&
+          !/\/add-stripe\b/i.test(text)
+        ) {
+          setMessages((prev) =>
+            appendSetupPromptIfMissing([...prev, userMessage], 'stripe-setup-prompt', {
+              integrationId: 'stripe',
+              originalPrompt: fullPrompt,
+              forceFrontendDesignSkill,
+            })
+          )
           setInput('')
           return
         }
@@ -2401,7 +2469,13 @@ export function Chat({
           !hasIntegrationSecrets.revenuecat &&
           !/\/add-revenuecat\b/i.test(text)
         ) {
-          setMessages((prev) => appendSetupPromptIfMissing([...prev, userMessage], 'revenuecat-setup-prompt'))
+          setMessages((prev) =>
+            appendSetupPromptIfMissing([...prev, userMessage], 'revenuecat-setup-prompt', {
+              integrationId: 'revenuecat',
+              originalPrompt: fullPrompt,
+              forceFrontendDesignSkill,
+            })
+          )
           setInput('')
           return
         }
@@ -2414,7 +2488,8 @@ export function Chat({
 
       try {
         const isDraftSession = selectedSessionId === null
-        const shouldForceFreshRuntime = isDraftSession || (selectedSessionId !== null && !agentSessionId && !!resumeProviderSessionId)
+        const shouldForceFreshRuntime =
+          isDraftSession || (selectedSessionId !== null && !agentSessionId && !!resumeProviderSessionId)
         if (shouldForceFreshRuntime) {
           if (selectedSessionId !== null) {
             pendingSessionPromotionRef.current = {
@@ -2436,9 +2511,7 @@ export function Chat({
           shouldForceFreshRuntime,
         })
         console.log('[Chat] About to call localAgent.sendPrompt')
-        const promptToSend = shouldForceFrontendDesignForCurrentSession()
-          ? withFrontendDesignSkillPrompt(fullPrompt)
-          : fullPrompt
+        const promptToSend = forceFrontendDesignSkill ? withFrontendDesignSkillPrompt(fullPrompt) : fullPrompt
         await localAgent.sendPrompt(
           promptToSend,
           hideUserMessage
@@ -2489,6 +2562,40 @@ export function Chat({
       agentSessionId,
       resumeProviderSessionId,
     ]
+  )
+
+  const handleIntegrationSkip = useCallback(
+    async (integrationId: string, originalPrompt?: string, forceFrontendDesignSkill?: boolean, messageId?: string) => {
+      if (isStreaming) return
+
+      if (!originalPrompt) {
+        setError('Could not recover the original prompt. Please resend it.')
+        return
+      }
+
+      const setupPromptType = SETUP_PROMPT_BY_INTEGRATION[integrationId]
+
+      if (messageId && setupPromptType) {
+        setMessages((prev) =>
+          prev.flatMap((message) => {
+            if (message.id !== messageId || message.role !== 'assistant') return [message]
+
+            const filteredParts = (message.parts || []).filter((part) => part?.type !== setupPromptType)
+            if (filteredParts.length === 0 && !message.content) {
+              return []
+            }
+
+            return [{ ...message, parts: filteredParts }]
+          })
+        )
+      }
+
+      await handleSubmit(originalPrompt, [], {
+        hideUserMessage: true,
+        forceFrontendDesignSkill,
+      })
+    },
+    [handleSubmit, isStreaming]
   )
 
   // Keep submitRef in sync so handleIntegrationUse can auto-submit
@@ -2631,54 +2738,69 @@ export function Chat({
         }
       }
     },
-    [allSessions, deleteSessionMutation, handleSelectSession, projectId, provider, replaceSessionViewState, selectedSessionId]
+    [
+      allSessions,
+      deleteSessionMutation,
+      handleSelectSession,
+      projectId,
+      provider,
+      replaceSessionViewState,
+      selectedSessionId,
+    ]
   )
 
   // Handle creating a new session (with optional provider/model selection)
-  const handleNewSession = useCallback(async (
-    providerId?: 'claude' | 'codex',
-    modelId?: string
-  ) => {
-    const nextProvider = providerId || defaultProvider
-    const nextModel = modelId || DEFAULT_MODEL_BY_AGENT_PROVIDER[nextProvider]
-    console.log('[Chat] Creating new session', {
-      providerId: nextProvider,
-      modelId: nextModel,
-      previousSessionId: agentSessionId,
-      previousMessagesCount: messagesRef.current.length,
-    })
+  const handleNewSession = useCallback(
+    async (providerId?: 'claude' | 'codex', modelId?: string) => {
+      const nextProvider = providerId || defaultProvider
+      const nextModel = modelId || DEFAULT_MODEL_BY_AGENT_PROVIDER[nextProvider]
+      console.log('[Chat] Creating new session', {
+        providerId: nextProvider,
+        modelId: nextModel,
+        previousSessionId: agentSessionId,
+        previousMessagesCount: messagesRef.current.length,
+      })
 
-    // Detach from the current session - agent continues running in background
-    // Do NOT call stop() here: that would kill the CLI process, preventing reconnect
-    setSessionTransportAttached(activeSessionKey, false)
-    await localAgent.detach()
+      // Detach from the current session - agent continues running in background
+      // Do NOT call stop() here: that would kill the CLI process, preventing reconnect
+      setSessionTransportAttached(activeSessionKey, false)
+      await localAgent.detach()
 
-    // Prevent session restoration effects from undoing this action
-    didStartNewSession.current = true
-    suppressInitialSessionRestore.current = true
+      // Prevent session restoration effects from undoing this action
+      didStartNewSession.current = true
+      suppressInitialSessionRestore.current = true
 
-    // Starting from tab "+" optionally sets provider/model for the next session
-    setProvider(nextProvider)
-    setSelectedModel(nextModel)
+      // Starting from tab "+" optionally sets provider/model for the next session
+      setProvider(nextProvider)
+      setSelectedModel(nextModel)
 
-    // Clear messages completely - each session tab is its own context
-    replaceSessionViewState(DRAFT_SESSION_KEY, createSessionViewState(nextProvider))
+      // Clear messages completely - each session tab is its own context
+      replaceSessionViewState(DRAFT_SESSION_KEY, createSessionViewState(nextProvider))
 
-    // Reset session and error state
-    activeStreamSessionKeyRef.current = DRAFT_SESSION_KEY
-    hideReconnectNotice()
-    setSelectedSessionId(null)
-    console.log('[Chat] New session state reset complete', {
-      providerId: nextProvider,
-      modelId: nextModel,
-      previousSessionId: agentSessionId,
-    })
+      // Reset session and error state
+      activeStreamSessionKeyRef.current = DRAFT_SESSION_KEY
+      hideReconnectNotice()
+      setSelectedSessionId(null)
+      console.log('[Chat] New session state reset complete', {
+        providerId: nextProvider,
+        modelId: nextModel,
+        previousSessionId: agentSessionId,
+      })
 
-    // Reset refs so we don't try to load the old session
-    hasLoadedSession.current = false
-    initialSessionIdAtMount.current = null
-    hasStartedInitialStream.current = false
-  }, [activeSessionKey, defaultProvider, hideReconnectNotice, localAgent, replaceSessionViewState, setSessionTransportAttached])
+      // Reset refs so we don't try to load the old session
+      hasLoadedSession.current = false
+      initialSessionIdAtMount.current = null
+      hasStartedInitialStream.current = false
+    },
+    [
+      activeSessionKey,
+      defaultProvider,
+      hideReconnectNotice,
+      localAgent,
+      replaceSessionViewState,
+      setSessionTransportAttached,
+    ]
+  )
 
   // Handle fix error - submit error to AI for fixing
   const handleFixError = useCallback(() => {
@@ -2808,7 +2930,8 @@ export function Chat({
 
     const run = async () => {
       console.log('[Chat] Sending pending prompt:', pendingPrompt)
-      const isFirebasePrompt = pendingPromptRequest.integrationId === 'firebase' || /\/add-firebase\b/i.test(pendingPrompt)
+      const isFirebasePrompt =
+        pendingPromptRequest.integrationId === 'firebase' || /\/add-firebase\b/i.test(pendingPrompt)
       const isStripePrompt = pendingPromptRequest.integrationId === 'stripe' || /\/add-stripe\b/i.test(pendingPrompt)
       const isRevenueCatPrompt =
         pendingPromptRequest.integrationId === 'revenuecat' || /\/add-revenuecat\b/i.test(pendingPrompt)
@@ -3049,6 +3172,7 @@ export function Chat({
             onAskUserSubmit={handleAskUserSubmit}
             onIntegrationConnect={handleIntegrationConnect}
             onIntegrationUse={handleIntegrationUse}
+            onIntegrationSkip={handleIntegrationSkip}
             onConvexIntentSelect={handleConvexIntentSelect}
             onClaudeReconnect={handleClaudeReconnect}
             onClaudeAuthError={handleClaudeAuthError}
@@ -3158,7 +3282,9 @@ export function Chat({
                 icon: <ConvexLogo width="20" height="20" />,
                 isConnected: integrationStatus.convex,
               },
-            ].filter((integration) => isIntegrationAvailableForAppType(integration.id as IntegrationId, normalizedAppType)),
+            ].filter((integration) =>
+              isIntegrationAvailableForAppType(integration.id as IntegrationId, normalizedAppType)
+            ),
             onConnect: handleIntegrationConnect,
             onUse: handleIntegrationUse,
           }}
