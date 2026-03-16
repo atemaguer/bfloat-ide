@@ -3,6 +3,7 @@ import type { DeployStep } from '@/app/utils/eas-output-parser'
 import type { EasAccount } from '@/app/utils/eas-accounts'
 import type { PromptType, HumanizedPrompt } from '@/lib/conveyor/schemas/deploy-schema'
 import { appendCleanTerminalChunk } from '@/app/utils/clean-logs'
+import type { DeployErrorKind } from '@/app/utils/deploy-error'
 
 export type DeploymentPlatform = 'web' | 'android' | 'ios'
 export type DeploymentStatus = 'idle' | 'running' | 'success' | 'error'
@@ -57,6 +58,7 @@ export interface iOSDeployProgress {
  * iOS setup wizard state
  */
 export type iOSSetupStep = 'idle' | 'wizard' | 'deploying' | 'complete'
+export type IOSWizardResumeStep = 'apple-credentials' | null
 
 const STORAGE_KEY = 'bfloat_deployments'
 const MIGRATION_KEY = 'bfloat_deployments_migrated'
@@ -90,6 +92,8 @@ class DeployStore {
   iOSLogs = createStore<string>(() => '')
   iOSProgressModalOpen = createStore<boolean>(() => false)
   iOSSetupWizardOpen = createStore<boolean>(() => false)
+  iOSErrorKind = createStore<DeployErrorKind>(() => 'generic')
+  iOSSetupResumeStep = createStore<IOSWizardResumeStep>(() => null)
   iOSCredentialStatus = createStore<{
     hasExpoToken: boolean
     hasEasProject: boolean
@@ -309,6 +313,11 @@ class DeployStore {
   closeIOSSetupWizard(): void {
     this.iOSSetupWizardOpen.setState(false, true)
     this.iOSSetupStep.setState('idle', true)
+    this.iOSSetupResumeStep.setState(null, true)
+  }
+
+  setIOSSetupResumeStep(step: IOSWizardResumeStep): void {
+    this.iOSSetupResumeStep.setState(step, true)
   }
 
   /**
@@ -317,6 +326,7 @@ class DeployStore {
   startIOSDeployment(projectId?: string): void {
     this.iOSSetupStep.setState('deploying', true)
     this.iOSProgressModalOpen.setState(true, true)
+    this.iOSErrorKind.setState('generic', true)
     this.iOSProgress.setState({
       step: 'prepare',
       percent: 0,
@@ -385,12 +395,13 @@ class DeployStore {
   /**
    * Fail iOS deployment with error
    */
-  async failIOSDeployment(error: string): Promise<void> {
+  async failIOSDeployment(error: string, errorKind: DeployErrorKind = 'generic'): Promise<void> {
     this.iOSProgress.setState({
       ...this.iOSProgress.getState(),
       step: 'error',
       error,
     }, true)
+    this.iOSErrorKind.setState(errorKind, true)
     this.iOSSetupStep.setState('idle', true)
     await this.failDeployment(error)
 
@@ -441,6 +452,8 @@ class DeployStore {
     this.iOSLogs.setState('', true)
     this.iOSProgressModalOpen.setState(false, true)
     this.iOSSetupWizardOpen.setState(false, true)
+    this.iOSErrorKind.setState('generic', true)
+    this.iOSSetupResumeStep.setState(null, true)
     // Don't reset credential status - it should persist
     // Reset Apple login state
     this.appleLoginStatus.setState('idle', true)

@@ -388,6 +388,129 @@ function detectProgress(
   return null;
 }
 
+async function runLoggedCommand(
+  build: ActiveBuild,
+  args: string[],
+  options: {
+    cwd: string;
+    env: Record<string, string>;
+    onChunk: (chunk: string) => void;
+    ignoreFailure?: boolean;
+  }
+): Promise<{ success: boolean; exitCode: number }> {
+  const proc = Bun.spawn(args, {
+    cwd: options.cwd,
+    env: options.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  build.proc = proc;
+  build.stdinWrite = null;
+
+  const streamOutput = async (stream: ReadableStream<Uint8Array> | null) => {
+    if (!stream) return;
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      options.onChunk(decoder.decode(value));
+    }
+  };
+
+  await Promise.all([streamOutput(proc.stdout), streamOutput(proc.stderr)]);
+  const exitCode = await proc.exited;
+  build.proc = null;
+
+  return {
+    success: options.ignoreFailure ? true : exitCode === 0,
+    exitCode,
+  };
+}
+
+async function runBuildCommand(
+  build: ActiveBuild,
+  args: string[],
+  options: {
+    cwd: string;
+    env: Record<string, string>;
+    onChunk: (chunk: string) => void;
+    usePty: boolean;
+  }
+): Promise<number> {
+  if (options.usePty) {
+    emitBuildEvent(build, "log", { data: "[BIDE_DEPLOY_MODE] pty\n" });
+    const ptyProc = bunPtySpawn(args[0]!, args.slice(1), {
+      name: "xterm-256color",
+      cols: 120,
+      rows: 40,
+      cwd: options.cwd,
+      env: options.env,
+    });
+    build.pty = ptyProc;
+    build.stdinWrite = async (input: string) => {
+      ptyProc.write(input);
+    };
+
+    const exitCode = await new Promise<number>((resolve) => {
+      ptyProc.onData((data) => {
+        const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+        options.onChunk(text);
+      });
+      ptyProc.onExit(({ exitCode: code }) => resolve(code));
+    });
+
+    build.pty = null;
+    build.stdinWrite = null;
+    return exitCode;
+  }
+
+  emitBuildEvent(build, "log", { data: "[BIDE_DEPLOY_MODE] pipe_fallback\n" });
+  const proc = Bun.spawn(args, {
+    cwd: options.cwd,
+    env: options.env,
+    stdout: "pipe",
+    stderr: "pipe",
+    stdin: "pipe",
+  });
+  build.proc = proc;
+
+  if (proc.stdin) {
+    const stdin = proc.stdin as unknown as {
+      getWriter?: () => WritableStreamDefaultWriter<Uint8Array>;
+      write?: (data: string | Uint8Array) => Promise<unknown> | unknown;
+    };
+    if (typeof stdin.getWriter === "function") {
+      const writer = stdin.getWriter();
+      build.stdinWrite = async (input: string) => {
+        const encoded = new TextEncoder().encode(input);
+        await writer.write(encoded);
+      };
+    } else if (typeof stdin.write === "function") {
+      build.stdinWrite = async (input: string) => {
+        await stdin.write!(input);
+      };
+    }
+  }
+
+  const streamOutput = async (stream: ReadableStream<Uint8Array> | null) => {
+    if (!stream) return;
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      options.onChunk(decoder.decode(value));
+    }
+  };
+
+  await Promise.all([streamOutput(proc.stdout), streamOutput(proc.stderr)]);
+  const exitCode = await proc.exited;
+  build.proc = null;
+  build.stdinWrite = null;
+  return exitCode;
+}
+
 // ---------------------------------------------------------------------------
 // Core build runner
 // ---------------------------------------------------------------------------
@@ -407,21 +530,6 @@ async function startBuild(
   );
   const usePty = !useNonInteractive || hasInteractiveCredentials;
   const configuredEasProjectId = await readConfiguredEasProjectId(projectPath);
-
-  const initCommand = configuredEasProjectId
-    ? `npx -y eas-cli init --non-interactive --force --id ${configuredEasProjectId}`
-    : "npx -y eas-cli init --non-interactive --force";
-  const buildCommands = [
-    `cd ${projectPath.replace(/'/g, "'\\''")}`,
-    "echo \"[BIDE_DEPLOY_FLOW_V4]\"",
-    "([ -d .git ] || git init)",
-    "git add -A",
-    'git commit -m "Configure for deployment" --allow-empty || true',
-    initCommand,
-    useNonInteractive
-      ? "npx -y eas-cli build --platform ios --non-interactive --auto-submit"
-      : "npx -y eas-cli build --platform ios --auto-submit",
-  ].join(" && ");
 
   const env = getEnhancedEnv({ EAS_NO_VCS: "1", ...extraEnv });
   let pendingPassword = extraEnv?.EXPO_APPLE_PASSWORD ?? extraEnv?.FASTLANE_PASSWORD ?? "";
@@ -482,94 +590,72 @@ async function startBuild(
     }
   };
 
-  if (usePty) {
-    try {
-      emitBuildEvent(build, "log", { data: "[BIDE_DEPLOY_MODE] pty\n" });
-      const ptyProc = bunPtySpawn("bash", ["-lc", buildCommands], {
-        name: "xterm-256color",
-        cols: 120,
-        rows: 40,
-        cwd: projectPath,
-        env,
-      });
-      build.pty = ptyProc;
-      build.stdinWrite = async (input: string) => {
-        ptyProc.write(input);
-      };
+  emitBuildEvent(build, "log", { data: "[BIDE_DEPLOY_FLOW_V4]\n" });
 
-      const exitCode = await new Promise<number>((resolve) => {
-        ptyProc.onData((data) => {
-          const text = typeof data === "string" ? data : new TextDecoder().decode(data);
-          handleChunk(text);
-        });
-        ptyProc.onExit(({ exitCode: code }) => resolve(code));
-      });
-
-      await finalize(exitCode);
+  if (!fs.existsSync(path.join(projectPath, ".git"))) {
+    const gitInit = await runLoggedCommand(build, ["git", "init"], {
+      cwd: projectPath,
+      env,
+      onChunk: handleChunk,
+    });
+    if (!gitInit.success || build.done) {
+      await finalize(gitInit.exitCode);
       return;
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      emitBuildEvent(build, "log", {
-        data: `[BIDE_DEPLOY_MODE] pty_failed:${reason}\n`,
-      });
-      console.warn(
-        "[Deploy] PTY deploy failed, falling back to Bun.spawn:",
-        reason
-      );
     }
   }
 
-  emitBuildEvent(build, "log", { data: "[BIDE_DEPLOY_MODE] pipe_fallback\n" });
-  const proc = Bun.spawn(["bash", "-c", buildCommands], {
+  const gitAdd = await runLoggedCommand(build, ["git", "add", "-A"], {
     cwd: projectPath,
     env,
-    stdout: "pipe",
-    stderr: "pipe",
-    stdin: "pipe",
+    onChunk: handleChunk,
   });
-  build.proc = proc;
-
-  if (proc.stdin) {
-    const stdin = proc.stdin as unknown as {
-      getWriter?: () => WritableStreamDefaultWriter<Uint8Array>;
-      write?: (data: string | Uint8Array) => Promise<unknown> | unknown;
-    };
-    if (typeof stdin.getWriter === "function") {
-      const writer = stdin.getWriter();
-      build.stdinWrite = async (input: string) => {
-        const encoded = new TextEncoder().encode(input);
-        await writer.write(encoded);
-      };
-    } else if (typeof stdin.write === "function") {
-      build.stdinWrite = async (input: string) => {
-        await stdin.write!(input);
-      };
-    }
+  if (!gitAdd.success || build.done) {
+    await finalize(gitAdd.exitCode);
+    return;
   }
 
-  const streamStdout = async () => {
-    if (!proc.stdout) return;
-    const reader = proc.stdout.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      handleChunk(decoder.decode(value));
+  const gitCommit = await runLoggedCommand(
+    build,
+    ["git", "commit", "-m", "Configure for deployment", "--allow-empty"],
+    {
+      cwd: projectPath,
+      env,
+      onChunk: handleChunk,
+      ignoreFailure: true,
     }
-  };
-  const streamStderr = async () => {
-    if (!proc.stderr) return;
-    const reader = proc.stderr.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      handleChunk(decoder.decode(value));
-    }
-  };
+  );
+  if (build.done) {
+    await finalize(gitCommit.exitCode);
+    return;
+  }
 
-  await Promise.all([streamStdout(), streamStderr()]);
-  await finalize(await proc.exited);
+  const initArgs = ["npx", "-y", "eas-cli", "init", "--non-interactive", "--force"];
+  if (configuredEasProjectId) {
+    initArgs.push("--id", configuredEasProjectId);
+  }
+  const easInit = await runLoggedCommand(build, initArgs, {
+    cwd: projectPath,
+    env,
+    onChunk: handleChunk,
+  });
+  if (!easInit.success || build.done) {
+    await finalize(easInit.exitCode);
+    return;
+  }
+
+  const buildArgs = ["npx", "-y", "eas-cli", "build", "--platform", "ios"];
+  if (useNonInteractive) {
+    buildArgs.push("--non-interactive");
+  }
+  buildArgs.push("--auto-submit");
+
+  const exitCode = await runBuildCommand(build, buildArgs, {
+    cwd: projectPath,
+    env,
+    onChunk: handleChunk,
+    usePty,
+  });
+  await finalize(exitCode);
 }
 
 // ---------------------------------------------------------------------------

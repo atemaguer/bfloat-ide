@@ -43,6 +43,9 @@ interface DeployProgressModalProps {
   onClose: () => void
   onMinimize?: () => void
   onFixWithAI?: () => void
+  showRetryOnError?: boolean
+  showFixWithAIOnError?: boolean
+  errorPrimaryAction?: { label: string; onClick: () => void } | null
 }
 
 function StepIcon({ status }: { status: 'pending' | 'running' | 'complete' | 'error' }) {
@@ -97,6 +100,9 @@ export function DeployProgressModal({
   onClose,
   onMinimize,
   onFixWithAI,
+  showRetryOnError = true,
+  showFixWithAIOnError = true,
+  errorPrimaryAction = null,
 }: DeployProgressModalProps) {
   const [showLogs, setShowLogs] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -327,7 +333,7 @@ export function DeployProgressModal({
               >
                 Close
               </button>
-              {onFixWithAI && (
+              {showFixWithAIOnError && onFixWithAI && (
                 <button
                   onClick={onFixWithAI}
                   className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors flex items-center gap-1.5 cursor-pointer"
@@ -336,13 +342,24 @@ export function DeployProgressModal({
                   Fix with AI
                 </button>
               )}
-              <button
-                onClick={onRetry}
-                className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-1.5"
-              >
-                <RotateCcw size={14} />
-                Retry
-              </button>
+              {errorPrimaryAction ? (
+                <button
+                  onClick={errorPrimaryAction.onClick}
+                  className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+                >
+                  {errorPrimaryAction.label}
+                </button>
+              ) : (
+                showRetryOnError && (
+                  <button
+                    onClick={onRetry}
+                    className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-1.5"
+                  >
+                    <RotateCcw size={14} />
+                    Retry
+                  </button>
+                )
+              )}
             </>
           )}
 

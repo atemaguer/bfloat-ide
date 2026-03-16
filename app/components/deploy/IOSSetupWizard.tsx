@@ -135,6 +135,7 @@ interface IOSSetupWizardProps {
   credentialStatus: iOSCredentialStatus | null
   onComplete: () => void
   onSkipToTerminal: () => void
+  initialStep?: 'apple-credentials' | null
 }
 
 interface StepIndicatorProps {
@@ -192,6 +193,7 @@ export function IOSSetupWizard({
   credentialStatus,
   onComplete,
   onSkipToTerminal,
+  initialStep = null,
 }: IOSSetupWizardProps) {
   const tokens = useStore(providerAuthStore.tokens)
   const buildLogs = useStore(deployStore.buildLogs)
@@ -673,8 +675,9 @@ export function IOSSetupWizard({
   useEffect(() => {
     openRef.current = open
     if (open) {
-      setCurrentStep('welcome')
-      setAuthMethod(null)
+      const nextStep = initialStep ?? 'welcome'
+      setCurrentStep(nextStep)
+      setAuthMethod(nextStep === 'apple-credentials' ? 'apple-id' : null)
       setError(null)
       setKeyId('')
       setIssuerId('')
@@ -706,7 +709,7 @@ export function IOSSetupWizard({
           // Ignore lookup errors and continue with credentials flow
         })
     }
-  }, [open, pickPreferredValidSession])
+  }, [initialStep, open, pickPreferredValidSession])
 
   const renderStepContent = () => {
     switch (currentStep) {
