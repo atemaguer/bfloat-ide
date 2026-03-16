@@ -4,7 +4,7 @@ import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'reac
 import { generateId } from 'ai'
 
 import type { Project, ChatMessage, AgentSession } from '@/app/types/project'
-import type { BackgroundSessionInfo, ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
+import type { ProviderId } from '@/lib/conveyor/schemas/ai-agent-schema'
 import { Chat } from '@/app/components/chat/Chat'
 import { Workbench, WorkbenchHandle } from '@/app/components/workbench/Workbench'
 import { workbenchStore } from '@/app/stores/workbench'
@@ -18,10 +18,19 @@ interface LocalSessionInfo {
   sessionId: string
   runtimeSessionId?: string | null
   providerSessionId?: string | null
+  model?: string | null
   createdAt: number
   lastModified: number
   name?: string
   provider?: 'claude' | 'codex'
+}
+
+interface BackgroundSessionInfo {
+  sessionId: string
+  projectId: string
+  provider: ProviderId
+  status: string
+  startedAt: number
 }
 
 // Image data passed from HomePage via navigation state
@@ -130,6 +139,7 @@ export function ProjectContent({
           sessionId: s.sessionId,
           runtimeSessionId: s.runtimeSessionId ?? null,
           providerSessionId: s.providerSessionId ?? null,
+          model: s.model ?? null,
           createdAt: new Date(s.createdAt).getTime(),
           lastModified: new Date(s.lastUsedAt || s.createdAt).getTime(),
           name: s.name || undefined,
@@ -189,6 +199,7 @@ export function ProjectContent({
             console.log('[ProjectContent] Stable CLI session order:', cliSessions.map((session) => ({
               sessionId: session.sessionId,
               runtimeSessionId: session.runtimeSessionId ?? null,
+              model: session.model ?? null,
               createdAt: session.createdAt,
               lastModified: session.lastModified,
             })))
@@ -288,6 +299,10 @@ export function ProjectContent({
     return selectedStableSession?.provider || initialProvider || project.latestAgentSession?.provider || defaultProvider
   }, [defaultProvider, initialProvider, project.latestAgentSession?.provider, selectedStableSession?.provider])
 
+  const currentModel = useMemo(() => {
+    return selectedStableSession?.model || initialModel || project.latestAgentSession?.model || null
+  }, [initialModel, project.latestAgentSession?.model, selectedStableSession?.model])
+
   const hasExistingSession = sessions.length > 0 || !!(
     projectBackgroundSessions.length > 0 ||
     project.latestAgentSession?.sessionId ||
@@ -364,7 +379,7 @@ export function ProjectContent({
                 projectPath={projectPath}
                 isWorkspaceReady={syncStatus === 'ready'}
                 initialProvider={currentProvider}
-                initialModel={initialModel}
+                initialModel={currentModel || undefined}
                 autoStart={shouldAutoStart}
                 initialSessionId={resolvedSessionId}
                 onSessionIdChange={(sessionId) => {

@@ -18,12 +18,17 @@ export interface ProjectSessionViewState {
   runtimeSessionId: string | null
   providerSessionId: string | null
   provider: ProviderId
+  model: string | null
   transcriptLastSeq: number
   runtimeLastSeq: number
   error: string | null
 }
 
 const DRAFT_SESSION_KEY = '__draft__'
+
+function getDefaultModelForProvider(provider: ProviderId): string {
+  return provider === 'codex' ? 'gpt-5.3-codex' : 'claude-sonnet-4-20250514'
+}
 
 function createSessionViewState(provider: ProviderId, messages: ChatMessage[] = []): ProjectSessionViewState {
   return {
@@ -39,6 +44,7 @@ function createSessionViewState(provider: ProviderId, messages: ChatMessage[] = 
     runtimeSessionId: null,
     providerSessionId: null,
     provider,
+    model: getDefaultModelForProvider(provider),
     transcriptLastSeq: 0,
     runtimeLastSeq: 0,
     error: null,
@@ -226,4 +232,4 @@ class ProjectSessionsStore {
 }
 
 export const projectSessionsStore = new ProjectSessionsStore()
-export { DRAFT_SESSION_KEY, createSessionViewState }
+export { DRAFT_SESSION_KEY, createSessionViewState, getDefaultModelForProvider }

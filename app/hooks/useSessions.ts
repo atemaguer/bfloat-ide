@@ -12,6 +12,7 @@ export interface LocalSessionInfo {
   sessionId: string
   runtimeSessionId?: string | null
   providerSessionId?: string | null
+  model?: string | null
   createdAt: number
   lastModified: number
   name?: string
@@ -42,6 +43,7 @@ export function useSessions(projectId: string | undefined) {
           sessionId: s.sessionId,
           runtimeSessionId: s.runtimeSessionId ?? null,
           providerSessionId: s.providerSessionId ?? null,
+          model: s.model ?? null,
           createdAt: new Date(s.createdAt).getTime(),
           lastModified: new Date(s.lastUsedAt || s.createdAt).getTime(),
           name: s.name || undefined,
@@ -54,6 +56,7 @@ export function useSessions(projectId: string | undefined) {
           sessionId: session.sessionId,
           runtimeSessionId: session.runtimeSessionId ?? null,
           providerSessionId: session.providerSessionId ?? null,
+          model: session.model ?? null,
           createdAt: session.createdAt,
           lastModified: session.lastModified,
         })))
