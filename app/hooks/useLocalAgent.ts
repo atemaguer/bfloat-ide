@@ -61,6 +61,20 @@ interface ReconnectSessionInfo {
   source: 'mount' | 'tab'
 }
 
+interface ReconnectResult {
+  attached: boolean
+  canonicalSessionId: string | null
+}
+
+interface AgentCallbackContext {
+  runtimeSessionId: string | null
+}
+
+interface SendPromptOptions {
+  forceNewSession?: boolean
+  retryConflictWithFreshSession?: boolean
+}
+
 interface UseLocalAgentOptions {
   cwd: string
   provider?: ProviderId
@@ -74,11 +88,12 @@ interface UseLocalAgentOptions {
   projectId?: string // Project ID for background session tracking
   maxTurns?: number // Maximum agentic turns (prevents infinite loops)
   agents?: Record<string, import('@/lib/agents/types').AgentDefinition> // Agent/subagent definitions for team orchestration
-  onMessage?: (message: AgentMessage) => void
-  onError?: (error: string) => void
-  onComplete?: () => void
+  onMessage?: (message: AgentMessage, context: AgentCallbackContext) => void
+  onError?: (error: string, context: AgentCallbackContext) => void
+  onComplete?: (context: AgentCallbackContext) => void
   onSessionId?: (sessionId: string) => void // Called when we get a session ID from init
   onReconnectSession?: (info: ReconnectSessionInfo) => Promise<number | undefined> | number | undefined // Called when reattaching to an existing session
+  enableMountReconnect?: boolean
 }
 
 export function useLocalAgent(options: UseLocalAgentOptions) {
@@ -90,9 +105,10 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     messages: [],
   })
 
-  const unsubscribeRef = useRef<(() => void) | null>(null)
-  /** Monotonically incrementing counter used to detect and discard stale subscription callbacks */
-  const activeSubscriptionIdRef = useRef(0)
+  const subscriptionBySessionRef = useRef<Map<string, () => void>>(new Map())
+  const streamChannelBySessionRef = useRef<Map<string, string>>(new Map())
+  /** Per-session subscription token used to discard stale callbacks after resubscribe/unsubscribe */
+  const subscriptionTokenBySessionRef = useRef<Map<string, number>>(new Map())
   const sessionIdRef = useRef<string | null>(options.sessionId || null)
   const providerSessionIdRef = useRef<string | null>(options.resumeProviderSessionId || null)
   const requestedResumeSessionIdRef = useRef<string | null>(options.resumeProviderSessionId || null)
@@ -118,13 +134,27 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
     requestedResumeSessionIdRef.current = options.resumeProviderSessionId || null
     if (options.sessionId && sessionIdRef.current !== options.sessionId) {
+      console.log('[useLocalAgent] Syncing internal live session ref from options.sessionId', {
+        previousSessionId: sessionIdRef.current,
+        nextSessionId: options.sessionId,
+      })
       sessionIdRef.current = options.sessionId
+      setState((prev) => ({ ...prev, sessionId: options.sessionId }))
     }
-    if (
+    if (!skipResumeOnceRef.current && options.resumeProviderSessionId === null && providerSessionIdRef.current !== null) {
+      console.log('[useLocalAgent] Clearing provider resume session ref from options.resumeProviderSessionId=null', {
+        previousProviderSessionId: providerSessionIdRef.current,
+      })
+      providerSessionIdRef.current = null
+    } else if (
       !skipResumeOnceRef.current &&
       options.resumeProviderSessionId &&
       providerSessionIdRef.current !== options.resumeProviderSessionId
     ) {
+      console.log('[useLocalAgent] Syncing provider resume session ref from options.resumeProviderSessionId', {
+        previousProviderSessionId: providerSessionIdRef.current,
+        nextProviderSessionId: options.resumeProviderSessionId,
+      })
       providerSessionIdRef.current = options.resumeProviderSessionId
     }
   })
@@ -171,13 +201,15 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   )
 
   const handleAgentMessage = useCallback(
-    (agentMsg: AgentMessage) => {
-      setState((prev) => ({
-        ...prev,
-        messages: [...prev.messages, agentMsg],
-      }))
+    (agentMsg: AgentMessage, runtimeSessionId: string | null) => {
+      if (runtimeSessionId && runtimeSessionId === sessionIdRef.current) {
+        setState((prev) => ({
+          ...prev,
+          messages: [...prev.messages, agentMsg],
+        }))
+      }
 
-      onMessageRef.current?.(agentMsg)
+      onMessageRef.current?.(agentMsg, { runtimeSessionId })
 
       // Handle init message - extract and report session ID
       if (agentMsg.type === 'init') {
@@ -212,18 +244,31 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
       if (agentMsg.type === 'error') {
         const errorContent = agentMsg.content as { message: string }
         const errorMessage = normalizeAgentErrorMessage(errorContent.message, options.provider)
-        setState((prev) => ({ ...prev, error: errorMessage }))
-        onErrorRef.current?.(errorMessage)
+        if (runtimeSessionId && runtimeSessionId === sessionIdRef.current) {
+          setState((prev) => ({ ...prev, error: errorMessage }))
+        }
+        onErrorRef.current?.(errorMessage, { runtimeSessionId })
       }
 
-      // Handle completion
-      if (agentMsg.type === 'done') {
+      // Completion is finalized on stream_end so we don't double-fire onComplete
+      // for the same runtime session.
+      if (agentMsg.type === 'done' && runtimeSessionId && runtimeSessionId === sessionIdRef.current) {
         setState((prev) => ({ ...prev, isRunning: false }))
-        onCompleteRef.current?.()
       }
     },
     []
   )
+
+  const unsubscribeFromSession = useCallback((sessionId: string) => {
+    const unsubscribe = subscriptionBySessionRef.current.get(sessionId)
+    if (unsubscribe) {
+      unsubscribe()
+      subscriptionBySessionRef.current.delete(sessionId)
+    }
+    streamChannelBySessionRef.current.delete(sessionId)
+    const currentToken = subscriptionTokenBySessionRef.current.get(sessionId) || 0
+    subscriptionTokenBySessionRef.current.set(sessionId, currentToken + 1)
+  }, [])
 
   /**
    * Replay buffered messages from the background registry that were missed
@@ -246,7 +291,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         for (const msg of replay.messages) {
           if (!shouldProcessMessage(sessionId, msg)) continue
           updateLastSeq(sessionId, msg)
-          handleAgentMessage(msg)
+          handleAgentMessage(msg, sessionId)
         }
       } catch (error) {
         console.error('[useLocalAgent] Failed to replay buffered messages:', error)
@@ -262,26 +307,29 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
    */
   const subscribeToStream = useCallback(
     (sessionId: string, streamChannel: string) => {
-      activeSubscriptionIdRef.current += 1
-      const subscriptionId = activeSubscriptionIdRef.current
-      console.log('[useLocalAgent] Subscribing to stream', { sessionId, streamChannel, subscriptionId })
-
-      // Unsubscribe any previous listener before attaching the new one
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current()
+      const currentChannel = streamChannelBySessionRef.current.get(sessionId)
+      if (currentChannel === streamChannel && subscriptionBySessionRef.current.has(sessionId)) {
+        console.log('[useLocalAgent] Reusing existing stream subscription', { sessionId, streamChannel })
+        return
       }
 
-      unsubscribeRef.current = aiAgent.onStreamMessage(
+      unsubscribeFromSession(sessionId)
+      streamChannelBySessionRef.current.set(sessionId, streamChannel)
+      const subscriptionToken = (subscriptionTokenBySessionRef.current.get(sessionId) || 0) + 1
+      subscriptionTokenBySessionRef.current.set(sessionId, subscriptionToken)
+
+      console.log('[useLocalAgent] Subscribing to stream', { sessionId, streamChannel, subscriptionToken })
+      const unsubscribe = aiAgent.onStreamMessage(
         streamChannel,
         (msg) => {
           console.log('[useLocalAgent] Stream message received:', msg.type)
 
-          // Discard events from stale subscriptions that raced with tab/session switches
-          if (subscriptionId !== activeSubscriptionIdRef.current) {
+          const activeToken = subscriptionTokenBySessionRef.current.get(sessionId)
+          if (activeToken !== subscriptionToken) {
             console.log('[useLocalAgent] Ignoring stale subscription event', {
               sessionId,
-              subscriptionId,
-              activeSubscriptionId: activeSubscriptionIdRef.current,
+              subscriptionToken,
+              activeToken,
               type: msg.type,
             })
             return
@@ -289,19 +337,23 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
           if (msg.type === 'stream_end') {
             console.log('[useLocalAgent] Stream ended', { sessionId, streamChannel })
-            setState((prev) => ({ ...prev, isRunning: false }))
-            onCompleteRef.current?.()
+            unsubscribeFromSession(sessionId)
+            if (sessionIdRef.current === sessionId) {
+              setState((prev) => ({ ...prev, isRunning: false }))
+            }
+            onCompleteRef.current?.({ runtimeSessionId: sessionId })
             return
           }
 
           const agentMsg = msg as AgentMessage
           if (!shouldProcessMessage(sessionId, agentMsg)) return
           updateLastSeq(sessionId, agentMsg)
-          handleAgentMessage(agentMsg)
+          handleAgentMessage(agentMsg, sessionId)
         }
       )
+      subscriptionBySessionRef.current.set(sessionId, unsubscribe)
     },
-    [handleAgentMessage, shouldProcessMessage, updateLastSeq]
+    [handleAgentMessage, shouldProcessMessage, unsubscribeFromSession, updateLastSeq]
   )
 
   /**
@@ -359,11 +411,13 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   // The agent continues running in the background via the main process.
   useEffect(() => {
     return () => {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current()
-        // Invalidate the subscription ID so any in-flight callbacks are discarded
-        activeSubscriptionIdRef.current += 1
+      for (const [sessionId, unsubscribe] of subscriptionBySessionRef.current.entries()) {
+        unsubscribe()
+        const currentToken = subscriptionTokenBySessionRef.current.get(sessionId) || 0
+        subscriptionTokenBySessionRef.current.set(sessionId, currentToken + 1)
       }
+      subscriptionBySessionRef.current.clear()
+      streamChannelBySessionRef.current.clear()
       // NOTE: We intentionally do NOT terminate the session here.
       // The session continues running in the background and can be
       // reconnected to when the user returns to the project page.
@@ -373,34 +427,48 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
   // Reconnect to a background session on mount (if one exists for this project)
   useEffect(() => {
-    if (!options.projectId || hasReconnected.current) return
+    if (!options.projectId || !options.enableMountReconnect || hasReconnected.current) return
     hasReconnected.current = true
 
     const reconnect = async () => {
       try {
-        console.log('[useLocalAgent] Checking for background session for project:', options.projectId)
-        const result = await aiAgent.getBackgroundSession(options.projectId!)
+        console.log('[useLocalAgent] Checking for background sessions for project:', options.projectId)
+        const sessions = await aiAgent.listBackgroundSessions()
+        const projectSessions = sessions
+          .filter((session) => session.projectId === options.projectId)
+          .sort((a, b) => b.startedAt - a.startedAt)
 
-        if (!result.success || !result.session) {
+        if (projectSessions.length === 0) {
           console.log('[useLocalAgent] No background session found')
           return
         }
 
-        const bgSession = result.session
+        if (projectSessions.length > 1) {
+          console.log('[useLocalAgent] Skipping mount reconnect because project has multiple background sessions', {
+            projectId: options.projectId,
+            sessions: projectSessions.map((session) => ({
+              sessionId: session.sessionId,
+              provider: session.provider,
+              status: session.status,
+              startedAt: session.startedAt,
+            })),
+          })
+          return
+        }
+
+        const bgSession = projectSessions[0]
         console.log('[useLocalAgent] Found background session:', {
           sessionId: bgSession.sessionId,
           status: bgSession.status,
-          streamChannel: bgSession.streamChannel,
         })
 
-        // Set the session ID so future prompts use the same session
-        sessionIdRef.current = bgSession.sessionId
-        setState((prev) => ({
-          ...prev,
-          sessionId: bgSession.sessionId,
-        }))
-
         if (bgSession.status === 'running') {
+          // Only running background sessions should seed the live session ref.
+          sessionIdRef.current = bgSession.sessionId
+          setState((prev) => ({
+            ...prev,
+            sessionId: bgSession.sessionId,
+          }))
           setState((prev) => ({ ...prev, isRunning: true }))
           const afterSeq = await onReconnectSessionRef.current?.({
             sessionId: bgSession.sessionId,
@@ -417,26 +485,32 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
         } else if (bgSession.status === 'completed') {
           // Session completed while user was away
           console.log('[useLocalAgent] Background session already completed')
+          sessionIdRef.current = null
+          setState((prev) => ({ ...prev, sessionId: null, isRunning: false }))
           await onReconnectSessionRef.current?.({
             sessionId: bgSession.sessionId,
             provider: bgSession.provider,
             status: bgSession.status,
             source: 'mount',
           })
-          onCompleteRef.current?.()
+          onCompleteRef.current?.({ runtimeSessionId: bgSession.sessionId })
 
           // Clean up the completed background session
           aiAgent.unregisterBackgroundSession(bgSession.sessionId)
         } else if (bgSession.status === 'error') {
           // Session errored while user was away
           console.log('[useLocalAgent] Background session errored')
+          sessionIdRef.current = null
+          setState((prev) => ({ ...prev, sessionId: null, isRunning: false }))
           await onReconnectSessionRef.current?.({
             sessionId: bgSession.sessionId,
             provider: bgSession.provider,
             status: bgSession.status,
             source: 'mount',
           })
-          onErrorRef.current?.('Agent session encountered an error while running in the background')
+          onErrorRef.current?.('Agent session encountered an error while running in the background', {
+            runtimeSessionId: bgSession.sessionId,
+          })
 
           // Clean up the errored background session
           aiAgent.unregisterBackgroundSession(bgSession.sessionId)
@@ -448,7 +522,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
 
     reconnect()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options.projectId, reconnectToRunningSession])
+  }, [options.enableMountReconnect, options.projectId, reconnectToRunningSession])
 
   // Invalidate session when cwd changes to a DIFFERENT project
   // Don't terminate if transitioning from empty string to valid path (initial load)
@@ -576,27 +650,40 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
       sessionId: result.sessionId!,
       error: null,
     }))
+    onSessionIdRef.current?.(result.sessionId)
 
     return result.sessionId
   }, [options.cwd, options.provider, options.model, options.sessionId, options.systemPrompt, options.resumeProviderSessionId, options.projectId])
 
   // Send a prompt to the agent
   const sendPrompt = useCallback(
-    async (message: string, displayMessage?: PromptDisplayMessage) => {
+    async (message: string, displayMessage?: PromptDisplayMessage, sendOptions?: SendPromptOptions) => {
       console.log('[useLocalAgent] sendPrompt called with:', message)
       try {
         setState((prev) => ({ ...prev, isRunning: true, error: null }))
 
         // Create session if not exists OR if there are pending env vars
         // Pending env vars (e.g., Apple credentials for iOS deployment) require a new session
-        let sessionId = sessionIdRef.current
+        const shouldForceNewSession = sendOptions?.forceNewSession === true
+        let sessionId = shouldForceNewSession ? null : sessionIdRef.current
         const hasPendingEnvVars = workbenchStore.hasPendingEnvVars()
 
         console.log('[useLocalAgent] Has pending env vars:', hasPendingEnvVars)
+        if (shouldForceNewSession) {
+          console.log('[useLocalAgent] sendPrompt forcing a fresh runtime session', {
+            previousSessionId: sessionIdRef.current,
+            resumeProviderSessionId: providerSessionIdRef.current || options.resumeProviderSessionId || null,
+          })
+        }
 
-        if (!sessionId || hasPendingEnvVars) {
-          if (hasPendingEnvVars && sessionId) {
+        if (!sessionId || hasPendingEnvVars || shouldForceNewSession) {
+          if (hasPendingEnvVars && sessionIdRef.current) {
             console.log('[useLocalAgent] Creating new session to pick up pending env vars')
+          }
+          if (shouldForceNewSession && sessionIdRef.current) {
+            console.log('[useLocalAgent] Ignoring currently attached runtime session for fresh prompt', {
+              attachedSessionId: sessionIdRef.current,
+            })
           }
           sessionId = await createSession()
         }
@@ -622,6 +709,18 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
             if (!result.success || !result.streamChannel) {
               throw new Error(result.error || 'Failed to send prompt after session recovery')
             }
+          } else if (result.error === 'Conflict' && sendOptions?.retryConflictWithFreshSession) {
+            console.warn('[useLocalAgent] Session conflict, retrying with a fresh runtime session:', {
+              oldSessionId: sessionId,
+              resumeProviderSessionId: providerSessionIdRef.current || options.resumeProviderSessionId || null,
+            })
+            sessionIdRef.current = null
+            setState((prev) => ({ ...prev, sessionId: null }))
+            sessionId = await createSession()
+            result = await aiAgent.prompt(sessionId, message, displayMessage)
+            if (!result.success || !result.streamChannel) {
+              throw new Error(result.error || 'Failed to send prompt after conflict recovery')
+            }
           } else {
             throw new Error(result.error || 'Failed to send prompt')
           }
@@ -639,7 +738,9 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
           isRunning: false,
           error: errorMsg,
         }))
-        onErrorRef.current?.(errorMsg)
+        onErrorRef.current?.(errorMsg, {
+          runtimeSessionId: sessionIdRef.current,
+        })
       }
     },
     [createSession, subscribeToStream]
@@ -654,15 +755,9 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     }
   }, [])
 
-  // Detach from the current session (unsubscribe from stream but keep session running)
-  // Used for session switching - the session continues in background
+  // Detach the active tab from the current session without touching live background subscriptions.
+  // Used for session switching - the selected tab changes, but other running sessions keep streaming.
   const detach = useCallback(async () => {
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current()
-      unsubscribeRef.current = null
-      activeSubscriptionIdRef.current += 1
-    }
-
     console.log('[useLocalAgent] Detached from session:', sessionIdRef.current)
     sessionIdRef.current = null
 
@@ -677,7 +772,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
   // Reconnect to a specific background session by session ID
   // Used when switching back to a session tab that was previously detached
   const reconnectToSession = useCallback(
-    async (sessionId: string, afterSeq?: number): Promise<boolean> => {
+    async (sessionId: string, afterSeq?: number): Promise<ReconnectResult> => {
       try {
         console.log('[useLocalAgent] reconnectToSession called for:', sessionId)
         const result = await aiAgent.getBackgroundSessionById(sessionId)
@@ -689,7 +784,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
             success: result.success,
             status: bgSession?.status || null,
           })
-          return false
+          return { attached: false, canonicalSessionId: null }
         }
 
         const canonicalSessionId = bgSession.sessionId
@@ -702,27 +797,55 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
           streamChannel: bgSession.streamChannel || null,
         })
 
-        return reconnectToRunningSession(canonicalSessionId, { afterSeq })
+        const attached = await reconnectToRunningSession(canonicalSessionId, { afterSeq })
+        return {
+          attached,
+          canonicalSessionId,
+        }
       } catch (error) {
         console.error('[useLocalAgent] Failed to reconnect to session:', error)
+        return { attached: false, canonicalSessionId: null }
+      }
+    },
+    [reconnectToRunningSession]
+  )
+
+  const watchSession = useCallback(
+    async (sessionId: string, afterSeq?: number): Promise<boolean> => {
+      try {
+        console.log('[useLocalAgent] watchSession called for:', sessionId)
+        return await reconnectToRunningSession(sessionId, { afterSeq })
+      } catch (error) {
+        console.error('[useLocalAgent] Failed to watch session:', error)
         return false
       }
     },
     [reconnectToRunningSession]
   )
 
+  const terminateSession = useCallback(
+    async (sessionId: string) => {
+      console.log('[useLocalAgent] Terminating explicit session:', sessionId)
+      unsubscribeFromSession(sessionId)
+      await aiAgent.terminateSession(sessionId)
+      if (sessionIdRef.current === sessionId) {
+        sessionIdRef.current = null
+        setState({
+          isConnected: false,
+          isRunning: false,
+          sessionId: null,
+          error: null,
+          messages: [],
+        })
+      }
+    },
+    [unsubscribeFromSession]
+  )
+
   // Terminate the session (explicit user action)
   const terminate = useCallback(async () => {
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current()
-      unsubscribeRef.current = null
-      activeSubscriptionIdRef.current += 1
-    }
-
     if (sessionIdRef.current) {
-      console.log('[useLocalAgent] Terminating session:', sessionIdRef.current)
-      await aiAgent.terminateSession(sessionIdRef.current)
-      sessionIdRef.current = null
+      await terminateSession(sessionIdRef.current)
     }
 
     setState({
@@ -732,7 +855,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
       error: null,
       messages: [],
     })
-  }, [])
+  }, [terminateSession])
 
   // Get available providers
   const getProviders = useCallback(async () => {
@@ -748,5 +871,7 @@ export function useLocalAgent(options: UseLocalAgentOptions) {
     terminate,
     getProviders,
     reconnectToSession,
+    watchSession,
+    terminateSession,
   }
 }

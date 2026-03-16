@@ -27,7 +27,7 @@
   border-radius: 4px;
   font-family: var(--font-mono, PaperMono, GeistMono, monospace);
   font-size: 13px;
-  color: #3b82f6;
+  color: hsl(var(--primary));
 }
 
 .code-block {
@@ -91,8 +91,8 @@
 }
 
 .chat-input-box:focus-within {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2);
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 1px hsl(var(--primary-soft));
 }
 
 .chat-input-textarea-wrapper {
@@ -2071,7 +2071,7 @@
 
 .session-tab.active {
   color: hsl(var(--foreground));
-  border-bottom-color: var(--color-accent-blue, #4a9eff);
+  border-bottom-color: hsl(var(--support));
 }
 
 .session-tab-label {

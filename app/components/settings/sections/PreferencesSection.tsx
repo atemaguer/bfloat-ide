@@ -1,17 +1,18 @@
-import { useState } from 'react'
 import { Switch } from '@/app/components/ui/Switch'
 import { useStore } from '@/app/hooks/useStore'
 import { preferencesStore } from '@/app/stores/preferences'
+import { providerAuthStore } from '@/app/stores/provider-auth'
+import type { EditorFontSize } from '@/app/stores/preferences'
 import { SettingsCard, SettingsRow, SettingsSelect } from '../components'
 
 export function PreferencesSection() {
-  const [autoSave, setAutoSave] = useState(true)
-  const [showLineNumbers, setShowLineNumbers] = useState(true)
-  const [wordWrap, setWordWrap] = useState(false)
-  const [formatOnSave, setFormatOnSave] = useState(true)
-  const [editorFontSize, setEditorFontSize] = useState('14')
-  const [defaultProvider, setDefaultProvider] = useState('claude')
   const defaultView = useStore(preferencesStore.projectListView)
+  const editorFontSize = useStore(preferencesStore.editorFontSize)
+  const showLineNumbers = useStore(preferencesStore.showLineNumbers)
+  const wordWrap = useStore(preferencesStore.wordWrap)
+  const formatOnSave = useStore(preferencesStore.formatOnSave)
+  const autoSave = useStore(preferencesStore.autoSave)
+  const providerSettings = useStore(providerAuthStore.settings)
 
   return (
     <div className="flex flex-col gap-8">
@@ -37,7 +38,7 @@ export function PreferencesSection() {
           description="Automatically save changes as you type"
           isLast
         >
-          <Switch checked={autoSave} onCheckedChange={setAutoSave} />
+          <Switch checked={autoSave} onCheckedChange={preferencesStore.setAutoSave} />
         </SettingsRow>
       </SettingsCard>
 
@@ -49,7 +50,7 @@ export function PreferencesSection() {
         >
           <SettingsSelect
             value={editorFontSize}
-            onChange={setEditorFontSize}
+            onChange={(value) => preferencesStore.setEditorFontSize(value as EditorFontSize)}
             options={[
               { value: '12', label: '12px' },
               { value: '13', label: '13px' },
@@ -64,20 +65,20 @@ export function PreferencesSection() {
           title="Show line numbers"
           description="Display line numbers in the editor gutter"
         >
-          <Switch checked={showLineNumbers} onCheckedChange={setShowLineNumbers} />
+          <Switch checked={showLineNumbers} onCheckedChange={preferencesStore.setShowLineNumbers} />
         </SettingsRow>
         <SettingsRow
           title="Word wrap"
           description="Wrap long lines to fit the editor width"
         >
-          <Switch checked={wordWrap} onCheckedChange={setWordWrap} />
+          <Switch checked={wordWrap} onCheckedChange={preferencesStore.setWordWrap} />
         </SettingsRow>
         <SettingsRow
           title="Format on save"
           description="Automatically format code when saving files"
           isLast
         >
-          <Switch checked={formatOnSave} onCheckedChange={setFormatOnSave} />
+          <Switch checked={formatOnSave} onCheckedChange={preferencesStore.setFormatOnSave} />
         </SettingsRow>
       </SettingsCard>
 
@@ -89,10 +90,10 @@ export function PreferencesSection() {
           isLast
         >
           <SettingsSelect
-            value={defaultProvider}
-            onChange={setDefaultProvider}
+            value={providerSettings.defaultProvider}
+            onChange={(value) => providerAuthStore.setDefaultProvider(value as 'anthropic' | 'openai')}
             options={[
-              { value: 'claude', label: 'Claude' },
+              { value: 'anthropic', label: 'Claude' },
               { value: 'openai', label: 'ChatGPT' },
             ]}
           />

@@ -1,38 +1,47 @@
-PLAN:
-- Rewrite `README.md` into a self-contained operator/developer guide that covers setup, local development, local data storage, database/integrations/payments setup, deployment constraints, release/build basics, and license.
-- Pull only from behavior that exists in the repo today so the README is accurate: local-first storage, Tauri + Bun sidecar architecture, project-scoped integration secrets, Expo/iOS deployment flow, and local Claude/Codex CLI auth.
-- Remove or correct misleading claims, especially around API key requirements for Claude/Codex and generic “publish” promises that the app does not fully support.
-- Verify the rewrite by reviewing the diff and checking for obvious command/path mismatches against package scripts and current docs.
+TASK: Replicate bfloat-workbench integration-banner skip flow in bfloat-ide
 
-APPROACH:
-- Replace the current marketing-style README with a docs-first structure:
-  - What the IDE is
-  - Stack and architecture
-  - Setup / prerequisites
-  - Running locally
-  - How auth/providers work
-  - Local data and “database” model
-  - Payments and database integrations
-  - Deployment
-  - Build/release basics
-  - Repo layout
-  - License
-- Keep it concise but self-contained; prefer “what exists today” over aspirational docs.
+Files to modify:
 
-ALTERNATIVES REJECTED:
-- Appending more sections onto the existing README: rejected because the current file has outdated and contradictory setup/auth guidance.
-- Splitting into multiple docs and linking out: rejected because the user explicitly wants the README to be the docs.
+- `app/components/chat/Chat.tsx`
+- `app/components/chat/Messages.tsx`
+- `app/components/chat/AssistantMessage.tsx`
+- `app/components/chat/ConvexSetupBanner.tsx`
+- `app/components/chat/FirebaseSetupBanner.tsx`
+- `app/components/chat/StripeSetupBanner.tsx`
+- `app/components/chat/RevenueCatSetupBanner.tsx`
+
+Order of operations and why:
+
+1. Add setup-prompt metadata plumbing in `Chat.tsx` so intercepted integration banners remember the original prompt and whether the frontend-design skill should be forced.
+2. Add a `handleIntegrationSkip` path in `Chat.tsx` that removes the banner prompt from the originating assistant message and resubmits the saved prompt directly to the local agent.
+3. Thread a new `onIntegrationSkip` callback through `Messages.tsx` and `AssistantMessage.tsx`, extracting setup metadata from banner sections.
+4. Update each setup banner component to render a secondary `Skip` CTA that mirrors workbench behavior without changing existing connect/use semantics.
+5. Run targeted verification on the affected frontend code, then review the diff and commit only these task changes.
+
+Approach chosen:
+
+- Port the existing workbench pattern closely instead of inventing a new local variant.
+- Keep the change scoped to chat setup banners and their prompt interception flow.
+
+Alternatives rejected:
+
+- Adding a generic dismiss action that only hides the banner, because the requested behavior is to send the original message directly to the agent.
+- Reworking broader integration prompt policy or banner styling, because those are orthogonal to this request.
 
 ASSUMPTIONS:
-1. “Database” in the README should explain both the IDE’s own local-first storage and the supported app database integrations (Firebase and Convex), rather than inventing a central app database setup.
-2. “Payments” should document the current Stripe and RevenueCat integration model via project secrets and setup flows, not claim a hosted payments backend managed by the IDE.
-3. The README should state that Claude Code and Codex use locally installed/authenticated CLIs and do not require OpenAI/Anthropic API keys for normal IDE usage.
 
-RISKS:
-- The repo contains older docs (`DEV.md`, `DEVELOPER.md`, `RELEASE.md`) that may now overlap with the rewritten README; the README should still be internally consistent even if those remain.
-- Deployment support is asymmetric today; the README must avoid overstating Android/web deployment capabilities.
+1. The desired behavior is identical to `bfloat-workbench`: skip should bypass setup guidance for that intercepted message by resending the original prompt and removing the corresponding setup part from the assistant banner message.
+2. Local `MessagePart` extensibility is sufficient for carrying `originalPrompt` and `forceFrontendDesignSkill` without changing the shared type definition.
+3. The existing `localAgent.sendPrompt(...)` path is the correct equivalent to workbench's direct-send helper for skipped prompts in this repo.
+   → Proceeding with these.
 
-VERIFY:
-- Review the final `README.md` diff carefully for accuracy.
-- Confirm referenced commands match current `package.json` / package scripts.
-- Keep the scope to `README.md` only.
+Risk areas:
+
+- Accidentally leaving the banner visible after skip because the wrong assistant message/part is filtered.
+- Re-sending the skipped prompt with the wrong frontend-design forcing behavior for first-session prompts.
+- Starting the skip flow while chat is already streaming and creating duplicate sends.
+
+Verification:
+
+- Run `bun x tsc -p tsconfig.web.json --noEmit` and check whether the touched files remain type-safe.
+- Re-read `git diff` for only the intended banner/skip flow changes.

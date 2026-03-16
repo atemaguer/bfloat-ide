@@ -1018,28 +1018,36 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   // This captures clean error messages from the UI instead of raw terminal output
   const handlePreviewError = useCallback((error: string) => {
     console.log('[Workbench] Preview error received:', error)
-    showErrorToast(error, {
-      id: 'preview-error',
-      duration: 12000,
-      allowCopy: true,
-      actions: [
-        {
-          label: 'FIX WITH AI',
-          className:
-            'cursor-pointer rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90',
-          onClick: () => {
-            const errorPrompt = `Please fix the following error:\n\n\`\`\`\n${error}\n\`\`\``
-            workbenchStore.triggerChatPrompt(errorPrompt)
-            workbenchStore.clearPromptError()
-            toast.dismiss('preview-error')
+    if (!chatStreaming) {
+      showErrorToast(error, {
+        id: 'preview-error',
+        duration: 12000,
+        allowCopy: true,
+        actions: [
+          {
+            label: 'FIX WITH AI',
+            className:
+              'cursor-pointer rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90',
+            onClick: () => {
+              const errorPrompt = `Please fix the following error:\n\n\`\`\`\n${error}\n\`\`\``
+              workbenchStore.triggerChatPrompt(errorPrompt)
+              workbenchStore.clearPromptError()
+              toast.dismiss('preview-error')
+            },
           },
-        },
-      ],
-    })
+        ],
+      })
+    }
     // Also set the error banner above the chat input (when not streaming)
     if (!chatStreaming) {
       workbenchStore.setPromptError(error)
     }
+  }, [chatStreaming])
+
+  useEffect(() => {
+    if (!chatStreaming) return
+
+    toast.dismiss('preview-error')
   }, [chatStreaming])
 
   // Expose preview URL to main process for MCP screenshot tool

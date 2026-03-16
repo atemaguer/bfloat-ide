@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { useStore } from '@/app/hooks/useStore'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -17,6 +18,8 @@ import { Toaster } from 'react-hot-toast'
 import './styles/app.css'
 
 export default function App() {
+  const navigate = useNavigate()
+  const location = useLocation()
   const onboardingComplete = useStore(isOnboardingComplete)
   const [onboardingChecked, setOnboardingChecked] = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
@@ -39,13 +42,17 @@ export default function App() {
       // Cmd+, / Ctrl+, - Open settings
       if ((e.metaKey || e.ctrlKey) && e.key === ',') {
         e.preventDefault()
-        window.location.href = '/settings'
+        navigate('/settings', {
+          state: {
+            returnTo: `${location.pathname}${location.search}${location.hash}`,
+          },
+        })
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [location.hash, location.pathname, location.search, navigate])
 
   // Show loading while checking onboarding status
   if (!onboardingChecked) {

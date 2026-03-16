@@ -275,7 +275,7 @@ export function DeployiOSSection({ disabled = false }: DeployiOSSectionProps) {
             onClick={handlePublish}
             disabled={isButtonDisabled}
             title={!hasFiles ? 'Project has no files to publish' : !projectPath ? 'Project path not set' : undefined}
-            className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium bg-foreground text-background rounded-[10px] transition-all hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer gap-2"
+            className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-[10px] transition-all hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer gap-2"
           >
             {isCheckingCredentials ? (
               <>

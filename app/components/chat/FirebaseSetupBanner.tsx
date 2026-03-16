@@ -6,9 +6,16 @@ interface FirebaseSetupBannerProps {
   isSettingUp?: boolean
   onConnect: () => void
   onUse: () => void
+  onSkip?: () => void
 }
 
-export function FirebaseSetupBanner({ isConnected, isSettingUp = false, onConnect, onUse }: FirebaseSetupBannerProps) {
+export function FirebaseSetupBanner({
+  isConnected,
+  isSettingUp = false,
+  onConnect,
+  onUse,
+  onSkip,
+}: FirebaseSetupBannerProps) {
   return (
     <div
       style={{
@@ -27,47 +34,66 @@ export function FirebaseSetupBanner({ isConnected, isSettingUp = false, onConnec
           To add Firebase support, save the Firebase client config first, then run the `/add-firebase` setup flow.
         </span>
       </div>
-      {isConnected ? (
-        <button
-          onClick={onUse}
-          disabled={isSettingUp}
-          style={{
-            padding: '8px 16px',
-            borderRadius: '8px',
-            border: 'none',
-            backgroundColor: 'var(--bfloat-accent, #6c5ce7)',
-            color: '#fff',
-            fontSize: '13px',
-            fontWeight: 500,
-            cursor: isSettingUp ? 'not-allowed' : 'pointer',
-            alignSelf: 'flex-start',
-            opacity: isSettingUp ? 0.7 : 1,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-          }}
-        >
-          {isSettingUp && <Loader2 size={14} className="animate-spin" />}
-          {isSettingUp ? 'Setting up Firebase...' : 'Set up Firebase'}
-        </button>
-      ) : (
-        <button
-          onClick={onConnect}
-          style={{
-            padding: '8px 16px',
-            borderRadius: '8px',
-            border: '1px solid var(--bfloat-border, rgba(255,255,255,0.12))',
-            backgroundColor: 'transparent',
-            color: 'var(--bfloat-text-primary, #e0e0f0)',
-            fontSize: '13px',
-            fontWeight: 500,
-            cursor: 'pointer',
-            alignSelf: 'flex-start',
-          }}
-        >
-          Add Firebase Credentials
-        </button>
-      )}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        {isConnected ? (
+          <button
+            onClick={onUse}
+            disabled={isSettingUp}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              border: 'none',
+              backgroundColor: 'var(--bfloat-accent, #6c5ce7)',
+              color: '#fff',
+              fontSize: '13px',
+              fontWeight: 500,
+              cursor: isSettingUp ? 'not-allowed' : 'pointer',
+              alignSelf: 'flex-start',
+              opacity: isSettingUp ? 0.7 : 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            {isSettingUp && <Loader2 size={14} className="animate-spin" />}
+            {isSettingUp ? 'Setting up Firebase...' : 'Set up Firebase'}
+          </button>
+        ) : (
+          <button
+            onClick={onConnect}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              border: '1px solid var(--bfloat-border, rgba(255,255,255,0.12))',
+              backgroundColor: 'transparent',
+              color: 'var(--bfloat-text-primary, #e0e0f0)',
+              fontSize: '13px',
+              fontWeight: 500,
+              cursor: 'pointer',
+              alignSelf: 'flex-start',
+            }}
+          >
+            Add Firebase Credentials
+          </button>
+        )}
+        {onSkip && (
+          <button
+            onClick={onSkip}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              border: '1px solid var(--bfloat-border, rgba(255,255,255,0.12))',
+              backgroundColor: 'transparent',
+              color: 'var(--bfloat-text-secondary, #a0a0b8)',
+              fontSize: '13px',
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            Skip
+          </button>
+        )}
+      </div>
     </div>
   )
 }
