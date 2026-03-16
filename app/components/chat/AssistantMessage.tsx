@@ -12,7 +12,7 @@
  * - Thinking indicator during streaming
  */
 
-import { memo, useMemo, useState, useCallback, useEffect, useRef } from 'react'
+import { memo, useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Loader2 } from 'lucide-react'
 import { Shimmer } from '@/app/components/ui/shimmer'
@@ -53,8 +53,14 @@ interface AskUserSection {
   isAnswered: boolean
 }
 
+interface SetupSectionMeta {
+  originalPrompt?: string
+  forceFrontendDesignSkill?: boolean
+}
+
 interface ConvexSetupSection {
   type: 'convex_setup'
+  meta: SetupSectionMeta
 }
 
 interface ConvexIntentSection {
@@ -63,14 +69,17 @@ interface ConvexIntentSection {
 
 interface FirebaseSetupSection {
   type: 'firebase_setup'
+  meta: SetupSectionMeta
 }
 
 interface StripeSetupSection {
   type: 'stripe_setup'
+  meta: SetupSectionMeta
 }
 
 interface RevenueCatSetupSection {
   type: 'revenuecat_setup'
+  meta: SetupSectionMeta
 }
 
 interface ClaudeAuthSection {
@@ -96,11 +105,18 @@ type Section =
   | ReasoningSection
 
 interface AssistantMessageProps {
+  messageId: string
   parts: MessagePart[]
   isStreaming?: boolean
   onAskUserSubmit?: (toolCallId: string, answers: Record<string, string>) => void
   onIntegrationConnect?: (id: string) => void
   onIntegrationUse?: (id: string) => void
+  onIntegrationSkip?: (
+    integrationId: string,
+    originalPrompt?: string,
+    forceFrontendDesignSkill?: boolean,
+    messageId?: string
+  ) => void
   onConvexIntentSelect?: (mode: ConvexIntentMode) => void
   onClaudeReconnect?: () => void
   onClaudeAuthError?: () => void
@@ -119,6 +135,11 @@ interface AssistantMessageProps {
 function parseIntoSections(parts: MessagePart[]): Section[] {
   const rawSections: Section[] = []
   let currentToolGroup: ToolAction[] = []
+  const getSetupMeta = (part: MessagePart): SetupSectionMeta => ({
+    originalPrompt: typeof part.originalPrompt === 'string' ? part.originalPrompt : undefined,
+    forceFrontendDesignSkill:
+      typeof part.forceFrontendDesignSkill === 'boolean' ? part.forceFrontendDesignSkill : undefined,
+  })
 
   // Helper to flush accumulated tools into a group section
   const flushToolGroup = () => {
@@ -140,7 +161,7 @@ function parseIntoSections(parts: MessagePart[]): Section[] {
     // Handle convex setup prompt
     if (part.type === 'convex-setup-prompt') {
       flushToolGroup()
-      rawSections.push({ type: 'convex_setup' })
+      rawSections.push({ type: 'convex_setup', meta: getSetupMeta(part) })
       continue
     }
 
@@ -153,21 +174,21 @@ function parseIntoSections(parts: MessagePart[]): Section[] {
     // Handle firebase setup prompt
     if (part.type === 'firebase-setup-prompt') {
       flushToolGroup()
-      rawSections.push({ type: 'firebase_setup' })
+      rawSections.push({ type: 'firebase_setup', meta: getSetupMeta(part) })
       continue
     }
 
     // Handle stripe setup prompt
     if (part.type === 'stripe-setup-prompt') {
       flushToolGroup()
-      rawSections.push({ type: 'stripe_setup' })
+      rawSections.push({ type: 'stripe_setup', meta: getSetupMeta(part) })
       continue
     }
 
     // Handle revenuecat setup prompt
     if (part.type === 'revenuecat-setup-prompt') {
       flushToolGroup()
-      rawSections.push({ type: 'revenuecat_setup' })
+      rawSections.push({ type: 'revenuecat_setup', meta: getSetupMeta(part) })
       continue
     }
 
@@ -273,11 +294,13 @@ function isAnimatedBannerSection(section: Section): boolean {
 }
 
 export const AssistantMessage = memo(function AssistantMessage({
+  messageId,
   parts,
   isStreaming,
   onAskUserSubmit,
   onIntegrationConnect,
   onIntegrationUse,
+  onIntegrationSkip,
   onConvexIntentSelect,
   onClaudeReconnect,
   onClaudeAuthError,
@@ -296,10 +319,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const lastAuthErrorSignatureRef = useRef<string | null>(null)
 
   // Filter out null/undefined parts
-  const safeParts = useMemo(
-    () => parts.filter((part): part is MessagePart => part != null),
-    [parts]
-  )
+  const safeParts = useMemo(() => parts.filter((part): part is MessagePart => part != null), [parts])
 
   // Parse into sections
   const sections = useMemo(() => parseIntoSections(safeParts), [safeParts])
@@ -360,8 +380,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     }
 
     const signature = authErrorTextSections.join('\n').slice(0, 400) || 'claude-auth-section'
-    const shouldNotify =
-      !isClaudeAuthenticated && lastAuthErrorSignatureRef.current !== signature
+    const shouldNotify = !isClaudeAuthenticated && lastAuthErrorSignatureRef.current !== signature
 
     if (shouldNotify) {
       lastAuthErrorSignatureRef.current = signature
@@ -402,97 +421,116 @@ export const AssistantMessage = memo(function AssistantMessage({
         {visibleSections.map((section, index) => {
           const sectionKey = getSectionKey(section, index)
 
-          let content: JSX.Element | null = null
+          let content: ReactNode = null
 
-        if (section.type === 'text') {
-          const isLastSection = index === visibleSections.length - 1
-          content = (
-            <div className="assistant-text">
-              <Markdown isAnimating={isLastSection && !!isStreaming}>{section.content}</Markdown>
-            </div>
-          )
-        }
+          if (section.type === 'text') {
+            const isLastSection = index === visibleSections.length - 1
+            content = (
+              <div className="assistant-text">
+                <Markdown isAnimating={isLastSection && !!isStreaming}>{section.content}</Markdown>
+              </div>
+            )
+          }
 
-        if (section.type === 'reasoning') {
-          content = (
-            <div className="assistant-reasoning">
-              {section.content}
-            </div>
-          )
-        }
+          if (section.type === 'reasoning') {
+            content = <div className="assistant-reasoning">{section.content}</div>
+          }
 
-        if (section.type === 'tool_group') {
-          const isLastSection = index === visibleSections.length - 1
-          content = (
-            <ToolAccordion
-              actions={section.actions}
-              isStreaming={isLastSection && isStreaming}
-            />
-          )
-        }
+          if (section.type === 'tool_group') {
+            const isLastSection = index === visibleSections.length - 1
+            content = <ToolAccordion actions={section.actions} isStreaming={isLastSection && isStreaming} />
+          }
 
-        if (section.type === 'convex_setup') {
-          content = (
-            <ConvexSetupBanner
-              stage={convexStage}
-              missingKey={convexMissingKey}
-              onConnect={() => onIntegrationConnect?.('convex')}
-              onUse={() => onIntegrationUse?.('convex')}
-            />
-          )
-        }
+          if (section.type === 'convex_setup') {
+            content = (
+              <ConvexSetupBanner
+                stage={convexStage}
+                missingKey={convexMissingKey}
+                onConnect={() => onIntegrationConnect?.('convex')}
+                onUse={() => onIntegrationUse?.('convex')}
+                onSkip={() =>
+                  onIntegrationSkip?.(
+                    'convex',
+                    section.meta.originalPrompt,
+                    section.meta.forceFrontendDesignSkill,
+                    messageId
+                  )
+                }
+              />
+            )
+          }
 
-        if (section.type === 'convex_intent') {
-          content = (
-            <ConvexIntentBanner
-              onSelect={(mode) => onConvexIntentSelect?.(mode)}
-            />
-          )
-        }
+          if (section.type === 'convex_intent') {
+            content = <ConvexIntentBanner onSelect={(mode) => onConvexIntentSelect?.(mode)} />
+          }
 
-        if (section.type === 'firebase_setup') {
-          content = (
-            <FirebaseSetupBanner
-              isConnected={!!isFirebaseConnected}
-              isSettingUp={!!isFirebaseSettingUp}
-              onConnect={() => onIntegrationConnect?.('firebase')}
-              onUse={() => onIntegrationUse?.('firebase')}
-            />
-          )
-        }
+          if (section.type === 'firebase_setup') {
+            content = (
+              <FirebaseSetupBanner
+                isConnected={!!isFirebaseConnected}
+                isSettingUp={!!isFirebaseSettingUp}
+                onConnect={() => onIntegrationConnect?.('firebase')}
+                onUse={() => onIntegrationUse?.('firebase')}
+                onSkip={() =>
+                  onIntegrationSkip?.(
+                    'firebase',
+                    section.meta.originalPrompt,
+                    section.meta.forceFrontendDesignSkill,
+                    messageId
+                  )
+                }
+              />
+            )
+          }
 
-        if (section.type === 'ask_user') {
-          content = (
-            <AskUserQuestion
-              input={section.input}
-              onSubmit={(answers) => handleAskUserSubmit(section.toolCallId, answers)}
-              isSubmitting={submittingId === section.toolCallId}
-              isAnswered={section.isAnswered}
-            />
-          )
-        }
+          if (section.type === 'ask_user') {
+            content = (
+              <AskUserQuestion
+                input={section.input}
+                onSubmit={(answers) => handleAskUserSubmit(section.toolCallId, answers)}
+                isSubmitting={submittingId === section.toolCallId}
+                isAnswered={section.isAnswered}
+              />
+            )
+          }
 
-        if (section.type === 'stripe_setup') {
-          content = (
-            <StripeSetupBanner
-              isConnected={!!isStripeConnected}
-              isSettingUp={!!isStripeSettingUp}
-              onConnect={() => onIntegrationConnect?.('stripe')}
-              onUse={() => onIntegrationUse?.('stripe')}
-            />
-          )
-        }
+          if (section.type === 'stripe_setup') {
+            content = (
+              <StripeSetupBanner
+                isConnected={!!isStripeConnected}
+                isSettingUp={!!isStripeSettingUp}
+                onConnect={() => onIntegrationConnect?.('stripe')}
+                onUse={() => onIntegrationUse?.('stripe')}
+                onSkip={() =>
+                  onIntegrationSkip?.(
+                    'stripe',
+                    section.meta.originalPrompt,
+                    section.meta.forceFrontendDesignSkill,
+                    messageId
+                  )
+                }
+              />
+            )
+          }
 
-        if (section.type === 'revenuecat_setup') {
-          content = (
-            <RevenueCatSetupBanner
-              isConnected={!!isRevenueCatConnected}
-              isSettingUp={!!isRevenueCatSettingUp}
-              onConnect={() => onIntegrationConnect?.('revenuecat')}
-              onUse={() => onIntegrationUse?.('revenuecat')}
-            />
-          )
-        }
+          if (section.type === 'revenuecat_setup') {
+            content = (
+              <RevenueCatSetupBanner
+                isConnected={!!isRevenueCatConnected}
+                isSettingUp={!!isRevenueCatSettingUp}
+                onConnect={() => onIntegrationConnect?.('revenuecat')}
+                onUse={() => onIntegrationUse?.('revenuecat')}
+                onSkip={() =>
+                  onIntegrationSkip?.(
+                    'revenuecat',
+                    section.meta.originalPrompt,
+                    section.meta.forceFrontendDesignSkill,
+                    messageId
+                  )
+                }
+              />
+            )
+          }
 
           if (!content) {
             return null

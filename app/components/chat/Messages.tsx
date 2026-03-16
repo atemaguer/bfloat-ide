@@ -22,6 +22,12 @@ interface MessagesProps {
   onAskUserSubmit?: (toolCallId: string, answers: Record<string, string>) => void
   onIntegrationConnect?: (id: string) => void
   onIntegrationUse?: (id: string) => void
+  onIntegrationSkip?: (
+    integrationId: string,
+    originalPrompt?: string,
+    forceFrontendDesignSkill?: boolean,
+    messageId?: string
+  ) => void
   onConvexIntentSelect?: (mode: ConvexIntentMode) => void
   onClaudeReconnect?: () => void
   onClaudeAuthError?: () => void
@@ -62,6 +68,7 @@ export const Messages = memo(function Messages({
   onAskUserSubmit,
   onIntegrationConnect,
   onIntegrationUse,
+  onIntegrationSkip,
   onConvexIntentSelect,
   onClaudeReconnect,
   onClaudeAuthError,
@@ -110,9 +117,7 @@ export const Messages = memo(function Messages({
 
     const lastMessage = messages[messages.length - 1]
     if (lastMessage.role === 'assistant' && lastMessage.parts) {
-      const toolParts = lastMessage.parts.filter((part) =>
-        part?.type?.startsWith('tool-')
-      ) as ToolCallPart[]
+      const toolParts = lastMessage.parts.filter((part) => part?.type?.startsWith('tool-')) as ToolCallPart[]
 
       for (const part of toolParts) {
         // Only process tool calls that have output (completed)
@@ -200,11 +205,13 @@ export const Messages = memo(function Messages({
                 <UserMessage content={content} parts={parts} />
               ) : (
                 <AssistantMessage
+                  messageId={message.id}
                   parts={parts}
                   isStreaming={isStreaming && isLast}
                   onAskUserSubmit={onAskUserSubmit}
                   onIntegrationConnect={onIntegrationConnect}
                   onIntegrationUse={onIntegrationUse}
+                  onIntegrationSkip={onIntegrationSkip}
                   onConvexIntentSelect={onConvexIntentSelect}
                   onClaudeReconnect={onClaudeReconnect}
                   onClaudeAuthError={onClaudeAuthError}
