@@ -2,6 +2,15 @@ import { getSidecarApiSync } from '@/app/api/sidecar'
 
 const HTML_DOCUMENT_PATTERN = /<!DOCTYPE html>|<html[\s>]/i
 const INVALID_FILENAME_CHARS = /[^a-z0-9_-]/gi
+const APPLE_INVALID_CREDENTIALS_PATTERN =
+  /Invalid username and password combination|Used '.+?' as the username|Would you like to try again\?/i
+
+export type DeployErrorKind = 'generic' | 'apple-credentials'
+
+export interface ParsedDeployError {
+  kind: DeployErrorKind
+  message: string
+}
 
 function toSafeSegment(value: string): string {
   return value.toLowerCase().replace(INVALID_FILENAME_CHARS, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
@@ -92,30 +101,53 @@ export async function dumpDeployErrorPayload(params: {
 /**
  * Normalize noisy deploy errors into user-readable messages.
  */
-export function sanitizeDeployError(
+export function parseDeployError(
   rawError: string | null | undefined,
   fallback = 'Deployment failed',
   context = 'deploy'
-): string {
+): ParsedDeployError {
   const message = (rawError || '').trim()
-  if (!message) return fallback
+  if (!message) {
+    return { kind: 'generic', message: fallback }
+  }
+
+  if (APPLE_INVALID_CREDENTIALS_PATTERN.test(message)) {
+    return {
+      kind: 'apple-credentials',
+      message: 'Your Apple ID credentials were rejected. Enter your Apple ID and password again to continue publishing.',
+    }
+  }
 
   if (HTML_DOCUMENT_PATTERN.test(message)) {
     console.error(`[DeployError:${context}] HTML response detected`, {
       length: message.length,
       preview: message.slice(0, 400),
     })
-    return 'Apple authentication returned an unexpected web response. This usually means Apple sign-in requires additional verification. Retry, or use App Store Connect API Key authentication.'
+    return {
+      kind: 'generic',
+      message:
+        'Apple authentication returned an unexpected web response. This usually means Apple sign-in requires additional verification. Retry, or use App Store Connect API Key authentication.',
+    }
   }
 
-  // Keep UI errors compact and readable.
   if (message.length > 500) {
     console.error(`[DeployError:${context}] Long error message`, {
       length: message.length,
       preview: message.slice(0, 400),
     })
-    return `${message.slice(0, 497)}...`
+    return {
+      kind: 'generic',
+      message: `${message.slice(0, 497)}...`,
+    }
   }
 
-  return message
+  return { kind: 'generic', message }
+}
+
+export function sanitizeDeployError(
+  rawError: string | null | undefined,
+  fallback = 'Deployment failed',
+  context = 'deploy'
+): string {
+  return parseDeployError(rawError, fallback, context).message
 }
