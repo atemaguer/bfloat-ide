@@ -14,12 +14,27 @@ import { runBackgroundDeployment, type DeploymentResult } from '@/app/utils/back
 import { setProjectOwner } from '@/app/utils/eas-accounts'
 import { getDefaultEasConfig } from '@/app/utils/eas-config'
 import { buildDeployErrorPrompt } from '@/app/utils/build-error-prompt'
-import { sanitizeDeployError, dumpDeployErrorPayload } from '@/app/utils/deploy-error'
+import { sanitizeDeployError, dumpDeployErrorPayload, parseDeployError } from '@/app/utils/deploy-error'
 import { DeployProgressModal } from './DeployProgressModal'
 import { IOSSetupWizard } from './IOSSetupWizard'
 import { TwoFactorStep } from './TwoFactorStep'
 import { Dialog, DialogContent } from '@/app/components/ui/dialog'
 import { deploy, filesystem } from '@/app/api/sidecar'
+
+type ExpoAppConfig = {
+  name?: string
+  slug?: string
+  ios?: {
+    bundleIdentifier?: string
+    infoPlist?: {
+      ITSAppUsesNonExemptEncryption?: boolean
+    }
+  }
+}
+
+type AppJsonConfig = {
+  expo?: ExpoAppConfig
+}
 
 /**
  * Mark iOS setup as complete in eas.json
@@ -93,11 +108,11 @@ async function prepareForDeployment(
     const appJsonPath = `${projectPath}/app.json`
     const readResult = await filesystem.readFile(appJsonPath)
 
-    let appConfig: Record<string, unknown> = {}
+    let appConfig: AppJsonConfig = {}
 
     if (readResult.success && readResult.content) {
       try {
-        appConfig = JSON.parse(readResult.content)
+        appConfig = JSON.parse(readResult.content) as AppJsonConfig
       } catch {
         // Invalid JSON, start fresh
         appConfig = {}
@@ -202,6 +217,8 @@ export function IOSDeployModals() {
   const iOSLogs = useStore(deployStore.iOSLogs)
   const iOSProgressModalOpen = useStore(deployStore.iOSProgressModalOpen)
   const iOSSetupWizardOpen = useStore(deployStore.iOSSetupWizardOpen)
+  const iOSErrorKind = useStore(deployStore.iOSErrorKind)
+  const iOSSetupResumeStep = useStore(deployStore.iOSSetupResumeStep)
   const credentialStatus = useStore(deployStore.iOSCredentialStatus)
   const shouldStartDeployment = useStore(deployStore.iOSShouldStartDeployment)
 
@@ -217,6 +234,25 @@ export function IOSDeployModals() {
     (rawError: string | null | undefined, fallback: string, context: string) => {
       void dumpDeployErrorPayload({ rawError, context, projectPath: projectPath || undefined })
       return sanitizeDeployError(rawError, fallback, context)
+    },
+    [projectPath]
+  )
+
+  const resolveDeployFailure = useCallback(
+    (
+      rawError: string | null | undefined,
+      fallback: string,
+      context: string,
+      supplementalText?: string | null
+    ) => {
+      const supplemental = supplementalText?.trim()
+      const combinedError = [rawError?.trim(), supplemental].filter(Boolean).join('\n\n')
+      void dumpDeployErrorPayload({
+        rawError: combinedError || rawError,
+        context,
+        projectPath: projectPath || undefined,
+      })
+      return parseDeployError(combinedError || rawError, fallback, context)
     },
     [projectPath]
   )
@@ -290,9 +326,8 @@ export function IOSDeployModals() {
                 if (result.success) {
                   deployStore.completeIOSDeployment(result.buildUrl)
                 } else {
-                  deployStore.failIOSDeployment(
-                    normalizeAndDumpError(result.error, 'Deployment failed', 'ios-modals:triggered-bg-complete')
-                  )
+                  const parsed = resolveDeployFailure(result.error, 'Deployment failed', 'ios-modals:triggered-bg-complete')
+                  deployStore.failIOSDeployment(parsed.message, parsed.kind)
                 }
               },
             },
@@ -304,17 +339,16 @@ export function IOSDeployModals() {
           cancelDeploymentRef.current = cancel
         } catch (error) {
           isDeployingRef.current = false
-          deployStore.failIOSDeployment(
-            normalizeAndDumpError(
-              error instanceof Error ? error.message : 'Deployment failed',
-              'Deployment failed',
-              'ios-modals:triggered-bg-catch'
-            )
+          const parsed = resolveDeployFailure(
+            error instanceof Error ? error.message : 'Deployment failed',
+            'Deployment failed',
+            'ios-modals:triggered-bg-catch'
           )
+          deployStore.failIOSDeployment(parsed.message, parsed.kind)
         }
       })()
     }
-  }, [shouldStartDeployment, projectPath, currentProject, tokens.expo?.username, credentialStatus, selectedEasAccount, normalizeAndDumpError])
+  }, [shouldStartDeployment, projectPath, currentProject, tokens.expo?.username, credentialStatus, selectedEasAccount, resolveDeployFailure])
 
   // Run the automated deployment
   const runAutomatedDeployment = useCallback(async () => {
@@ -375,9 +409,8 @@ export function IOSDeployModals() {
           if (result.success) {
             deployStore.completeIOSDeployment(result.buildUrl)
           } else {
-            deployStore.failIOSDeployment(
-              normalizeAndDumpError(result.error, 'Deployment failed', 'ios-modals:automated-bg-complete')
-            )
+            const parsed = resolveDeployFailure(result.error, 'Deployment failed', 'ios-modals:automated-bg-complete')
+            deployStore.failIOSDeployment(parsed.message, parsed.kind)
           }
         },
       },
@@ -387,7 +420,7 @@ export function IOSDeployModals() {
     )
 
     cancelDeploymentRef.current = cancel
-  }, [projectPath, currentProject, tokens.expo?.username, normalizeAndDumpError])
+  }, [projectPath, currentProject, tokens.expo?.username, resolveDeployFailure])
 
   /**
    * Run interactive deployment using the PTY-based infrastructure
@@ -435,9 +468,8 @@ export function IOSDeployModals() {
         console.log('[IOSDeployModals] Build result:', result)
 
         if (!result.success) {
-          deployStore.failIOSDeployment(
-            normalizeAndDumpError(result.error, 'Deployment failed', 'ios-modals:start-interactive-result')
-          )
+          const parsed = resolveDeployFailure(result.error, 'Deployment failed', 'ios-modals:start-interactive-result')
+          deployStore.failIOSDeployment(parsed.message, parsed.kind)
           setShowTwoFactorInput(false)
           isDeployingRef.current = false
           return
@@ -461,7 +493,7 @@ export function IOSDeployModals() {
               message: progress.message,
               buildUrl: progress.buildUrl,
               error: progress.error
-                ? normalizeAndDumpError(progress.error, 'Deployment failed', 'ios-modals:interactive-stream-progress')
+                ? resolveDeployFailure(progress.error, 'Deployment failed', 'ios-modals:interactive-stream-progress').message
                 : undefined,
             })
           },
@@ -478,9 +510,14 @@ export function IOSDeployModals() {
             if (completeResult.success) {
               deployStore.completeIOSDeployment(completeResult.buildUrl)
             } else {
-              deployStore.failIOSDeployment(
-                normalizeAndDumpError(completeResult.error, 'Deployment failed', 'ios-modals:interactive-stream-complete')
+              const recentLogs = deployStore.iOSLogs.getState().slice(-4000)
+              const parsed = resolveDeployFailure(
+                completeResult.error,
+                'Deployment failed',
+                'ios-modals:interactive-stream-complete',
+                recentLogs
               )
+              deployStore.failIOSDeployment(parsed.message, parsed.kind)
             }
             setShowTwoFactorInput(false)
             setTwoFactorError(null)
@@ -491,9 +528,12 @@ export function IOSDeployModals() {
             }
           },
           onError: (streamError) => {
-            deployStore.failIOSDeployment(
-              normalizeAndDumpError(streamError, 'Deployment stream failed', 'ios-modals:interactive-stream-error')
+            const parsed = resolveDeployFailure(
+              streamError,
+              'Deployment stream failed',
+              'ios-modals:interactive-stream-error'
             )
+            deployStore.failIOSDeployment(parsed.message, parsed.kind)
             setShowTwoFactorInput(false)
             setTwoFactorError(null)
             isDeployingRef.current = false
@@ -517,18 +557,17 @@ export function IOSDeployModals() {
           buildListenersRef.current = null
         }
 
-        deployStore.failIOSDeployment(
-          normalizeAndDumpError(
-            error instanceof Error ? error.message : 'Deployment failed',
-            'Deployment failed',
-            'ios-modals:start-interactive-catch'
-          )
+        const parsed = resolveDeployFailure(
+          error instanceof Error ? error.message : 'Deployment failed',
+          'Deployment failed',
+          'ios-modals:start-interactive-catch'
         )
+        deployStore.failIOSDeployment(parsed.message, parsed.kind)
         setShowTwoFactorInput(false)
         isDeployingRef.current = false
       }
     },
-    [projectPath, currentProject, tokens.expo?.username, selectedEasAccount, normalizeAndDumpError]
+    [projectPath, currentProject, tokens.expo?.username, selectedEasAccount, resolveDeployFailure]
   )
 
   /**
@@ -581,7 +620,7 @@ export function IOSDeployModals() {
       // Check if ASC API key is configured
       const checkResult = await deploy.checkASCApiKey(syncedPath)
 
-      if (checkResult?.success && checkResult.configured) {
+      if (checkResult?.configured) {
         // Has credentials - use Claude Code (non-interactive)
         // Set project owner based on selected account (for org builds)
         const selectedAccount = deployStore.selectedEasAccount.getState()
@@ -648,7 +687,7 @@ export function IOSDeployModals() {
       const checkResult = await deploy.checkASCApiKey(projectPath)
       console.log('[IOSDeployModals] ASC API key check result:', checkResult)
 
-      if (checkResult?.success && checkResult.configured) {
+      if (checkResult?.configured) {
         console.log('[IOSDeployModals] Has ASC key - using Claude Code (non-interactive)')
         // Has ASC key - use Claude Code (non-interactive)
         // Update credential status to indicate credentials are configured
@@ -726,6 +765,12 @@ export function IOSDeployModals() {
     runAutomatedDeployment()
   }, [runAutomatedDeployment])
 
+  const handleReenterAppleCredentials = useCallback(() => {
+    deployStore.closeIOSProgressModal()
+    deployStore.setIOSSetupResumeStep('apple-credentials')
+    deployStore.openIOSSetupWizard()
+  }, [])
+
   // Handle close progress modal
   const handleCloseProgressModal = useCallback(() => {
     deployStore.closeIOSProgressModal()
@@ -769,11 +814,12 @@ export function IOSDeployModals() {
             deployStore.closeIOSSetupWizard()
           }
         }}
-        projectPath={projectPath}
+        projectPath={projectPath || ''}
         projectTitle={currentProject?.title || 'myapp'}
         credentialStatus={credentialStatus}
         onComplete={handleSetupComplete}
         onSkipToTerminal={handleSkipToTerminal}
+        initialStep={iOSSetupResumeStep}
       />
 
       {/* iOS Progress Modal */}
@@ -791,6 +837,13 @@ export function IOSDeployModals() {
         onClose={handleCloseProgressModal}
         onMinimize={handleMinimize}
         onFixWithAI={handleFixWithAI}
+        showRetryOnError={iOSErrorKind !== 'apple-credentials'}
+        showFixWithAIOnError={iOSErrorKind !== 'apple-credentials'}
+        errorPrimaryAction={
+          iOSErrorKind === 'apple-credentials'
+            ? { label: 'Enter credentials again', onClick: handleReenterAppleCredentials }
+            : null
+        }
       />
 
       {/* 2FA Input Modal - shown when PTY build detects 2FA prompt */}
