@@ -57,6 +57,7 @@ import {
 import {
   DRAFT_SESSION_KEY,
   createSessionViewState,
+  getDefaultModelForProvider,
   projectSessionsStore,
   type ProjectSessionViewState,
 } from '@/app/stores/project-sessions'
@@ -73,6 +74,15 @@ const SETUP_PROMPT_BY_INTEGRATION: Record<string, IntegrationSetupPromptType> = 
   convex: 'convex-setup-prompt',
   stripe: 'stripe-setup-prompt',
   revenuecat: 'revenuecat-setup-prompt',
+}
+
+function doesModelMatchProvider(model: string | null | undefined, provider: ProviderId): boolean {
+  if (!model) return false
+  return provider === 'codex' ? !model.startsWith('claude-') : model.startsWith('claude-')
+}
+
+function resolveModelForProvider(provider: ProviderId, model: string | null | undefined): string {
+  return doesModelMatchProvider(model, provider) ? model! : DEFAULT_MODEL_BY_AGENT_PROVIDER[provider] || getDefaultModelForProvider(provider)
 }
 
 function appendSetupPromptIfMissing(
@@ -143,6 +153,7 @@ interface LocalSessionInfo {
   sessionId: string
   runtimeSessionId?: string | null
   providerSessionId?: string | null
+  model?: string | null
   createdAt: number
   lastModified: number
   name?: string
@@ -330,13 +341,6 @@ export function Chat({
     [files, projectFileTree]
   )
 
-  useEffect(() => {
-    if (!initialProvider) {
-      setProvider(defaultProvider)
-      setSelectedModel((current) => current || DEFAULT_MODEL_BY_AGENT_PROVIDER[defaultProvider])
-    }
-  }, [defaultProvider, initialProvider])
-
   const convexStage: ConvexIntegrationStage = useMemo(() => {
     if (!convexSecretStatus.isConfigured) return 'disconnected'
     if (convexBootstrapDetected) return 'ready'
@@ -380,6 +384,16 @@ export function Chat({
   const error = activeSessionView.error
   const agentSessionId = activeSessionView.runtimeSessionId
   const resumeProviderSessionId = activeSessionView.providerSessionId
+  const activeSessionModel = resolveModelForProvider(activeSessionView.provider, activeSessionView.model)
+
+  useEffect(() => {
+    if (provider !== activeSessionView.provider) {
+      setProvider(activeSessionView.provider)
+    }
+    if (selectedModel !== activeSessionModel) {
+      setSelectedModel(activeSessionModel)
+    }
+  }, [activeSessionModel, activeSessionView.provider, provider, selectedModel])
 
   const updateSessionViewState = useCallback(
     (sessionKey: string, updater: (prev: ProjectSessionViewState) => ProjectSessionViewState) => {
@@ -409,9 +423,10 @@ export function Chat({
       options?: {
         providerSessionId?: string | null
         runtimeSessionId?: string | null
+        model?: string | null
         transcriptLastSeq?: number
         runtimeLastSeq?: number
-        status?: ProjectSessionStatus
+        status?: ProjectSessionViewState['status']
         isAttachedToTransport?: boolean
         isResumingSession?: boolean
         isLoadingSession?: boolean
@@ -432,6 +447,7 @@ export function Chat({
         runtimeSessionId: options?.runtimeSessionId ?? null,
         providerSessionId: options?.providerSessionId ?? null,
         provider: sessionProvider,
+        model: resolveModelForProvider(sessionProvider, options?.model),
         transcriptLastSeq: options?.transcriptLastSeq ?? 0,
         runtimeLastSeq: options?.runtimeLastSeq ?? 0,
         error: options?.error ?? null,
@@ -606,6 +622,22 @@ export function Chat({
     [updateSessionViewState]
   )
 
+  const setSessionProviderAndModel = useCallback(
+    (sessionKey: string, nextProvider: ProviderId, nextModel?: string | null) => {
+      const resolvedModel = resolveModelForProvider(nextProvider, nextModel)
+      updateSessionViewState(sessionKey, (prev) => ({
+        ...prev,
+        provider: nextProvider,
+        model: resolvedModel,
+      }))
+      if (sessionKey === activeSessionKey) {
+        setProvider(nextProvider)
+        setSelectedModel(resolvedModel)
+      }
+    },
+    [activeSessionKey, updateSessionViewState]
+  )
+
   const getStoredSessionViewState = useCallback(
     (sessionKey: string) => {
       return projectSessionsStore.getSessionState(projectId, sessionKey, provider, initialMessages || [])
@@ -687,6 +719,7 @@ export function Chat({
         stableSessionId,
         runtimeSessionId,
         provider: stableSession?.provider || fallbackProvider,
+        model: resolveModelForProvider(stableSession?.provider || fallbackProvider, stableSession?.model),
       }
 
       console.log('[Chat] Resolved session identity', {
@@ -694,6 +727,7 @@ export function Chat({
         stableSessionId: resolved.stableSessionId,
         runtimeSessionId: resolved.runtimeSessionId,
         provider: resolved.provider,
+        model: resolved.model,
         matchedByRuntimeAlias: stableSession ? stableSession.sessionId !== sessionId : false,
       })
 
@@ -1110,7 +1144,7 @@ export function Chat({
             state: block.action.status === 'completed' ? 'result' : 'call',
             args: { label: block.action.label },
             result: block.action.output,
-          } as ChatMessage['parts'][number])
+          } as MessagePart)
         }
       }
     } else {
@@ -1315,6 +1349,7 @@ export function Chat({
         stableSessionId: identity.stableSessionId,
         runtimeSessionId: identity.runtimeSessionId,
         provider: identity.provider,
+        model: identity.model,
         messages: mergedMessages,
         resumeProviderSessionId: resumeSessionId,
         transcriptLastSeq,
@@ -1324,10 +1359,16 @@ export function Chat({
   )
 
   const persistRuntimeSessionId = useCallback(
-    (stableSessionId: string, runtimeSessionId: string | null, providerSessionId?: string | null) => {
+    (
+      stableSessionId: string,
+      runtimeSessionId: string | null,
+      providerSessionId?: string | null,
+      model?: string | null
+    ) => {
       updateSessionMutation.mutate(stableSessionId, {
         runtimeSessionId,
         ...(providerSessionId !== undefined ? { providerSessionId } : {}),
+        ...(model !== undefined ? { model: model ?? undefined } : {}),
         lastUsedAt: new Date().toISOString(),
       })
     },
@@ -1366,6 +1407,7 @@ export function Chat({
       let reconnectSessionId = options?.persistedRuntimeSessionId ?? cachedSessionState.runtimeSessionId ?? null
       let runtimeReplayLastSeq = cachedSessionState.runtimeLastSeq
       let loadedProviderSessionId: string | null = cachedSessionState.providerSessionId ?? null
+      let loadedModel = resolveModelForProvider(sessionProvider, cachedSessionState.model)
 
       try {
         const sessionState = await loadStableSessionState(stableSessionId, sessionProvider, {
@@ -1426,12 +1468,14 @@ export function Chat({
             : 0
         transcriptLastSeq = Math.max(cachedSessionState.transcriptLastSeq, sessionState.transcriptLastSeq)
         loadedProviderSessionId = sessionState.resumeProviderSessionId ?? cachedSessionState.providerSessionId
+        loadedModel = resolveModelForProvider(sessionState.provider, sessionState.model)
 
         replaceSessionViewState(
           stableSessionId,
           createHydratedSessionViewState(sessionState.provider, mergedMessages, {
             providerSessionId: loadedProviderSessionId,
             runtimeSessionId: reconnectSessionId,
+            model: sessionState.model,
             transcriptLastSeq,
             runtimeLastSeq: runtimeReplayLastSeq,
             status: reconnectSessionId ? 'running' : 'completed',
@@ -1454,7 +1498,8 @@ export function Chat({
           persistRuntimeSessionId(
             stableSessionId,
             sessionState.runtimeSessionId,
-            sessionState.resumeProviderSessionId ?? null
+            sessionState.resumeProviderSessionId ?? null,
+            sessionState.model
           )
         } else if (
           !sessionState.runtimeSessionId &&
@@ -1465,7 +1510,7 @@ export function Chat({
             stableSessionId,
             staleRuntimeSessionId: options.persistedRuntimeSessionId,
           })
-          persistRuntimeSessionId(stableSessionId, null, sessionState.resumeProviderSessionId ?? null)
+          persistRuntimeSessionId(stableSessionId, null, sessionState.resumeProviderSessionId ?? null, sessionState.model)
         }
       } catch (err) {
         console.error('[Chat] Error reconciling session:', err)
@@ -1475,6 +1520,7 @@ export function Chat({
             createHydratedSessionViewState(sessionProvider, [], {
               providerSessionId: null,
               runtimeSessionId: null,
+              model: cachedSessionState.model,
               transcriptLastSeq: 0,
               runtimeLastSeq: 0,
               status: 'error',
@@ -1524,7 +1570,12 @@ export function Chat({
           expectedRuntimeSessionId: reconnectSessionId,
           canonicalSessionId: reconnectResult.canonicalSessionId,
         })
-        persistRuntimeSessionId(stableSessionId, null, loadedProviderSessionId)
+        persistRuntimeSessionId(
+          stableSessionId,
+          null,
+          loadedProviderSessionId,
+          loadedModel
+        )
         updateSessionViewState(stableSessionId, (prev) => ({
           ...prev,
           runtimeSessionId: null,
@@ -1539,7 +1590,12 @@ export function Chat({
             reconnectSessionId,
             logContext: options?.logContext ?? 'unknown',
           })
-          persistRuntimeSessionId(stableSessionId, null, loadedProviderSessionId)
+          persistRuntimeSessionId(
+            stableSessionId,
+            null,
+            loadedProviderSessionId,
+            loadedModel
+          )
           updateSessionViewState(stableSessionId, (prev) => ({
             ...prev,
             runtimeSessionId: null,
@@ -1738,6 +1794,11 @@ export function Chat({
         sessionViewStatesRef.current[sourceSessionKey]?.providerSessionId ??
         sessionViewStatesRef.current[DRAFT_SESSION_KEY]?.providerSessionId ??
         null
+      const sessionProvider = pendingPromotion?.provider ?? provider
+      const sessionModel = resolveModelForProvider(
+        sessionProvider,
+        sessionViewStatesRef.current[sourceSessionKey]?.model ?? selectedModel
+      )
 
       setSelectedSessionId(stableSessionId)
       moveSessionViewState(sourceSessionKey, stableSessionId, (prev) => ({
@@ -1745,7 +1806,8 @@ export function Chat({
         status: 'running',
         isAttachedToTransport: true,
         isHydrated: true,
-        provider,
+        provider: sessionProvider,
+        model: sessionModel,
         runtimeSessionId: sessionId,
         providerSessionId,
         runtimeLastSeq: prev.runtimeSessionId === sessionId ? prev.runtimeLastSeq : 0,
@@ -1764,23 +1826,25 @@ export function Chat({
           stableSessionId,
           runtimeSessionId: sessionId,
           providerSessionId,
-          provider: pendingPromotion?.provider ?? provider,
+          provider: sessionProvider,
+          model: sessionModel,
         })
-        persistRuntimeSessionId(stableSessionId, sessionId, providerSessionId)
+        persistRuntimeSessionId(stableSessionId, sessionId, providerSessionId, sessionModel)
       } else {
         saveSessionMutation.mutate({
           sessionId,
           runtimeSessionId: sessionId,
           providerSessionId,
-          provider: provider as 'claude' | 'codex',
+          provider: sessionProvider as 'claude' | 'codex',
+          model: sessionModel,
         })
       }
       pendingSessionPromotionRef.current = null
 
       // Notify parent if callback provided
-      onSessionIdChange?.(stableSessionId, provider as 'claude' | 'codex')
+      onSessionIdChange?.(stableSessionId, sessionProvider as 'claude' | 'codex')
     },
-    [onSessionIdChange, persistRuntimeSessionId, provider, saveSessionMutation]
+    [onSessionIdChange, persistRuntimeSessionId, provider, saveSessionMutation, selectedModel]
   )
 
   const handleReconnectSession = useCallback(
@@ -1793,14 +1857,12 @@ export function Chat({
       const { sessionId, provider: sessionProvider, status, source } = info
       console.log('[Chat] Reconnected to existing session:', info)
 
-      if (sessionProvider !== provider) {
-        setSelectedModel(DEFAULT_MODEL_BY_AGENT_PROVIDER[sessionProvider] || '')
-      }
       const resolvedIdentity = resolveSessionIdentity(sessionId, sessionProvider)
       const stableSessionId = resolvedIdentity?.stableSessionId ?? sessionId
       const runtimeSessionId = status === 'running' ? sessionId : null
 
       setProvider(sessionProvider)
+      setSelectedModel(resolveModelForProvider(sessionProvider, resolvedIdentity?.model))
       setSelectedSessionId(stableSessionId)
       setShowReconnectNotice(status === 'running')
       activeStreamSessionKeyRef.current = stableSessionId
@@ -1825,6 +1887,7 @@ export function Chat({
           providerSessionId: sessionState.resumeProviderSessionId,
           runtimeSessionId,
           provider: sessionState.provider,
+          model: resolveModelForProvider(sessionState.provider, sessionState.model),
           transcriptLastSeq: sessionState.transcriptLastSeq,
           runtimeLastSeq: 0,
         })
@@ -1846,7 +1909,8 @@ export function Chat({
           persistRuntimeSessionId(
             sessionState.stableSessionId,
             runtimeSessionId,
-            sessionState.resumeProviderSessionId ?? null
+            sessionState.resumeProviderSessionId ?? null,
+            sessionState.model
           )
         }
         return runtimeSessionId ? 0 : sessionState.transcriptLastSeq
@@ -1873,11 +1937,13 @@ export function Chat({
     return getSystemPrompt(!!selectedSessionId, provider)
   }, [provider, selectedSessionId])
 
+  const validatedSelectedModel = resolveModelForProvider(provider, selectedModel)
+
   // Local agent hook - only use path when it belongs to this project
   const localAgent = useLocalAgent({
     cwd: usableProjectPath || '',
     provider,
-    model: selectedModel,
+    model: validatedSelectedModel,
     sessionId: agentSessionId,
     projectId, // Project ID for background session tracking
     enableMountReconnect: false,
@@ -1889,8 +1955,7 @@ export function Chat({
       const targetSessionKey = resolveCallbackTargetSessionKey(context.runtimeSessionId)
       const shouldMarkSessionRunning =
         !!context.runtimeSessionId &&
-        (msg.type === 'connected' ||
-          msg.type === 'init' ||
+        (msg.type === 'init' ||
           msg.type === 'text' ||
           msg.type === 'reasoning' ||
           msg.type === 'tool_call' ||
@@ -2002,8 +2067,13 @@ export function Chat({
         setSessionMessages(targetSessionKey, (prev) => applyAgentMessageToTranscript(prev, msg))
       } else if (msg.type === 'init') {
         console.log('[Chat] Agent initialized:', msg.content)
-        const initContent = msg.content as { providerSessionId?: string }
+        const initContent = msg.content as { providerSessionId?: string; model?: string }
         setSessionResumeProvider(targetSessionKey, initContent.providerSessionId || null)
+        setSessionProviderAndModel(
+          targetSessionKey,
+          sessionViewStatesRef.current[targetSessionKey]?.provider ?? provider,
+          initContent.model ?? sessionViewStatesRef.current[targetSessionKey]?.model
+        )
       } else if (msg.type === 'done') {
         if (targetSessionKey === activeSessionKey) {
           hideReconnectNotice()
@@ -2059,7 +2129,8 @@ export function Chat({
         setSessionRuntimeSessionId(targetSessionKey, null)
         setSessionResumeProvider(targetSessionKey, null)
         if (targetSessionKey !== DRAFT_SESSION_KEY) {
-          persistRuntimeSessionId(targetSessionKey, null, null)
+          const model = sessionViewStatesRef.current[targetSessionKey]?.model ?? null
+          persistRuntimeSessionId(targetSessionKey, null, null, model)
         }
         if (targetSessionKey === activeSessionKey) {
           hideReconnectNotice()
@@ -2074,7 +2145,8 @@ export function Chat({
       setSessionRuntimeSessionId(targetSessionKey, null)
       if (targetSessionKey !== DRAFT_SESSION_KEY) {
         const providerSessionId = sessionViewStatesRef.current[targetSessionKey]?.providerSessionId ?? null
-        persistRuntimeSessionId(targetSessionKey, null, providerSessionId)
+        const model = sessionViewStatesRef.current[targetSessionKey]?.model ?? null
+        persistRuntimeSessionId(targetSessionKey, null, providerSessionId, model)
       }
       showErrorToast(err, { id: 'agent-error' })
 
@@ -2106,7 +2178,8 @@ export function Chat({
       setSessionRuntimeSessionId(targetSessionKey, null)
       if (targetSessionKey !== DRAFT_SESSION_KEY) {
         const providerSessionId = sessionViewStatesRef.current[targetSessionKey]?.providerSessionId ?? null
-        persistRuntimeSessionId(targetSessionKey, null, providerSessionId)
+        const model = sessionViewStatesRef.current[targetSessionKey]?.model ?? null
+        persistRuntimeSessionId(targetSessionKey, null, providerSessionId, model)
       }
       // Session is automatically persisted by the CLI tools (Claude/Codex)
       // No need to manually persist to database
@@ -2483,6 +2556,22 @@ export function Chat({
         setMessages((prev) => [...prev, userMessage])
       }
       activeStreamSessionKeyRef.current = activeSessionKey
+      const effectiveModel = resolveModelForProvider(provider, activeSessionModel)
+      setSessionProviderAndModel(activeSessionKey, provider, effectiveModel)
+      if (selectedSessionId) {
+        updateSessionMutation.mutate(selectedSessionId, {
+          model: effectiveModel,
+          lastUsedAt: new Date().toISOString(),
+        })
+      }
+      if (effectiveModel !== selectedModel) {
+        console.warn('[Chat] Corrected invalid provider/model pairing before submit', {
+          provider,
+          selectedModel,
+          effectiveModel,
+        })
+        setSelectedModel(effectiveModel)
+      }
       setIsResumingSession(false)
       setIsStreaming(true)
 
@@ -2507,6 +2596,7 @@ export function Chat({
           agentSessionId,
           resumeProviderSessionId,
           provider,
+          model: effectiveModel,
           isDraftSession,
           shouldForceFreshRuntime,
         })
@@ -2561,6 +2651,10 @@ export function Chat({
       selectedSessionId,
       agentSessionId,
       resumeProviderSessionId,
+      activeSessionModel,
+      selectedModel,
+      setSessionProviderAndModel,
+      updateSessionMutation,
     ]
   )
 
@@ -2634,9 +2728,15 @@ export function Chat({
       // Keep the selected tab stable even if we are not attached to a live sidecar session yet.
       setSelectedSessionId(session.sessionId)
       activeStreamSessionKeyRef.current = session.sessionId
+      const sessionProvider = (session.provider || provider) as ProviderId
+      const sessionModel = resolveModelForProvider(
+        sessionProvider,
+        session.model ?? sessionViewStatesRef.current[session.sessionId]?.model
+      )
       updateSessionViewState(session.sessionId, (prev) => ({
         ...prev,
-        provider: (session.provider || provider) as ProviderId,
+        provider: sessionProvider,
+        model: sessionModel,
         isAttachedToTransport: false,
         error: null,
         isResumingSession: false,
@@ -2644,15 +2744,15 @@ export function Chat({
       hideReconnectNotice()
 
       // Restore provider from session (if available)
-      if (session.provider) {
-        setProvider(session.provider)
-      }
+      setProvider(sessionProvider)
+      setSelectedModel(sessionModel)
 
-      onSessionIdChange?.(session.sessionId, (session.provider || provider) as 'claude' | 'codex')
+      onSessionIdChange?.(session.sessionId, sessionProvider as 'claude' | 'codex')
 
       // Update lastUsedAt in projects.json (using mutation)
       updateSessionMutation.mutate(session.sessionId, {
         lastUsedAt: new Date().toISOString(),
+        model: sessionModel,
       })
 
       const cachedSessionState = getStoredSessionViewState(session.sessionId)
@@ -2666,7 +2766,7 @@ export function Chat({
         })
       }
 
-      await reconcileSessionState(session.sessionId, (session.provider || provider) as ProviderId, {
+      await reconcileSessionState(session.sessionId, sessionProvider, {
         preserveInitialUserMessage: shouldPreserveInitialUserMessage(session.sessionId),
         persistedRuntimeSessionId: session.runtimeSessionId ?? cachedSessionState.runtimeSessionId ?? null,
         logContext: 'tab-switch',
@@ -2753,7 +2853,7 @@ export function Chat({
   const handleNewSession = useCallback(
     async (providerId?: 'claude' | 'codex', modelId?: string) => {
       const nextProvider = providerId || defaultProvider
-      const nextModel = modelId || DEFAULT_MODEL_BY_AGENT_PROVIDER[nextProvider]
+      const nextModel = resolveModelForProvider(nextProvider, modelId)
       console.log('[Chat] Creating new session', {
         providerId: nextProvider,
         modelId: nextModel,
@@ -2775,7 +2875,10 @@ export function Chat({
       setSelectedModel(nextModel)
 
       // Clear messages completely - each session tab is its own context
-      replaceSessionViewState(DRAFT_SESSION_KEY, createSessionViewState(nextProvider))
+      replaceSessionViewState(DRAFT_SESSION_KEY, {
+        ...createSessionViewState(nextProvider),
+        model: nextModel,
+      })
 
       // Reset session and error state
       activeStreamSessionKeyRef.current = DRAFT_SESSION_KEY
@@ -3240,13 +3343,32 @@ export function Chat({
           showHint={true}
           providerSelector={{
             provider,
+            selectedModel: activeSessionModel,
             onProviderChange: (p) => {
               const pid = p as ProviderId
+              const nextModel = resolveModelForProvider(pid, null)
               setProvider(pid)
-              // Reset model to the provider's default to avoid passing e.g. a Claude model to Codex
-              setSelectedModel(DEFAULT_MODEL_BY_AGENT_PROVIDER[pid] || '')
+              setSelectedModel(nextModel)
+              setSessionProviderAndModel(activeSessionKey, pid, nextModel)
+              if (selectedSessionId) {
+                updateSessionMutation.mutate(selectedSessionId, {
+                  provider: pid as 'claude' | 'codex',
+                  model: nextModel,
+                  lastUsedAt: new Date().toISOString(),
+                })
+              }
             },
-            onModelChange: (modelId) => setSelectedModel(modelId),
+            onModelChange: (modelId) => {
+              const nextModel = resolveModelForProvider(provider, modelId)
+              setSelectedModel(nextModel)
+              setSessionProviderAndModel(activeSessionKey, provider, nextModel)
+              if (selectedSessionId) {
+                updateSessionMutation.mutate(selectedSessionId, {
+                  model: nextModel,
+                  lastUsedAt: new Date().toISOString(),
+                })
+              }
+            },
             options: [
               { id: 'claude', label: 'Claude', isAuthenticated: providerAuthStatus['claude'] },
               ...(codexBetaEnabled
