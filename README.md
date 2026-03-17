@@ -1,67 +1,39 @@
 # Bfloat IDE
 
-Bfloat IDE is a local-first desktop IDE for building web and mobile apps with integrated AI agents, local project storage, a built-in terminal, live preview, and project-scoped setup flows for common integrations.
-
-This README is the primary documentation for the repo. It covers how the codebase is structured, how to run it locally, how local storage works, how integrations are configured, and what deployment/build flows exist today.
+A local-first desktop IDE for building web and mobile apps with AI agents. Built-in terminal, live preview, code editor, and project-scoped integration setup — all running on your machine.
 
 ![Tauri](https://img.shields.io/badge/Tauri-2-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
 ![Bun](https://img.shields.io/badge/Bun-1.1-blue)
 ![License](https://img.shields.io/badge/License-Apache%202.0-green)
+[![Discord](https://img.shields.io/discord/A2SUyzb3qM?label=Discord&logo=discord&logoColor=white)](https://discord.gg/A2SUyzb3qM)
 
-## What It Is
+## Why Bfloat IDE
 
-- Local-first desktop app built with Tauri.
-- Bun sidecar process that exposes local HTTP and WebSocket APIs.
-- React renderer that drives the editor, preview, chat, settings, deploy flows, and project setup.
-- AI-assisted workflow built around locally installed Claude Code and Codex CLIs.
-- Project templates for mobile and web apps.
+Cloud AI builders like Lovable, Bolt, Base44, and v0 charge per-message or per-project fees, lock your code into proprietary hosting, and run thin prompt wrappers behind the scenes. When you outgrow their sandbox, you're stuck migrating off a platform that was never designed to let you leave.
 
-## What It Is Not
+Bfloat IDE is different:
 
-- Not a hosted SaaS backend.
-- Not a central cloud database that stores your IDE state.
-- Not dependent on OpenAI API keys for normal Codex usage inside the IDE.
-- Not dependent on Anthropic API keys for normal Claude usage inside the IDE.
+### No lock-in
 
-For normal IDE use, Claude and Codex are expected to come from your local installed/authenticated CLIs.
+Your projects are standard Next.js and Expo repos stored on your local disk. There is no proprietary file system, no platform-specific hosting requirement, no export step. Open your project in VS Code, push it to any git host, deploy it anywhere. If you stop using Bfloat IDE tomorrow, nothing changes about your code.
 
-## Architecture
+### No platform tax
 
-The repo has three main layers:
+Bfloat IDE is free and open source. You use your own Claude Code and Codex subscriptions directly — the same ones you already pay for. There is no per-message markup, no credit system, no usage tier that gates features. Your AI costs are between you and Anthropic/OpenAI, with zero middleman.
 
-- `packages/desktop`
-  Tauri desktop shell plus the renderer bootstrap.
-- `packages/sidecar`
-  Bun sidecar server with routes for files, terminal, agents, deploy, secrets, templates, and preview.
-- `app` and `lib`
-  Shared React UI, stores, hooks, schemas, and agent/provider logic used by the desktop app.
+### Better agents
 
-Runtime model:
+Under the hood, Bfloat IDE runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://openai.com/index/introducing-codex/) as full local agent processes. These are the best coding agents available today — they have terminal access, file system awareness, multi-step reasoning, and tool use. Other AI builders run lightweight prompt-and-paste wrappers that can't install dependencies, run tests, debug errors, or iterate on their own output. Claude Code and Codex can, and Bfloat IDE gives them a full local environment to do it in.
 
-1. The desktop app launches the bundled sidecar.
-2. The renderer waits for the sidecar to become ready.
-3. The renderer talks to the sidecar over local HTTP and WebSocket APIs.
-4. Projects, sessions, settings, and secrets are stored locally on the machine.
+### Deploy anywhere in one click
 
-## Repo Layout
+Ship to the App Store through integrated Expo/EAS builds, or deploy your web app to Vercel, Render, Railway, or any platform that supports git-based deploys — directly from the IDE. No proprietary hosting to buy into. You pick the platform, Bfloat handles the push.
 
-```text
-bfloat-ide/
-├── app/                        # Shared React UI, hooks, stores, API access
-├── lib/                        # Shared schemas, agents, launch logic, MCP integration
-├── packages/
-│   ├── desktop/                # Tauri shell and renderer entry
-│   │   └── src-tauri/          # Rust app + bundled sidecars/resources
-│   └── sidecar/                # Bun sidecar server
-├── resources/
-│   ├── skills/                 # Bundled agent skills
-│   └── templates/              # Starter project templates
-├── DEV.md                      # Supplemental dev notes
-├── DEVELOPER.md                # Supplemental troubleshooting notes
-└── RELEASE.md                  # Supplemental release notes
-```
+## Status
+
+Bfloat IDE is in active early development. Core editing, preview, terminal, and AI agent workflows are functional. iOS deployment via Expo/EAS is the most mature deploy path. Expect rough edges and breaking changes between releases.
 
 ## Prerequisites
 
@@ -111,346 +83,28 @@ Why both `pnpm` and `bun install`:
 
 ## Running Locally
 
-### Recommended dev workflow
-
-From the repo root:
-
 ```bash
 pnpm dev
 ```
 
-That starts the Tauri development flow for the desktop app.
-
-### Sidecar-only development
-
-If you want to run the sidecar directly:
-
-```bash
-pnpm dev:sidecar
-```
-
-Or:
-
-```bash
-cd packages/sidecar
-bun run dev
-```
-
-### Two-terminal workflow
-
-If you want the sidecar and desktop app in separate terminals:
-
-```bash
-# Terminal 1
-cd packages/sidecar
-bun run dev
-
-# Terminal 2
-cd packages/desktop
-bunx tauri dev
-```
-
-### Useful commands
-
-```bash
-pnpm lint
-pnpm format
-pnpm check:templates
-
-cd packages/sidecar && bun test
-pnpm -s exec tsc --noEmit --pretty false
-```
+This starts the Tauri development flow with hot-reload. See [`DEV.md`](DEV.md) for alternative workflows (sidecar-only, two-terminal setup) and useful commands.
 
 ## Building
 
-### Build the sidecar
-
 ```bash
 pnpm build:sidecar
-```
-
-Or directly:
-
-```bash
-cd packages/sidecar
-bun run build
-```
-
-Platform-specific sidecar builds:
-
-```bash
-cd packages/sidecar
-bun run build:mac-arm64
-bun run build:mac-x64
-bun run build:linux-x64
-bun run build:win-x64
-```
-
-### Build the desktop app
-
-```bash
 pnpm build
 ```
 
-Or:
-
-```bash
-cd packages/desktop
-bunx tauri build
-```
-
-Build output ends up under:
-
-```text
-packages/desktop/src-tauri/target/release/bundle/
-```
-
-## AI Providers
-
-### Claude and Codex
-
-The IDE is designed around locally installed/authenticated CLIs:
-
-- Claude Code for Claude sessions
-- Codex for Codex/OpenAI sessions
-
-The important operational point:
-
-- You do not need to configure an OpenAI API key in the IDE to use Codex normally.
-- You do not need to configure an Anthropic API key in the IDE to use Claude normally.
-
-Instead, the IDE checks and uses the local CLI auth state on your machine.
-
-### Connected Accounts
-
-Today, the app-level Connected Accounts section is intentionally narrow:
-
-- Claude: local CLI auth status
-- Codex: local CLI auth status
-- Expo: app-level Expo token storage for deployment workflows
-
-Project-specific secrets such as Stripe, Convex, RevenueCat, and Firebase keys do not belong in global connected accounts. They belong in project settings.
-
-## Local Storage and "Database"
-
-There is no central hosted Bfloat IDE database required to run the app.
-
-The IDE is local-first.
-
-Key local storage locations:
-
-- Projects metadata:
-  `~/.bfloat-ide/projects.json`
-- Project workspaces:
-  `~/.bfloat-ide/projects/<projectId>/`
-- Provider/config settings:
-  `~/.bfloat-ide/config/settings.json`
-
-This means:
-
-- opening a project creates or reuses a local workspace directory
-- chat/session state is stored locally
-- secrets and project metadata are managed on the local machine
-
-### Database integrations for the apps you build
-
-When people say "database" in this codebase, it usually means database/backends for the app being built, not for the IDE itself.
-
-The current built-in project setup model supports:
-
-- Convex
-- Firebase
-
-These are configured per project through Project Settings and project secrets.
+Build output ends up under `packages/desktop/src-tauri/target/release/bundle/`. See [`DEV.md`](DEV.md) for platform-specific sidecar builds and production build steps.
 
 ## Integrations
 
-The IDE has project-scoped integration flows for:
-
-- Firebase
-- Convex
-- Stripe
-- RevenueCat
-
-These are configured in Project Settings and stored as project secrets, not as global app settings.
-
-### Firebase
-
-Firebase setup is local-first and credentials-based. The IDE does not provision a Firebase project for you.
-
-Expected project secrets:
-
-- Web:
-  - `NEXT_PUBLIC_FIREBASE_API_KEY`
-  - `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
-  - `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
-  - `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`
-  - `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`
-  - `NEXT_PUBLIC_FIREBASE_APP_ID`
-- Mobile:
-  - `EXPO_PUBLIC_FIREBASE_API_KEY`
-  - `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN`
-  - `EXPO_PUBLIC_FIREBASE_PROJECT_ID`
-  - `EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET`
-  - `EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`
-  - `EXPO_PUBLIC_FIREBASE_APP_ID`
-
-### Convex
-
-Convex is configured from project secrets. The IDE can then use those values to drive setup flows.
-
-Expected project secrets:
-
-- Web:
-  - `NEXT_PUBLIC_CONVEX_URL`
-  - `NEXT_PUBLIC_CONVEX_SITE_URL` (optional)
-  - `CONVEX_DEPLOY_KEY`
-- Mobile:
-  - `EXPO_PUBLIC_CONVEX_URL`
-  - `EXPO_PUBLIC_CONVEX_SITE_URL` (optional)
-  - `CONVEX_DEPLOY_KEY`
-
-### Stripe
-
-Stripe is project-scoped.
-
-Expected project secrets:
-
-- Web:
-  - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
-  - `STRIPE_SECRET_KEY`
-- Mobile:
-  - `EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY`
-  - `STRIPE_SECRET_KEY`
-
-### RevenueCat
-
-RevenueCat is also project-scoped.
-
-Expected project secret:
-
-- `REVENUECAT_API_KEY`
-
-For mobile runtime usage, projects may also need:
-
-- `EXPO_PUBLIC_REVENUECAT_API_KEY`
-
-## Payments
-
-Payments support today is integration-driven rather than platform-hosted.
-
-What exists:
-
-- Stripe project setup via secrets
-- RevenueCat project setup via secrets
-
-What that means in practice:
-
-- Bfloat IDE does not run your payments backend for you.
-- You add the necessary project secrets in Project Settings.
-- The app uses those secrets to run the corresponding setup flows and agent-assisted implementation work.
-
-Use Stripe when you need:
-
-- direct payments
-- billing
-- subscriptions on web/mobile with your own app logic
-
-Use RevenueCat when you need:
-
-- in-app purchases
-- subscription management for mobile apps
+The IDE has project-scoped setup flows for Firebase, Convex, Stripe, and RevenueCat. Each is configured through Project Settings and stored as project secrets on your local machine. See [`DEV.md`](DEV.md) for the full list of expected environment variables per integration.
 
 ## Deployment
 
-Deployment support is not symmetrical across targets.
-
-### iOS
-
-iOS deployment is the most developed built-in deployment path today.
-
-It uses:
-
-- Expo / EAS
-- App Store Connect credentials
-- App Store Connect API key support for non-interactive flows
-
-Relevant capabilities in the sidecar include:
-
-- saving App Store Connect API keys
-- checking ASC key configuration
-- running interactive and non-interactive iOS build flows
-- streaming deployment logs and status
-
-### Expo
-
-The IDE can store an app-level `EXPO_TOKEN` in Connected Accounts for Expo/EAS workflows.
-
-### Web
-
-Web deployment is currently not a hosted Bfloat deployment product.
-
-The practical workflow is:
-
-1. connect a git remote
-2. commit and push from the IDE
-3. let your hosting platform deploy from that repository
-
-The repo also contains an explicit local-first note in the web deploy UI that backend web deployment is not supported in local-first mode.
-
-### Android
-
-Android publishing is not documented as a first-class completed path in the current codebase. Do not present it as equivalent to the iOS flow.
-
-## Project Settings vs App Settings
-
-This distinction matters:
-
-### App Settings
-
-Use app settings for:
-
-- local Claude auth status
-- local Codex auth status
-- global Expo token
-- IDE preferences
-
-### Project Settings
-
-Use project settings for:
-
-- project secrets
-- Firebase configuration
-- Convex configuration
-- Stripe keys
-- RevenueCat keys
-- git remote configuration
-- app bundle/package identifiers
-- app icons and project metadata
-
-## Logging and Debugging
-
-Frontend console logs are persisted in debug builds under the app-local data directory.
-
-Example on macOS dev builds:
-
-```bash
-tail -F "$HOME/Library/Application Support/com.bfloat.ide.dev/logs/frontend-console.log"
-```
-
-Pretty-print:
-
-```bash
-tail -F "$HOME/Library/Application Support/com.bfloat.ide.dev/logs/frontend-console.log" | pnpm dlx pino-pretty --colorize
-```
-
-## Supplemental Docs
-
-This README is the primary doc, but these files still exist for deeper reference:
-
-- [`DEV.md`](DEV.md)
-- [`DEVELOPER.md`](DEVELOPER.md)
-- [`RELEASE.md`](RELEASE.md)
+iOS apps deploy through integrated Expo/EAS builds with App Store Connect API key support. Web apps deploy via git push to any platform that supports it — Vercel, Render, Railway, etc.
 
 ## Contributing
 
@@ -461,6 +115,11 @@ When making changes:
 - keep the local-first architecture intact
 - prefer repo-accurate docs over aspirational docs
 - verify commands against actual package scripts
+
+## Getting Help
+
+- [GitHub Issues](https://github.com/bfloat-inc/bfloat-ide/issues) — bug reports and feature requests
+- [Discord](https://discord.gg/A2SUyzb3qM) — questions, discussion, and community
 
 ## License
 
