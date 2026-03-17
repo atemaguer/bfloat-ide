@@ -114,6 +114,22 @@ bunx tauri build
 
 Output: `packages/desktop/src-tauri/target/release/bundle/` (contains `.dmg` and `.app`).
 
+## Local Storage
+
+There is no central hosted database. The IDE is local-first.
+
+Key local storage locations:
+
+- Projects metadata: `~/.bfloat-ide/projects.json`
+- Project workspaces: `~/.bfloat-ide/projects/<projectId>/`
+- Provider/config settings: `~/.bfloat-ide/config/settings.json`
+
+Opening a project creates or reuses a local workspace directory. Chat/session state, secrets, and project metadata are all managed on the local machine.
+
+### Database integrations for the apps you build
+
+When people say "database" in this codebase, it usually means database/backends for the app being built, not for the IDE itself. The current built-in project setup model supports Convex and Firebase, configured per project through Project Settings and project secrets.
+
 ## Project Layout
 
 ```
