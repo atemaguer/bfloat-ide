@@ -142,6 +142,16 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -167,6 +177,9 @@ jobs:
       - name: Make sidecar executable
         if: matrix.platform != 'windows-latest'
         run: chmod +x packages/desktop/src-tauri/sidecars/bfloat-sidecar-${{ matrix.triple }}
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Install frontend dependencies
         working-directory: packages/desktop
