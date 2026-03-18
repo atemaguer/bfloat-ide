@@ -197,7 +197,6 @@ jobs:
         env:
           APPLE_API_KEY_ID_SECRET: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_KEY_SECRET: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER_SECRET: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           python3 - <<'PY'
           import base64
@@ -219,10 +218,6 @@ jobs:
             fh.write(f"key_path={key_path}\n")
           PY
 
-          if [ -n "$APPLE_API_ISSUER_SECRET" ]; then
-            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER_SECRET" >> "$GITHUB_ENV"
-          fi
-
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -232,58 +227,51 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_KEY_PATH: ${{ steps.apple_api_key.outputs.key_path }}
         with:
           projectPath: packages/desktop
           tauriScript: bunx tauri
           args: ${{ matrix.args }} -c src-tauri/tauri.prod.conf.json
 
-      - name: Staple and validate macOS artifacts
+      - name: Notarize, staple, and validate macOS artifacts
         if: startsWith(matrix.platform, 'macos-')
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ steps.apple_api_key.outputs.key_path }}
         run: |
           APP_PATH=$(find packages/desktop/src-tauri/target -path "*/release/bundle/macos/*.app" -type d | head -n 1)
           DMG_PATH=$(find packages/desktop/src-tauri/target -path "*/release/bundle/dmg/*.dmg" -type f | head -n 1)
-
-          retry_staple() {
-            local target="$1"
-            local attempts=10
-            local delay=30
-
-            for attempt in $(seq 1 "$attempts"); do
-              echo "Stapling attempt $attempt/$attempts: $target"
-              if xcrun stapler staple -v "$target"; then
-                return 0
-              fi
-
-              if [ "$attempt" -eq "$attempts" ]; then
-                echo "ERROR: Failed to staple $target after $attempts attempts"
-                return 1
-              fi
-
-              echo "Stapling not ready yet, retrying in ${delay}s..."
-              sleep "$delay"
-            done
-          }
+          APP_ZIP_PATH="$RUNNER_TEMP/Bfloat-IDE-notarize.zip"
 
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: No macOS .app bundle found"
             exit 1
           fi
 
-          if [ -z "$DMG_PATH" ]; then
-            echo "ERROR: No macOS .dmg bundle found"
-            exit 1
+          NOTARY_ARGS=(--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID")
+          if [ -n "$APPLE_API_ISSUER" ]; then
+            NOTARY_ARGS+=(--issuer "$APPLE_API_ISSUER")
           fi
 
+          echo "Submitting app bundle for notarization: $APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ZIP_PATH"
+          xcrun notarytool submit "$APP_ZIP_PATH" "${NOTARY_ARGS[@]}" --wait
+
           echo "Stapling app: $APP_PATH"
-          retry_staple "$APP_PATH"
+          xcrun stapler staple -v "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
           spctl -a -vvv -t exec "$APP_PATH"
 
-          echo "Stapling dmg: $DMG_PATH"
-          retry_staple "$DMG_PATH"
-          xcrun stapler validate "$DMG_PATH"
+          if [ -n "$DMG_PATH" ]; then
+            echo "Submitting dmg for notarization: $DMG_PATH"
+            xcrun notarytool submit "$DMG_PATH" "${NOTARY_ARGS[@]}" --wait
+
+            echo "Stapling dmg: $DMG_PATH"
+            xcrun stapler staple -v "$DMG_PATH"
+            xcrun stapler validate "$DMG_PATH"
+          else
+            echo "WARNING: No macOS .dmg bundle found; skipped DMG notarization"
+          fi
 
       - name: Upload Tauri artifacts
         uses: actions/upload-artifact@v4
