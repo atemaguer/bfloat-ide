@@ -191,33 +191,6 @@ jobs:
         working-directory: packages/desktop
         run: bun install
 
-      - name: Prepare Apple notarization API key
-        if: startsWith(matrix.platform, 'macos-')
-        id: apple_api_key
-        env:
-          APPLE_API_KEY_ID_SECRET: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_KEY_SECRET: ${{ secrets.APPLE_API_KEY }}
-        run: |
-          python3 - <<'PY'
-          import base64
-          import os
-          from pathlib import Path
-
-          key_id = os.environ["APPLE_API_KEY_ID_SECRET"].strip()
-          key_value = os.environ["APPLE_API_KEY_SECRET"].strip()
-          key_path = Path(os.environ["RUNNER_TEMP"]) / f"AuthKey_{key_id}.p8"
-
-          if "BEGIN PRIVATE KEY" in key_value:
-            key_bytes = key_value.encode("utf-8")
-          else:
-            key_bytes = base64.b64decode(key_value)
-
-          key_path.write_bytes(key_bytes)
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-            fh.write(f"key_path={key_path}\n")
-          PY
-
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -235,9 +208,9 @@ jobs:
       - name: Notarize, staple, and validate macOS artifacts
         if: startsWith(matrix.platform, 'macos-')
         env:
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY_PATH: ${{ steps.apple_api_key.outputs.key_path }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           APP_PATH=$(find packages/desktop/src-tauri/target -path "*/release/bundle/macos/*.app" -type d | head -n 1)
           DMG_PATH=$(find packages/desktop/src-tauri/target -path "*/release/bundle/dmg/*.dmg" -type f | head -n 1)
@@ -248,10 +221,7 @@ jobs:
             exit 1
           fi
 
-          NOTARY_ARGS=(--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID")
-          if [ -n "$APPLE_API_ISSUER" ]; then
-            NOTARY_ARGS+=(--issuer "$APPLE_API_ISSUER")
-          fi
+          NOTARY_ARGS=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID")
 
           echo "Submitting app bundle for notarization: $APP_PATH"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ZIP_PATH"
