@@ -29,6 +29,10 @@ export default defineConfig(async () => {
       // Avoid duplicate CodeMirror module instances across workspace package
       // boundaries (which breaks instanceof checks for extensions).
       dedupe: [
+        "react",
+        "react-dom",
+        "react-router",
+        "react-router-dom",
         "codemirror",
         "@codemirror/state",
         "@codemirror/view",
