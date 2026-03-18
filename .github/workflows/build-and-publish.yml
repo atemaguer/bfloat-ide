@@ -245,6 +245,27 @@ jobs:
           APP_PATH=$(find packages/desktop/src-tauri/target -path "*/release/bundle/macos/*.app" -type d | head -n 1)
           DMG_PATH=$(find packages/desktop/src-tauri/target -path "*/release/bundle/dmg/*.dmg" -type f | head -n 1)
 
+          retry_staple() {
+            local target="$1"
+            local attempts=10
+            local delay=30
+
+            for attempt in $(seq 1 "$attempts"); do
+              echo "Stapling attempt $attempt/$attempts: $target"
+              if xcrun stapler staple -v "$target"; then
+                return 0
+              fi
+
+              if [ "$attempt" -eq "$attempts" ]; then
+                echo "ERROR: Failed to staple $target after $attempts attempts"
+                return 1
+              fi
+
+              echo "Stapling not ready yet, retrying in ${delay}s..."
+              sleep "$delay"
+            done
+          }
+
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: No macOS .app bundle found"
             exit 1
@@ -256,12 +277,12 @@ jobs:
           fi
 
           echo "Stapling app: $APP_PATH"
-          xcrun stapler staple -v "$APP_PATH"
+          retry_staple "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
           spctl -a -vvv -t exec "$APP_PATH"
 
           echo "Stapling dmg: $DMG_PATH"
-          xcrun stapler staple -v "$DMG_PATH"
+          retry_staple "$DMG_PATH"
           xcrun stapler validate "$DMG_PATH"
 
       - name: Upload Tauri artifacts
