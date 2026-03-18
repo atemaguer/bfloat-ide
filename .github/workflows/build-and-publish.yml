@@ -239,6 +239,31 @@ jobs:
           tauriScript: bunx tauri
           args: ${{ matrix.args }} -c src-tauri/tauri.prod.conf.json
 
+      - name: Staple and validate macOS artifacts
+        if: startsWith(matrix.platform, 'macos-')
+        run: |
+          APP_PATH=$(find packages/desktop/src-tauri/target -path "*/release/bundle/macos/*.app" -type d | head -n 1)
+          DMG_PATH=$(find packages/desktop/src-tauri/target -path "*/release/bundle/dmg/*.dmg" -type f | head -n 1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No macOS .app bundle found"
+            exit 1
+          fi
+
+          if [ -z "$DMG_PATH" ]; then
+            echo "ERROR: No macOS .dmg bundle found"
+            exit 1
+          fi
+
+          echo "Stapling app: $APP_PATH"
+          xcrun stapler staple -v "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          spctl -a -vvv -t exec "$APP_PATH"
+
+          echo "Stapling dmg: $DMG_PATH"
+          xcrun stapler staple -v "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+
       - name: Upload Tauri artifacts
         uses: actions/upload-artifact@v4
         with:
