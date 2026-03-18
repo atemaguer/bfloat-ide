@@ -2614,21 +2614,47 @@ export const secretsBridge = {
 // Preview Proxy URL helper
 // ---------------------------------------------------------------------------
 
+interface PreviewProxySessionResult {
+  success: boolean
+  sessionId?: string
+  proxyUrl?: string
+  wsProxyUrl?: string
+  error?: string
+}
+
+async function createPreviewProxySession(targetUrl: string): Promise<PreviewProxySessionResult> {
+  try {
+    return await getSidecarApiSync().http.post<PreviewProxySessionResult>(
+      '/api/workbench/preview-session',
+      { targetUrl },
+    )
+  } catch (err) {
+    console.warn('[conveyor-bridge] workbench.createPreviewProxySession error:', err)
+    return { success: false, error: String(err) }
+  }
+}
+
 /**
  * Build the sidecar preview-proxy URL for a given target.
  * The iframe loads this URL so that the sidecar can inject error-capture scripts.
  */
-export function getPreviewProxyUrl(targetUrl: string): string {
-  const api = getSidecarApiSync()
-  return `${api.http.baseUrl}/preview-proxy/?target=${encodeURIComponent(targetUrl)}`
+export async function getPreviewProxyUrl(targetUrl: string): Promise<string> {
+  const result = await createPreviewProxySession(targetUrl)
+  if (!result.success || !result.proxyUrl) {
+    throw new Error(result.error || 'Failed to create preview proxy session')
+  }
+  return result.proxyUrl
 }
 
 /**
  * Build the sidecar preview-proxy WebSocket URL for HMR forwarding.
  */
-export function getPreviewProxyWsUrl(targetUrl: string): string {
-  const api = getSidecarApiSync()
-  return api.http.wsUrl(`/preview-proxy/ws?target=${encodeURIComponent(targetUrl)}`)
+export async function getPreviewProxyWsUrl(targetUrl: string): Promise<string> {
+  const result = await createPreviewProxySession(targetUrl)
+  if (!result.success || !result.wsProxyUrl) {
+    throw new Error(result.error || 'Failed to create preview proxy session')
+  }
+  return result.wsProxyUrl
 }
 
 // ---------------------------------------------------------------------------

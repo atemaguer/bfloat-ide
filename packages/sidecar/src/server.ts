@@ -22,7 +22,7 @@ import { localProjectsRouter } from "./routes/local-projects.ts";
 import { templateRouter } from "./routes/template.ts";
 import { screenshotRouter } from "./routes/screenshot.ts";
 import { workbenchRouter } from "./routes/workbench.ts";
-import { previewProxyRouter, previewProxyFallback, getActiveProxyTarget, parsePreviewTargetUrl } from "./routes/preview-proxy.ts";
+import { previewProxyRouter, previewProxyFallback, getPreviewProxySession } from "./routes/preview-proxy.ts";
 import { shutdownBrowser } from "./services/screenshot.ts";
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ app.use("*", async (c, next) => {
     const newReq = new Request(url.toString(), c.req.raw);
     return app.fetch(newReq);
   }
-  await next();
+  return next();
 });
 
 app.use("*", logger((message: string, ...rest: string[]) => {
@@ -111,13 +111,15 @@ app.use(
   })
 );
 
-// Preview reverse proxy — mounted BEFORE auth middleware because the iframe
-// cannot send auth headers.  Target is restricted to localhost in the route.
+// Preview reverse proxy — mounted BEFORE auth middleware because iframe
+// subresource requests rely on a sidecar-issued preview session cookie rather
+// than auth headers. Requests without a valid preview session fail closed.
 app.route("/preview-proxy", previewProxyRouter);
 
 // When preview proxy is active, allow unknown app-level /api/* requests
 // (e.g. /api/plans in Next.js projects) to pass through to the preview target
-// before sidecar auth middleware. Sidecar-owned API routes remain protected.
+// before sidecar auth middleware, but only for requests carrying a valid
+// preview session. Sidecar-owned API routes remain protected.
 const SIDECAR_API_PREFIXES = [
   "/api/terminal",
   "/api/agent",
@@ -137,11 +139,11 @@ app.use("/api/*", async (c, next) => {
   const requestPath = c.req.path;
   const isSidecarApi = SIDECAR_API_PREFIXES.some((prefix) => requestPath === prefix || requestPath.startsWith(`${prefix}/`));
 
-  if (!isSidecarApi && getActiveProxyTarget()) {
+  if (!isSidecarApi && getPreviewProxySession(c.req.raw)) {
     return previewProxyFallback(c, next);
   }
 
-  await next();
+  return next();
 });
 
 // Auth middleware applies to all routes except health (checked inside health route)
@@ -244,16 +246,19 @@ const server = Bun.serve<WSData>({
         url.pathname.startsWith("/api/agent/ws/") ||
         url.pathname.startsWith("/preview-proxy/ws"))
     ) {
-      // Preview-proxy WS is unauthenticated (target restricted to localhost).
       const isPreviewProxy = url.pathname.startsWith("/preview-proxy/ws");
+      const previewSession = isPreviewProxy || !url.pathname.startsWith("/api/")
+        ? getPreviewProxySession(req)
+        : null;
 
-      // Validate auth before upgrading (skip for preview-proxy).
+      // Validate auth before upgrading. Preview proxy traffic is authorized by
+      // a sidecar-issued preview session cookie instead of the shared secret.
       // Browser WebSocket API cannot set headers, so we also accept
       // the password as a ?password= query parameter.
       const authHeader = req.headers.get("authorization") ?? "";
       const queryPassword = url.searchParams.get("password") ?? "";
       const authenticated =
-        isPreviewProxy ||
+        Boolean(previewSession) ||
         validateWebSocketAuth(authHeader, password) ||
         queryPassword === password;
 
@@ -270,20 +275,27 @@ const server = Bun.serve<WSData>({
         sessionId = url.pathname.replace("/api/terminal/ws/", "");
       } else if (url.pathname.startsWith("/preview-proxy/ws")) {
         type = "preview-proxy";
-        const rawTarget = url.searchParams.get("target") ?? "";
-        const parsedTarget = parsePreviewTargetUrl(rawTarget);
-        if (!parsedTarget) {
-          return new Response("Invalid preview proxy target", { status: 400 });
+        if (!previewSession) {
+          return new Response("Invalid preview session", { status: 401 });
         }
-        proxyTarget = parsedTarget.origin;
+        proxyTarget = previewSession.targetOrigin;
         sessionId = "preview-proxy";
       } else if (url.pathname.startsWith("/api/agent/ws/")) {
         type = "agent";
         sessionId = url.pathname.replace("/api/agent/ws/", "");
       }
 
+      const wsData: WSData = {
+        type,
+        sessionId,
+        authenticated,
+      };
+      if (proxyTarget !== undefined) {
+        wsData.proxyTarget = proxyTarget;
+      }
+
       const upgraded = server.upgrade(req, {
-        data: { type, sessionId, authenticated, proxyTarget },
+        data: wsData,
       });
 
       if (upgraded) return undefined;
@@ -295,10 +307,10 @@ const server = Bun.serve<WSData>({
     // dev server when a preview session is active.
     if (
       req.headers.get("upgrade")?.toLowerCase() === "websocket" &&
-      getActiveProxyTarget()
+      getPreviewProxySession(req)
     ) {
-      const target = getActiveProxyTarget()!;
-      const wsTarget = target.replace(/^http/, "ws");
+      const previewSession = getPreviewProxySession(req)!;
+      const wsTarget = previewSession.targetOrigin.replace(/^http/, "ws");
       const proxyTarget = `${wsTarget}${url.pathname}${url.search}`;
 
       const upgraded = server.upgrade(req, {

@@ -49,21 +49,6 @@ interface WebviewElement extends HTMLElement {
 /** True when running inside a Tauri webview (no Electron webview tag support). */
 const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
 
-/**
- * On Tauri, wrap the preview URL through the sidecar reverse proxy so that
- * an error-catching script is injected into the HTML.  On Electron this is a
- * no-op — error capture uses the webview's native `console-message` event.
- */
-function proxyUrl(url: string): string {
-  if (!isTauri || !url) return url
-  try {
-    return getPreviewProxyUrl(url)
-  } catch {
-    // SidecarApi not initialised yet — fall back to raw URL
-    return url
-  }
-}
-
 interface PreviewProps {
   previewUrl: string
   serverStatus: 'starting' | 'running' | 'error'
@@ -163,6 +148,8 @@ export function Preview(props: PreviewProps) {
 
   // Browser-like URL state - can be set by user input OR auto-detection
   const [currentUrl, setCurrentUrl] = useState('')
+  const [proxiedCurrentUrl, setProxiedCurrentUrl] = useState('')
+  const [proxiedPreviewUrl, setProxiedPreviewUrl] = useState('')
   const [urlInput, setUrlInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [canGoBack, setCanGoBack] = useState(false)
@@ -217,6 +204,64 @@ export function Preview(props: PreviewProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.previewUrl]) // Only react to prop changes, not currentUrl changes
+
+  useEffect(() => {
+    if (!isTauri) {
+      setProxiedCurrentUrl(currentUrl)
+      return
+    }
+
+    if (!currentUrl) {
+      setProxiedCurrentUrl('')
+      return
+    }
+
+    let cancelled = false
+    getPreviewProxyUrl(currentUrl)
+      .then((url) => {
+        if (!cancelled) {
+          setProxiedCurrentUrl(url)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProxiedCurrentUrl(currentUrl)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentUrl])
+
+  useEffect(() => {
+    if (!isTauri) {
+      setProxiedPreviewUrl(props.previewUrl)
+      return
+    }
+
+    if (!props.previewUrl) {
+      setProxiedPreviewUrl('')
+      return
+    }
+
+    let cancelled = false
+    getPreviewProxyUrl(props.previewUrl)
+      .then((url) => {
+        if (!cancelled) {
+          setProxiedPreviewUrl(url)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProxiedPreviewUrl(props.previewUrl)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [props.previewUrl])
 
 
   // Setup webview event listeners (Electron only — Tauri uses iframe events)
@@ -888,7 +933,7 @@ export function Preview(props: PreviewProps) {
                 <iframe
                   key={props.refreshKey}
                   ref={webIframeRef}
-                  src={proxyUrl(currentUrl)}
+                  src={proxiedCurrentUrl || currentUrl}
                   className="w-full h-full border-0 bg-white"
                   allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
                   sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-top-navigation"
@@ -1001,7 +1046,7 @@ export function Preview(props: PreviewProps) {
                     key={props.refreshKey}
                     className="w-full h-full border-0 bg-white"
                     ref={iframeRef}
-                    src={proxyUrl(props.previewUrl)}
+                    src={proxiedPreviewUrl || props.previewUrl}
                     allow="geolocation; camera; microphone; screen-wake-lock; clipboard-read; clipboard-write; accelerometer; gyroscope"
                     sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock allow-top-navigation"
                     loading="eager"

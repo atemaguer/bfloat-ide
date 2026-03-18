@@ -23,18 +23,121 @@ import type { Context, Next } from "hono";
 
 export const previewProxyRouter = new Hono();
 const LOCAL_PREVIEW_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const PREVIEW_SESSION_COOKIE_NAME = "bfloat_preview_session";
+const PREVIEW_SESSION_TTL_MS = 30 * 60 * 1000;
+const PREVIEW_SESSION_MAX_AGE_SECONDS = PREVIEW_SESSION_TTL_MS / 1000;
 
 // ---------------------------------------------------------------------------
-// Stored proxy target
+// Preview sessions
 // ---------------------------------------------------------------------------
-// When the initial HTML request arrives with ?target=, we store the origin so
-// that subsequent sub-resource requests (which lack the ?target= param) can be
-// proxied transparently.
 
-let activeProxyTarget: string | null = null;
+export interface PreviewProxySession {
+  id: string;
+  targetUrl: string;
+  targetOrigin: string;
+  expiresAt: number;
+}
 
-export function getActiveProxyTarget(): string | null {
-  return activeProxyTarget;
+const previewSessions = new Map<string, PreviewProxySession>();
+
+function cleanupExpiredPreviewSessions(now = Date.now()): void {
+  for (const [sessionId, session] of previewSessions.entries()) {
+    if (session.expiresAt <= now) {
+      previewSessions.delete(sessionId);
+    }
+  }
+}
+
+function parseCookieHeader(cookieHeader: string | null | undefined): Map<string, string> {
+  const parsed = new Map<string, string>();
+  if (!cookieHeader) return parsed;
+
+  for (const part of cookieHeader.split(";")) {
+    const [rawName, ...rawValue] = part.trim().split("=");
+    if (!rawName || rawValue.length === 0) continue;
+    parsed.set(rawName, decodeURIComponent(rawValue.join("=")));
+  }
+
+  return parsed;
+}
+
+function getPreviewSessionIdFromRequest(req: Request): string | null {
+  const url = new URL(req.url);
+  const querySessionId = url.searchParams.get("previewSession");
+  if (querySessionId) {
+    return querySessionId;
+  }
+
+  const cookies = parseCookieHeader(req.headers.get("cookie"));
+  return cookies.get(PREVIEW_SESSION_COOKIE_NAME) ?? null;
+}
+
+function buildPreviewSessionCookie(sessionId: string): string {
+  return [
+    `${PREVIEW_SESSION_COOKIE_NAME}=${encodeURIComponent(sessionId)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${PREVIEW_SESSION_MAX_AGE_SECONDS}`,
+  ].join("; ");
+}
+
+function cloneSession(session: PreviewProxySession): PreviewProxySession {
+  return {
+    id: session.id,
+    targetUrl: session.targetUrl,
+    targetOrigin: session.targetOrigin,
+    expiresAt: session.expiresAt,
+  };
+}
+
+export function createPreviewProxySession(targetUrl: string): PreviewProxySession | null {
+  cleanupExpiredPreviewSessions();
+
+  const parsedTargetUrl = parsePreviewTargetUrl(targetUrl);
+  if (!parsedTargetUrl) {
+    return null;
+  }
+
+  const now = Date.now();
+  const session: PreviewProxySession = {
+    id: crypto.randomUUID(),
+    targetUrl: parsedTargetUrl.toString(),
+    targetOrigin: parsedTargetUrl.origin,
+    expiresAt: now + PREVIEW_SESSION_TTL_MS,
+  };
+
+  previewSessions.set(session.id, session);
+  return cloneSession(session);
+}
+
+export function getPreviewProxyPath(sessionId: string): string {
+  return `/preview-proxy/?previewSession=${encodeURIComponent(sessionId)}`;
+}
+
+export function getPreviewProxyWsPath(sessionId: string): string {
+  return `/preview-proxy/ws?previewSession=${encodeURIComponent(sessionId)}`;
+}
+
+export function getPreviewProxySession(req: Request): PreviewProxySession | null {
+  cleanupExpiredPreviewSessions();
+
+  const sessionId = getPreviewSessionIdFromRequest(req);
+  if (!sessionId) {
+    return null;
+  }
+
+  const session = previewSessions.get(sessionId);
+  if (!session) {
+    return null;
+  }
+
+  if (session.expiresAt <= Date.now()) {
+    previewSessions.delete(sessionId);
+    return null;
+  }
+
+  return cloneSession(session);
 }
 
 export function parsePreviewTargetUrl(rawTarget: string): URL | null {
@@ -93,7 +196,7 @@ export function createPreviewProxyFetchInit(options: {
   acceptHeader?: string | null;
   contentTypeHeader?: string | null;
   contentLengthHeader?: string | null;
-  body?: BodyInit;
+  body?: Uint8Array | ReadableStream;
 }): RequestInit {
   const { method, acceptHeader, contentTypeHeader, contentLengthHeader, body } = options;
   const shouldForwardBody = methodSupportsRequestBody(method);
@@ -137,13 +240,35 @@ async function buildPreviewProxyFetchInit(c: Context): Promise<RequestInit> {
     }
   }
 
-  return createPreviewProxyFetchInit({
+  const options: {
+    method: string;
+    acceptHeader?: string | null;
+    contentTypeHeader?: string | null;
+    contentLengthHeader?: string | null;
+    body?: Uint8Array | ReadableStream;
+  } = {
     method: c.req.method,
-    acceptHeader: c.req.header("accept"),
-    contentTypeHeader: c.req.header("content-type"),
-    contentLengthHeader,
-    body,
-  });
+  };
+
+  const acceptHeader = c.req.header("accept");
+  if (acceptHeader !== undefined) {
+    options.acceptHeader = acceptHeader;
+  }
+
+  const contentTypeHeader = c.req.header("content-type");
+  if (contentTypeHeader !== undefined) {
+    options.contentTypeHeader = contentTypeHeader;
+  }
+
+  if (contentLengthHeader !== undefined) {
+    options.contentLengthHeader = contentLengthHeader;
+  }
+
+  if (body !== undefined) {
+    options.body = body;
+  }
+
+  return createPreviewProxyFetchInit(options);
 }
 
 // ---------------------------------------------------------------------------
@@ -220,22 +345,15 @@ const ERROR_CAPTURE_SCRIPT = `<script>
 // ---------------------------------------------------------------------------
 
 async function handlePreviewProxyRequest(c: Context) {
-  const targetBase = c.req.query("target");
-  if (!targetBase) {
-    return c.json({ error: "Missing ?target= query parameter" }, 400);
+  const previewSession = getPreviewProxySession(c.req.raw);
+  if (!previewSession) {
+    return c.json({ error: "Invalid or expired preview session" }, 401);
   }
 
-  // Validate target is a localhost URL to prevent open-proxy abuse.
   let targetUrl: URL;
-  const targetBaseUrl = parsePreviewTargetUrl(targetBase);
-  if (!targetBaseUrl) {
-    return c.json({ error: "Invalid target URL" }, 400);
-  }
+  const targetBaseUrl = new URL(previewSession.targetUrl);
   const reqUrl = new URL(c.req.url);
   targetUrl = buildPreviewUpstreamUrl(reqUrl, targetBaseUrl);
-
-  // Store the target origin so the catch-all fallback can proxy sub-resources.
-  activeProxyTarget = targetUrl.origin;
 
   // Forward the request to the target.
   let upstream: Response;
@@ -284,8 +402,8 @@ async function handlePreviewProxyRequest(c: Context) {
       headers: {
         "Content-Type": contentType,
         "Cache-Control": "no-cache",
-        // Allow the iframe to access parent via postMessage
-        "Access-Control-Allow-Origin": "*",
+        "Set-Cookie": buildPreviewSessionCookie(previewSession.id),
+        Vary: "Cookie",
       },
     });
   }
@@ -296,7 +414,8 @@ async function handlePreviewProxyRequest(c: Context) {
   if (contentType) responseHeaders.set("Content-Type", contentType);
   const cacheControl = upstream.headers.get("cache-control");
   if (cacheControl) responseHeaders.set("Cache-Control", cacheControl);
-  responseHeaders.set("Access-Control-Allow-Origin", "*");
+  responseHeaders.set("Set-Cookie", buildPreviewSessionCookie(previewSession.id));
+  responseHeaders.set("Vary", "Cookie");
 
   return new Response(upstream.body, {
     status: upstream.status,
@@ -317,8 +436,8 @@ previewProxyRouter.all("/*", handlePreviewProxyRequest);
 // those requests and proxies them to the stored target origin.
 
 export async function previewProxyFallback(c: Context, next: Next) {
-  // Only activate when we have a stored target.
-  if (!activeProxyTarget) {
+  const previewSession = getPreviewProxySession(c.req.raw);
+  if (!previewSession) {
     await next();
     return;
   }
@@ -326,7 +445,7 @@ export async function previewProxyFallback(c: Context, next: Next) {
   // Build the upstream URL from the stored target + the request path/query.
   let upstreamUrl: URL;
   try {
-    upstreamUrl = new URL(c.req.path, activeProxyTarget);
+    upstreamUrl = new URL(c.req.path, previewSession.targetOrigin);
     // Preserve query params from the original request.
     const reqUrl = new URL(c.req.url);
     reqUrl.searchParams.forEach((value, key) => {
@@ -352,7 +471,8 @@ export async function previewProxyFallback(c: Context, next: Next) {
   if (contentType) responseHeaders.set("Content-Type", contentType);
   const cacheControl = upstream.headers.get("cache-control");
   if (cacheControl) responseHeaders.set("Cache-Control", cacheControl);
-  responseHeaders.set("Access-Control-Allow-Origin", "*");
+  responseHeaders.set("Set-Cookie", buildPreviewSessionCookie(previewSession.id));
+  responseHeaders.set("Vary", "Cookie");
 
   return new Response(upstream.body, {
     status: upstream.status,

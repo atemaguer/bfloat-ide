@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { buildPreviewUpstreamUrl, createPreviewProxyFetchInit, parsePreviewTargetUrl } from "./preview-proxy.ts";
+import {
+  buildPreviewUpstreamUrl,
+  createPreviewProxyFetchInit,
+  createPreviewProxySession,
+  getPreviewProxyPath,
+  getPreviewProxySession,
+  getPreviewProxyWsPath,
+  parsePreviewTargetUrl,
+} from "./preview-proxy.ts";
 
 describe("preview-proxy target hardening", () => {
   it("accepts localhost http targets", () => {
@@ -38,6 +46,36 @@ describe("preview-proxy upstream url building", () => {
     const upstream = buildPreviewUpstreamUrl(reqUrl, targetBase);
 
     expect(upstream.toString()).toBe("http://localhost:9000/_next/data/build/pricing.json?x=1");
+  });
+});
+
+describe("preview-proxy sessions", () => {
+  it("creates a session only for localhost targets", () => {
+    const session = createPreviewProxySession("http://localhost:9000/pricing?source=ide");
+    expect(session).not.toBeNull();
+    expect(session?.targetOrigin).toBe("http://localhost:9000");
+    expect(getPreviewProxyPath(session!.id)).toBe(`/preview-proxy/?previewSession=${encodeURIComponent(session!.id)}`);
+    expect(getPreviewProxyWsPath(session!.id)).toBe(`/preview-proxy/ws?previewSession=${encodeURIComponent(session!.id)}`);
+  });
+
+  it("rejects non-localhost preview sessions", () => {
+    const session = createPreviewProxySession("https://example.com");
+    expect(session).toBeNull();
+  });
+
+  it("resolves preview sessions from query param and cookie", () => {
+    const session = createPreviewProxySession("http://127.0.0.1:8081/");
+    expect(session).not.toBeNull();
+
+    const queryRequest = new Request(`http://127.0.0.1:7765/preview-proxy/?previewSession=${session!.id}`);
+    expect(getPreviewProxySession(queryRequest)?.id).toBe(session!.id);
+
+    const cookieRequest = new Request("http://127.0.0.1:7765/_next/static/chunk.js", {
+      headers: {
+        cookie: `bfloat_preview_session=${encodeURIComponent(session!.id)}`,
+      },
+    });
+    expect(getPreviewProxySession(cookieRequest)?.id).toBe(session!.id);
   });
 });
 

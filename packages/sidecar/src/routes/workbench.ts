@@ -7,6 +7,11 @@ import {
   type RuntimeAppType,
   type RuntimeServerStatus,
 } from "../services/workbench-runtime.ts";
+import {
+  createPreviewProxySession,
+  getPreviewProxyPath,
+  getPreviewProxyWsPath,
+} from "./preview-proxy.ts";
 
 const RuntimeUpdateSchema = z.object({
   cwd: z.string().min(1),
@@ -16,6 +21,10 @@ const RuntimeUpdateSchema = z.object({
   expoUrl: z.string().optional(),
   appType: z.enum(["web", "mobile"]).optional(),
   devServerTerminalId: z.string().optional(),
+});
+
+const PreviewSessionSchema = z.object({
+  targetUrl: z.string().url(),
 });
 
 export const workbenchRouter = new Hono();
@@ -40,15 +49,30 @@ workbenchRouter.post("/runtime", async (c) => {
     );
   }
 
-  const normalized = upsertRuntimeState({
+  const nextState: Partial<Parameters<typeof upsertRuntimeState>[0]> & { cwd: string } = {
     cwd: parsed.data.cwd,
-    serverStatus: parsed.data.serverStatus as RuntimeServerStatus | undefined,
-    previewUrl: parsed.data.previewUrl,
-    port: parsed.data.port,
-    expoUrl: parsed.data.expoUrl,
-    appType: parsed.data.appType as RuntimeAppType | undefined,
-    devServerTerminalId: parsed.data.devServerTerminalId,
-  });
+  };
+
+  if (parsed.data.serverStatus !== undefined) {
+    nextState.serverStatus = parsed.data.serverStatus as RuntimeServerStatus;
+  }
+  if (parsed.data.previewUrl !== undefined) {
+    nextState.previewUrl = parsed.data.previewUrl;
+  }
+  if (parsed.data.port !== undefined) {
+    nextState.port = parsed.data.port;
+  }
+  if (parsed.data.expoUrl !== undefined) {
+    nextState.expoUrl = parsed.data.expoUrl;
+  }
+  if (parsed.data.appType !== undefined) {
+    nextState.appType = parsed.data.appType as RuntimeAppType;
+  }
+  if (parsed.data.devServerTerminalId !== undefined) {
+    nextState.devServerTerminalId = parsed.data.devServerTerminalId;
+  }
+
+  const normalized = upsertRuntimeState(nextState);
 
   return c.json({ success: true, state: normalized });
 });
@@ -67,5 +91,39 @@ workbenchRouter.get("/runtime", async (c) => {
     success: true,
     state,
     assessment,
+  });
+});
+
+workbenchRouter.post("/preview-session", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ success: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const parsed = PreviewSessionSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      {
+        success: false,
+        error: "Validation failed.",
+        details: parsed.error.flatten(),
+      },
+      422
+    );
+  }
+
+  const previewSession = createPreviewProxySession(parsed.data.targetUrl);
+  if (!previewSession) {
+    return c.json({ success: false, error: "Invalid preview target URL." }, 400);
+  }
+
+  const origin = new URL(c.req.url).origin;
+  return c.json({
+    success: true,
+    sessionId: previewSession.id,
+    proxyUrl: `${origin}${getPreviewProxyPath(previewSession.id)}`,
+    wsProxyUrl: `${origin.replace(/^http/, "ws")}${getPreviewProxyWsPath(previewSession.id)}`,
   });
 });
