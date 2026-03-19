@@ -32,9 +32,9 @@
     "active": true,
     "targets": ["dmg", "nsis", "app", "deb", "appimage", "rpm"],
     "resources": {
-      "../../../resources/templates": "templates",
-      "sidecars": "sidecars"
+      "../../../resources/templates": "templates"
     },
+    "externalBin": ["sidecars/bfloat-sidecar"],
     "macOS": {
       "entitlements": "./entitlements.plist"
     }

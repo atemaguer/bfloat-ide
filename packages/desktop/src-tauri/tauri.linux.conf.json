@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "resources": {
+      "../../../resources/templates": "templates",
+      "sidecars": "sidecars"
+    },
+    "externalBin": []
+  }
+}
