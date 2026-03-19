@@ -1,5 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
   "productName": "Bfloat IDE",
   "identifier": "com.bfloat.ide",
   "plugins": {
