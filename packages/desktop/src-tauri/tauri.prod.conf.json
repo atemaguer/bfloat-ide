@@ -7,7 +7,7 @@
   "identifier": "com.bfloat.ide",
   "plugins": {
     "updater": {
-      "pubkey": "RWQldoniVhgntrDNpHQbXTKzAIYnl1VuwPorJB+DArRwH1y5QAw3mWHB",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2MjcxODU2RTI4OTc2MjUKUldRbGRvbmlWaGdudHJETnBIUWJYVEt6QUlZbmwxVnV3UG9ySkIrREFyUndIMXk1UUF3M21XSEIK",
       "endpoints": [
         "https://bfloat.dev/api/updates/latest/stable?target={{target}}&arch={{arch}}&current_version={{current_version}}"
       ],
