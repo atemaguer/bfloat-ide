@@ -7,7 +7,7 @@
   "identifier": "com.bfloat.ide",
   "plugins": {
     "updater": {
-      "pubkey": "untrusted comment: minisign public key: B6271856E2897625\nRWQldoniVhgntrDNpHQbXTKzAIYnl1VuwPorJB+DArRwH1y5QAw3mWHB",
+      "pubkey": "RWQldoniVhgntrDNpHQbXTKzAIYnl1VuwPorJB+DArRwH1y5QAw3mWHB",
       "endpoints": [
         "https://bfloat.dev/api/updates/latest/stable?target={{target}}&arch={{arch}}&current_version={{current_version}}"
       ],
