@@ -202,7 +202,7 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: '1'
           RUST_BACKTRACE: '1'
-        run: bunx tauri build -v ${{ matrix.args }} -c src-tauri/tauri.prod.conf.json
+        run: bunx tauri build -v ${{ matrix.args }} -c src-tauri/tauri.prod.conf.json -c src-tauri/tauri.linux.conf.json
 
       - name: Build Tauri app
         if: matrix.platform != 'ubuntu-22.04'
