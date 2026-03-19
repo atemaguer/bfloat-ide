@@ -200,6 +200,7 @@ jobs:
         working-directory: packages/desktop
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: '1'
           RUST_BACKTRACE: '1'
         run: bunx tauri build -v ${{ matrix.args }} -c src-tauri/tauri.prod.conf.json
 
