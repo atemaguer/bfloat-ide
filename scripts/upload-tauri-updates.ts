@@ -26,6 +26,13 @@ type UpdaterTarget = {
 const DEFAULT_BUCKET = 'bfloat-ide-updates'
 const DEFAULT_REGION = 'us-west-2'
 const DEFAULT_CHANNEL = 'stable'
+const RELEASE_ARTIFACT_SUFFIXES = ['.app.tar.gz', '.appimage', '.deb', '.dmg', '.exe', '.msi', '.nsis.zip', '.rpm']
+
+function isReleaseArtifactName(name: string): boolean {
+  const lower = name.toLowerCase()
+  const artifactName = lower.endsWith('.sig') ? lower.slice(0, -4) : lower
+  return RELEASE_ARTIFACT_SUFFIXES.some((suffix) => artifactName.endsWith(suffix))
+}
 
 function walkFiles(root: string): string[] {
   const results: string[] = []
@@ -35,6 +42,9 @@ function walkFiles(root: string): string[] {
     const current = stack.pop()!
     const stat = fs.statSync(current)
     if (stat.isDirectory()) {
+      if (current.toLowerCase().endsWith('.app')) {
+        continue
+      }
       for (const entry of fs.readdirSync(current)) {
         stack.push(path.join(current, entry))
       }
@@ -52,6 +62,10 @@ function classifyArtifact(filePath: string): ClassifiedFile | null {
   const normalizedPath = filePath.replace(/\\/g, '/')
   const name = path.basename(filePath)
   const lower = name.toLowerCase()
+
+  if (!isReleaseArtifactName(name)) {
+    return null
+  }
 
   if (normalizedPath.includes('aarch64-apple-darwin') || lower.includes('_aarch64.')) {
     return { absolutePath: filePath, name, platform: 'darwin', arch: 'arm64' }
