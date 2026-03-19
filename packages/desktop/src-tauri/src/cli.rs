@@ -18,6 +18,19 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
+#[cfg(target_os = "macos")]
+const SIDECAR_FILE_NAME: &str = if cfg!(target_arch = "aarch64") {
+    "bfloat-sidecar-aarch64-apple-darwin"
+} else {
+    "bfloat-sidecar-x86_64-apple-darwin"
+};
+
+#[cfg(target_os = "linux")]
+const SIDECAR_FILE_NAME: &str = "bfloat-sidecar-x86_64-unknown-linux-gnu";
+
+#[cfg(target_os = "windows")]
+const SIDECAR_FILE_NAME: &str = "bfloat-sidecar-x86_64-pc-windows-msvc.exe";
+
 #[derive(Clone, Debug)]
 pub enum CommandEvent {
     Stdout(String),
@@ -46,12 +59,9 @@ impl CommandChild {
 }
 
 pub fn get_sidecar_path(app: &tauri::AppHandle) -> std::path::PathBuf {
-    // Get binary with symlinks support
-    tauri::process::current_binary(&app.env())
-        .expect("Failed to get current binary")
-        .parent()
-        .expect("Failed to get parent dir")
-        .join("bfloat-sidecar")
+    app.path()
+        .resolve(format!("sidecars/{SIDECAR_FILE_NAME}"), BaseDirectory::Resource)
+        .expect("Failed to resolve bundled sidecar path")
 }
 
 fn get_user_shell() -> String {
