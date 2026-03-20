@@ -18,7 +18,7 @@
  *   GET  /api/provider/check-openai-auth        – check Codex / OpenAI auth status
  *   GET  /api/provider/check-claude-cli         – check if system claude CLI is installed
  *   GET  /api/provider/load-tokens              – load all provider tokens
- *   POST /api/provider/connect-anthropic        – spawn claude setup-token (blocking)
+ *   POST /api/provider/connect-anthropic        – spawn claude auth login (blocking)
  *   POST /api/provider/connect-openai           – browser PKCE OAuth flow (blocking)
  *   POST /api/provider/connect-expo             – npx expo login (SSE response)
  *   POST /api/provider/disconnect               – disable a provider
@@ -618,9 +618,9 @@ providerRouter.get("/load-tokens", (c) => {
 // ---------------------------------------------------------------------------
 // POST /api/provider/connect-anthropic
 //
-// Spawns `claude setup-token` (or `npx @anthropic-ai/claude-code setup-token`
-// as a fallback) and blocks until the CLI exits.  The CLI itself opens the
-// user's browser for the OAuth flow.  Returns the result as normal JSON.
+// Spawns `claude auth login` (or `npx @anthropic-ai/claude-code auth login`
+// as a fallback) and blocks until the CLI exits. The CLI itself opens the
+// user's browser for the OAuth flow. Returns the result as normal JSON.
 //
 // Modeled after opencode's provider auth pattern: simple POST that blocks
 // until completion — no SSE/EventSource involved.
@@ -630,8 +630,8 @@ providerRouter.post("/connect-anthropic", async (c) => {
   const systemCli = findSystemClaudeCli();
   const claudeCommand = systemCli.installed && systemCli.path ? systemCli.path : "npx";
   const claudeArgs = systemCli.installed && systemCli.path
-    ? ["setup-token"]
-    : ["@anthropic-ai/claude-code", "setup-token"];
+    ? ["auth", "login"]
+    : ["@anthropic-ai/claude-code", "auth", "login"];
 
   // CI=true tells Ink (React terminal UI used by Claude Code) to use a static
   // renderer that does not require raw mode on stdin.  Without this, Ink crashes

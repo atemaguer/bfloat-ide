@@ -147,6 +147,18 @@ export function ConnectedAccountsSection() {
     setAuthProvider(authProviderId)
   }
 
+  const handleDisconnectAuthProvider = async (providerId: 'anthropic' | 'openai') => {
+    try {
+      const result = await provider.disconnect(providerId)
+      if (!result.success) {
+        throw new Error(`Failed to disconnect ${providerId}`)
+      }
+      await loadState()
+    } catch (error) {
+      showErrorToast(error, { maxLength: 180 })
+    }
+  }
+
   const handleDisconnect = async (accountId: ConnectedAccountId) => {
     const entries = getProviderCredentialKeys(accountId).map((key) => ({ key, value: '' }))
 
@@ -166,12 +178,13 @@ export function ConnectedAccountsSection() {
   const aiProviders: Integration[] = [
     {
       id: 'anthropic',
-      name: 'Claude',
+      name: 'Claude Code',
       description: 'Authenticate the Claude CLI locally to use Claude sessions in the IDE.',
       icon: <ClaudeLogo width="24" height="24" />,
       isConnected: authState.anthropic !== null,
       isLoading: isLoadingAuth,
       onConnect: () => openAuthModal('anthropic'),
+      onDisconnect: () => handleDisconnectAuthProvider('anthropic'),
     },
     {
       id: 'openai',
@@ -181,6 +194,7 @@ export function ConnectedAccountsSection() {
       isConnected: authState.openai !== null,
       isLoading: isLoadingAuth,
       onConnect: () => openAuthModal('openai'),
+      onDisconnect: () => handleDisconnectAuthProvider('openai'),
     },
   ]
 
