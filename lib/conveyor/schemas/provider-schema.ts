@@ -128,7 +128,7 @@ export const providerApiSchema = {
     args: z.tuple([]),
     return: GitBashSelectionResultSchema,
   },
-  // Spawns `claude setup-token` and waits for completion
+  // Spawns `claude auth login` and waits for completion
   'provider:connect-anthropic': {
     args: z.tuple([]),
     return: ConnectResultSchema,

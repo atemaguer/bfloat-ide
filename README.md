@@ -25,7 +25,7 @@ Bfloat IDE is free and open source. You use your own Claude Code and Codex subsc
 
 ### Better agents
 
-Under the hood, Bfloat IDE runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://openai.com/index/introducing-codex/) as full local agent processes. These are the best coding agents available today — they have terminal access, file system awareness, multi-step reasoning, and tool use. Other AI builders run lightweight prompt-and-paste wrappers that can't install dependencies, run tests, debug errors, or iterate on their own output. Claude Code and Codex can, and Bfloat IDE gives them a full local environment to do it in.
+Under the hood, Bfloat IDE runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://openai.com/index/introducing-codex/) as full local agent processes. These are the best coding agents available today — they have terminal access, file system awareness, multi-step reasoning, and tool use.
 
 ### Deploy anywhere in one click
 
