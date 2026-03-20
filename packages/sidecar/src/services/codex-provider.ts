@@ -127,6 +127,21 @@ function isExecutableFile(filePath: string): boolean {
   }
 }
 
+function getLatestNvmBinDir(home: string): string | null {
+  const nvmDir = path.join(home, ".nvm", "versions", "node");
+  if (!fs.existsSync(nvmDir)) return null;
+
+  try {
+    const versions = fs.readdirSync(nvmDir).filter((version) => version.startsWith("v"));
+    if (versions.length === 0) return null;
+
+    versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    return path.join(nvmDir, versions[0], "bin");
+  } catch {
+    return null;
+  }
+}
+
 function getCodexBinaryCandidates(): string[] {
   const binaryName = process.platform === "win32" ? "codex.exe" : "codex";
   const candidates = new Set<string>();
@@ -147,6 +162,10 @@ function getCodexBinaryCandidates(): string[] {
     candidates.add(path.join(appData, "npm", "codex.exe"));
     candidates.add(path.join(localAppData, "Programs", "codex", "codex.exe"));
   } else {
+    const latestNvmBin = getLatestNvmBinDir(home);
+    if (latestNvmBin) {
+      candidates.add(path.join(latestNvmBin, binaryName));
+    }
     candidates.add(path.join(home, ".local", "bin", binaryName));
     candidates.add(path.join(home, ".bun", "bin", binaryName));
     candidates.add(path.join(home, ".nvm", "current", "bin", binaryName));
