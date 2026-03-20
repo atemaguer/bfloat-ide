@@ -30,9 +30,10 @@
       "icons/icon.png"
     ],
     "active": true,
-    "targets": ["dmg", "nsis", "app", "deb"],
+    "targets": ["dmg", "nsis", "app", "deb", "appimage", "rpm"],
     "resources": {
-      "../../../resources/templates": "templates"
+      "../../../resources/templates": "templates",
+      "resources/bun": "bun"
     },
     "externalBin": ["sidecars/bfloat-sidecar"],
     "macOS": {

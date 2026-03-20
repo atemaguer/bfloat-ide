@@ -13,7 +13,7 @@
 
 import React, { useEffect, useState } from "react"
 import ReactDOM from "react-dom/client"
-import { BrowserRouter } from "react-router-dom"
+import { MemoryRouter } from "react-router-dom"
 import { invoke, Channel } from "@tauri-apps/api/core"
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link"
 import "./styles.css"
@@ -25,6 +25,7 @@ import { deployStore } from "@/app/stores/deploy"
 
 // Import the real Bfloat IDE app component and its styles
 import App from "@/app/app"
+import { ErrorBoundary } from "@/app/components/ErrorBoundary"
 import { WindowContextProvider, menuItems } from "@/app/components/window"
 import appIcon from "@/resources/build/icon.png"
 
@@ -299,15 +300,16 @@ ReactDOM.createRoot(rootElement).render(
     */}
     <ServerGate>
       {/*
-        BrowserRouter gives us access to useNavigate, useLocation, etc.
-        For a Tauri app this is fine because the window URL is controlled
-        entirely by Vite / the Tauri web view and does not go over the network.
+        Match the shared desktop/web renderer bootstrap: keep routing state
+        in-memory and surface renderer crashes instead of a blank window.
       */}
-      <BrowserRouter>
-        <WindowContextProvider titlebar={{ icon: appIcon, menuItems }}>
-          <App />
-        </WindowContextProvider>
-      </BrowserRouter>
+      <ErrorBoundary>
+        <MemoryRouter>
+          <WindowContextProvider titlebar={{ icon: appIcon, menuItems }}>
+            <App />
+          </WindowContextProvider>
+        </MemoryRouter>
+      </ErrorBoundary>
     </ServerGate>
   </React.StrictMode>,
 )

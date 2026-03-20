@@ -6,6 +6,8 @@ use process_wrap::tokio::ProcessGroup;
 use process_wrap::tokio::{JobObject, KillOnDrop};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+use std::env;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{process::Stdio, time::Duration};
 use tauri::{AppHandle, Manager, path::BaseDirectory};
@@ -17,6 +19,9 @@ use tokio::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
+
+#[cfg(target_os = "linux")]
+const SIDECAR_FILE_NAME: &str = "bfloat-sidecar-x86_64-unknown-linux-gnu";
 
 #[derive(Clone, Debug)]
 pub enum CommandEvent {
@@ -46,12 +51,48 @@ impl CommandChild {
 }
 
 pub fn get_sidecar_path(app: &tauri::AppHandle) -> std::path::PathBuf {
-    // Get binary with symlinks support
-    tauri::process::current_binary(&app.env())
-        .expect("Failed to get current binary")
-        .parent()
-        .expect("Failed to get parent dir")
-        .join("bfloat-sidecar")
+    #[cfg(target_os = "linux")]
+    {
+    app.path()
+        .resolve(format!("sidecars/{SIDECAR_FILE_NAME}"), BaseDirectory::Resource)
+        .expect("Failed to resolve bundled sidecar path")
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        tauri::process::current_binary(&app.env())
+            .expect("Failed to get current binary")
+            .parent()
+            .expect("Failed to get parent dir")
+            .join("bfloat-sidecar")
+    }
+}
+
+fn get_bundled_bun_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let relative_path = "bun/bin/bun.exe";
+
+    #[cfg(not(windows))]
+    let relative_path = "bun/bin/bun";
+
+    let bun_path = app
+        .path()
+        .resolve(relative_path, BaseDirectory::Resource)
+        .ok()?;
+
+    bun_path.exists().then_some(bun_path)
+}
+
+fn prepend_path(dir: &Path) -> Option<String> {
+    let existing = env::var_os("PATH");
+    let mut paths = vec![dir.to_path_buf()];
+    if let Some(existing) = existing {
+        paths.extend(env::split_paths(&existing));
+    }
+
+    env::join_paths(paths)
+        .ok()
+        .map(|value| value.to_string_lossy().to_string())
 }
 
 fn get_user_shell() -> String {
@@ -92,6 +133,19 @@ pub fn spawn_command(
             .iter()
             .map(|(key, value)| (key.to_string(), value.clone())),
     );
+
+    if let Some(bun_path) = get_bundled_bun_path(app) {
+        if let Some(bun_dir) = bun_path.parent() {
+            if let Some(path) = prepend_path(bun_dir) {
+                envs.push(("PATH".to_string(), path));
+            }
+        }
+
+        envs.push((
+            "BFLOAT_BUNDLED_BUN".to_string(),
+            bun_path.to_string_lossy().to_string(),
+        ));
+    }
 
     let mut cmd = if cfg!(windows) {
         let sidecar = get_sidecar_path(app);
