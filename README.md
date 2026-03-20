@@ -35,6 +35,15 @@ Ship to the App Store through integrated Expo/EAS builds, or deploy your web app
 
 Bfloat IDE is in active early development. Core editing, preview, terminal, and AI agent workflows are functional. iOS deployment via Expo/EAS is the most mature deploy path. Expect rough edges and breaking changes between releases.
 
+## Latest Downloads
+
+These stable links always point directly to the latest release file in S3:
+
+- [macOS (Apple Silicon)](https://bfloat-ide-artifacts-dev.s3.eu-north-1.amazonaws.com/stable/darwin/arm64/latest.dmg)
+- [macOS (Intel)](https://bfloat-ide-artifacts-dev.s3.eu-north-1.amazonaws.com/stable/darwin/x64/latest.dmg)
+- [Windows (x64)](https://bfloat-ide-artifacts-dev.s3.eu-north-1.amazonaws.com/stable/win32/x64/latest.exe)
+- [Linux (x64 AppImage)](https://bfloat-ide-artifacts-dev.s3.eu-north-1.amazonaws.com/stable/linux/x64/latest.AppImage)
+
 ## Prerequisites
 
 You need all of the following installed locally:
