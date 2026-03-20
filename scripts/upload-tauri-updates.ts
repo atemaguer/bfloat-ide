@@ -23,6 +23,11 @@ type UpdaterTarget = {
   signature: ClassifiedFile
 }
 
+type DirectDownloadTarget = {
+  artifact: ClassifiedFile
+  signature?: ClassifiedFile
+}
+
 const DEFAULT_BUCKET = 'bfloat-ide-updates'
 const DEFAULT_REGION = 'us-west-2'
 const DEFAULT_CHANNEL = 'stable'
@@ -140,6 +145,31 @@ function updaterPriority(platform: Platform, name: string): number {
   return 0
 }
 
+function directDownloadPriority(platform: Platform, name: string): number {
+  const lower = name.toLowerCase()
+  if (lower.endsWith('.sig')) return 0
+
+  if (platform === 'darwin') return lower.endsWith('.dmg') ? 100 : 0
+  if (platform === 'linux') return lower.endsWith('.appimage') ? 100 : 0
+  if (platform === 'win32') {
+    if (lower.endsWith('.exe')) return 100
+    if (lower.endsWith('.msi')) return 90
+  }
+
+  return 0
+}
+
+function directDownloadAliasName(platform: Platform, artifactName: string): string {
+  const lower = artifactName.toLowerCase()
+
+  if (platform === 'darwin' && lower.endsWith('.dmg')) return 'latest.dmg'
+  if (platform === 'linux' && lower.endsWith('.appimage')) return 'latest.AppImage'
+  if (platform === 'win32' && lower.endsWith('.exe')) return 'latest.exe'
+  if (platform === 'win32' && lower.endsWith('.msi')) return 'latest.msi'
+
+  return `latest${path.extname(artifactName)}`
+}
+
 function targetKey(platform: Platform, arch: Arch): string {
   const platformName = platform === 'win32' ? 'windows' : platform
   const archName = arch === 'arm64' ? 'aarch64' : 'x86_64'
@@ -165,6 +195,28 @@ function findUpdaterTarget(bucketFiles: ClassifiedFile[], platform: Platform, ar
   }
 
   return null
+}
+
+function findDirectDownloadTarget(bucketFiles: ClassifiedFile[], platform: Platform): DirectDownloadTarget | null {
+  const signatures = new Map(
+    bucketFiles
+      .filter((file) => file.name.toLowerCase().endsWith('.sig'))
+      .map((file) => [file.name.slice(0, -4), file])
+  )
+
+  const candidates = bucketFiles
+    .filter((file) => directDownloadPriority(platform, file.name) > 0)
+    .sort((a, b) => directDownloadPriority(platform, b.name) - directDownloadPriority(platform, a.name))
+
+  const artifact = candidates[0]
+  if (!artifact) {
+    return null
+  }
+
+  return {
+    artifact,
+    signature: signatures.get(artifact.name)
+  }
 }
 
 async function putFile(
@@ -251,6 +303,22 @@ async function main() {
     platforms[targetKey(platform, arch)] = {
       signature: fs.readFileSync(target.signature.absolutePath, 'utf8').trim(),
       url: `${baseUrl}/${artifactKey}`
+    }
+
+    const directTarget = findDirectDownloadTarget(bucketFiles, platform)
+    if (directTarget) {
+      const aliasName = directDownloadAliasName(platform, directTarget.artifact.name)
+      const aliasKey = uploadKey(channel, platform, arch, aliasName, prefix)
+      await putFile(s3, bucket, aliasKey, directTarget.artifact.absolutePath, aliasName)
+      console.log(`Uploaded ${aliasKey}`)
+
+      if (directTarget.signature) {
+        const signatureAliasKey = uploadKey(channel, platform, arch, `${aliasName}.sig`, prefix)
+        await putFile(s3, bucket, signatureAliasKey, directTarget.signature.absolutePath, `${aliasName}.sig`)
+        console.log(`Uploaded ${signatureAliasKey}`)
+      }
+    } else {
+      console.log(`Skipping direct download alias for ${groupKey}: no preferred installer artifact found`)
     }
   }
 
