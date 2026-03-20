@@ -43,6 +43,8 @@ These stable links always point directly to the latest release file in S3:
 - [macOS (Intel)](https://bfloat-ide-artifacts-dev.s3.eu-north-1.amazonaws.com/stable/darwin/x64/latest.dmg)
 - [Windows (x64)](https://bfloat-ide-artifacts-dev.s3.eu-north-1.amazonaws.com/stable/win32/x64/latest.exe)
 - [Linux (x64 AppImage)](https://bfloat-ide-artifacts-dev.s3.eu-north-1.amazonaws.com/stable/linux/x64/latest.AppImage)
+- [Linux (x64 DEB)](https://bfloat-ide-artifacts-dev.s3.eu-north-1.amazonaws.com/stable/linux/x64/latest.deb)
+- [Linux (x64 RPM)](https://bfloat-ide-artifacts-dev.s3.eu-north-1.amazonaws.com/stable/linux/x64/latest.rpm)
 
 ## Prerequisites
 
