@@ -2,6 +2,7 @@
   "bundle": {
     "resources": {
       "../../../resources/templates": "templates",
+      "resources/bun": "bun",
       "sidecars": "sidecars"
     },
     "externalBin": []

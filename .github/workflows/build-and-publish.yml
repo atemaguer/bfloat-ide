@@ -10,6 +10,7 @@ on:
       - 'packages/desktop/**'
       - 'packages/sidecar/**'
       - 'resources/templates/**'
+      - 'scripts/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - '.github/workflows/build-and-publish.yml'
