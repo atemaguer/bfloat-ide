@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node ../../scripts/prepare-bundled-bun.mjs && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },

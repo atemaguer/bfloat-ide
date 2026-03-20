@@ -6,6 +6,8 @@ use process_wrap::tokio::ProcessGroup;
 use process_wrap::tokio::{JobObject, KillOnDrop};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+use std::env;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{process::Stdio, time::Duration};
 use tauri::{AppHandle, Manager, path::BaseDirectory};
@@ -66,6 +68,33 @@ pub fn get_sidecar_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     }
 }
 
+fn get_bundled_bun_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let relative_path = "bun/bin/bun.exe";
+
+    #[cfg(not(windows))]
+    let relative_path = "bun/bin/bun";
+
+    let bun_path = app
+        .path()
+        .resolve(relative_path, BaseDirectory::Resource)
+        .ok()?;
+
+    bun_path.exists().then_some(bun_path)
+}
+
+fn prepend_path(dir: &Path) -> Option<String> {
+    let existing = env::var_os("PATH");
+    let mut paths = vec![dir.to_path_buf()];
+    if let Some(existing) = existing {
+        paths.extend(env::split_paths(&existing));
+    }
+
+    env::join_paths(paths)
+        .ok()
+        .map(|value| value.to_string_lossy().to_string())
+}
+
 fn get_user_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
 }
@@ -104,6 +133,19 @@ pub fn spawn_command(
             .iter()
             .map(|(key, value)| (key.to_string(), value.clone())),
     );
+
+    if let Some(bun_path) = get_bundled_bun_path(app) {
+        if let Some(bun_dir) = bun_path.parent() {
+            if let Some(path) = prepend_path(bun_dir) {
+                envs.push(("PATH".to_string(), path));
+            }
+        }
+
+        envs.push((
+            "BFLOAT_BUNDLED_BUN".to_string(),
+            bun_path.to_string_lossy().to_string(),
+        ));
+    }
 
     let mut cmd = if cfg!(windows) {
         let sidecar = get_sidecar_path(app);
