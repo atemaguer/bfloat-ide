@@ -118,45 +118,57 @@ function getCodexAuthPathCandidates(): string[] {
 // Binary resolution
 // ---------------------------------------------------------------------------
 
-function findCodexBinaryPath(): string | undefined {
-  const { platform, arch } = process;
+function isExecutableFile(filePath: string): boolean {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  const platformMap: Record<string, { triple: string; pkg: string }> = {
-    "darwin-arm64": { triple: "aarch64-apple-darwin", pkg: "@openai/codex-darwin-arm64" },
-    "darwin-x64": { triple: "x86_64-apple-darwin", pkg: "@openai/codex-darwin-x64" },
-    "linux-arm64": { triple: "aarch64-unknown-linux-musl", pkg: "@openai/codex-linux-arm64" },
-    "linux-x64": { triple: "x86_64-unknown-linux-musl", pkg: "@openai/codex-linux-x64" },
-    "win32-arm64": { triple: "aarch64-pc-windows-msvc", pkg: "@openai/codex-win32-arm64" },
-    "win32-x64": { triple: "x86_64-pc-windows-msvc", pkg: "@openai/codex-win32-x64" },
-  };
+function getCodexBinaryCandidates(): string[] {
+  const binaryName = process.platform === "win32" ? "codex.exe" : "codex";
+  const candidates = new Set<string>();
 
-  const key = `${platform}-${arch}`;
-  const entry = platformMap[key];
-  if (!entry) {
-    console.warn(`${LOG_PREFIX} Unsupported platform: ${key}`);
-    return undefined;
+  const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  for (const entry of pathEntries) {
+    candidates.add(path.join(entry, binaryName));
+    if (process.platform === "win32") {
+      candidates.add(path.join(entry, "codex.cmd"));
+    }
   }
 
-  const { triple, pkg } = entry;
-  const binaryName = platform === "win32" ? "codex.exe" : "codex";
-  const pkgDir = pkg.replace("@openai/", "");
+  const home = os.homedir();
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
+    const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming");
+    candidates.add(path.join(appData, "npm", "codex.cmd"));
+    candidates.add(path.join(appData, "npm", "codex.exe"));
+    candidates.add(path.join(localAppData, "Programs", "codex", "codex.exe"));
+  } else {
+    candidates.add(path.join(home, ".local", "bin", binaryName));
+    candidates.add(path.join(home, ".bun", "bin", binaryName));
+    candidates.add(path.join(home, ".nvm", "current", "bin", binaryName));
+    candidates.add("/opt/homebrew/bin/codex");
+    candidates.add("/usr/local/bin/codex");
+    candidates.add("/usr/bin/codex");
+  }
 
-  const searchPaths = [
-    // From cwd (dev)
-    path.join(process.cwd(), "node_modules", "@openai", pkgDir, "vendor", triple, "codex", binaryName),
-    // From __dirname
-    path.join(__dirname, "..", "..", "node_modules", "@openai", pkgDir, "vendor", triple, "codex", binaryName),
-    path.join(__dirname, "..", "..", "..", "node_modules", "@openai", pkgDir, "vendor", triple, "codex", binaryName),
-  ];
+  return Array.from(candidates);
+}
+
+function findCodexBinaryPath(): string | undefined {
+  const searchPaths = getCodexBinaryCandidates();
 
   for (const p of searchPaths) {
-    if (fs.existsSync(p)) {
+    if (fs.existsSync(p) && isExecutableFile(p)) {
       console.log(`${LOG_PREFIX} Found Codex binary at: ${p}`);
       return p;
     }
   }
 
-  console.warn(`${LOG_PREFIX} Codex binary not found in any search path`);
+  console.warn(`${LOG_PREFIX} Codex binary not found. Checked: ${searchPaths.join(", ")}`);
   return undefined;
 }
 
