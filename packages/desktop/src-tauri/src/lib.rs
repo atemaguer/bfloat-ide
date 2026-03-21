@@ -4,11 +4,11 @@ mod server;
 mod window_commands;
 mod windows;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crate::cli::CommandChild;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use futures::{
-    FutureExt,
     future::{self, Shared},
+    FutureExt,
 };
 use std::{
     fs::{self, OpenOptions},
@@ -19,7 +19,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri::{AppHandle, Manager, RunEvent, State, ipc::Channel, path::BaseDirectory};
+use tauri::{ipc::Channel, path::BaseDirectory, AppHandle, Manager, RunEvent, State};
 #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
 use tauri_plugin_deep_link::DeepLinkExt;
 use tokio::{
@@ -222,7 +222,9 @@ async fn capture_preview_screenshot(
         ScreenshotCaptureResult {
             success: false,
             data_url: None,
-            error: Some("Native preview screenshot is currently only implemented on macOS.".to_string()),
+            error: Some(
+                "Native preview screenshot is currently only implemented on macOS.".to_string(),
+            ),
         }
     }
 }
@@ -251,11 +253,15 @@ fn capture_preview_screenshot_macos(
     let ns_window: &NSWindow = unsafe { &*ns_window.cast() };
     let window_number = ns_window.windowNumber();
     if window_number <= 0 {
-        return Err("Could not resolve native macOS window number for screenshot capture.".to_string());
+        return Err(
+            "Could not resolve native macOS window number for screenshot capture.".to_string(),
+        );
     }
 
-    let temp_path =
-        std::env::temp_dir().join(format!("bfloat-preview-screenshot-{}.png", uuid::Uuid::new_v4()));
+    let temp_path = std::env::temp_dir().join(format!(
+        "bfloat-preview-screenshot-{}.png",
+        uuid::Uuid::new_v4()
+    ));
 
     let output = StdCommand::new("screencapture")
         .args(["-x", &format!("-R{screenshot_rect}")])

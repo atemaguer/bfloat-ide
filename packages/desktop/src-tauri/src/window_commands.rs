@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Manager, window::Color};
+use tauri::{window::Color, AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::windows::MainWindow;
@@ -11,25 +11,19 @@ fn get_main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
 #[tauri::command]
 #[specta::specta]
 pub fn window_minimize(app: AppHandle) -> Result<(), String> {
-    get_main_window(&app)?
-        .minimize()
-        .map_err(|e| e.to_string())
+    get_main_window(&app)?.minimize().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn window_maximize(app: AppHandle) -> Result<(), String> {
-    get_main_window(&app)?
-        .maximize()
-        .map_err(|e| e.to_string())
+    get_main_window(&app)?.maximize().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn window_close(app: AppHandle) -> Result<(), String> {
-    get_main_window(&app)?
-        .close()
-        .map_err(|e| e.to_string())
+    get_main_window(&app)?.close().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
