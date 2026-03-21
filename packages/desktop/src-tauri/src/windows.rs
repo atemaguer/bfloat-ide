@@ -1,4 +1,4 @@
-use crate::constants::{UPDATER_ENABLED, window_state_flags};
+use crate::constants::{window_state_flags, UPDATER_ENABLED};
 use std::{ops::Deref, time::Duration};
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_window_state::AppHandleExt;
