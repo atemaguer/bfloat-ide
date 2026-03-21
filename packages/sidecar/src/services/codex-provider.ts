@@ -7,7 +7,6 @@
 
 import {
   Codex,
-  type ThreadEvent,
   type ThreadItem,
   type ThreadOptions,
   type AgentMessageItem,
@@ -21,6 +20,7 @@ import {
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import * as crypto from "node:crypto";
 import type {
   AgentProvider,
   AgentProviderId,
@@ -114,6 +114,11 @@ function getCodexAuthPathCandidates(): string[] {
   return Array.from(candidates);
 }
 
+function isIgnorablePostCompletionCodexError(error: unknown): boolean {
+  const message = normalizeCodexError(error, "");
+  return message.includes("Failed to parse item: undefined");
+}
+
 // ---------------------------------------------------------------------------
 // Binary resolution
 // ---------------------------------------------------------------------------
@@ -127,6 +132,17 @@ function isExecutableFile(filePath: string): boolean {
   }
 }
 
+function isDisallowedCodexCandidate(filePath: string): boolean {
+  const normalized = path.normalize(filePath);
+  const segments = normalized.split(path.sep).filter(Boolean);
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (segments[index] === "node_modules" && segments[index + 1] === ".bin") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function getLatestNvmBinDir(home: string): string | null {
   const nvmDir = path.join(home, ".nvm", "versions", "node");
   if (!fs.existsSync(nvmDir)) return null;
@@ -136,7 +152,9 @@ function getLatestNvmBinDir(home: string): string | null {
     if (versions.length === 0) return null;
 
     versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    return path.join(nvmDir, versions[0], "bin");
+    const latestVersion = versions[0];
+    if (!latestVersion) return null;
+    return path.join(nvmDir, latestVersion, "bin");
   } catch {
     return null;
   }
@@ -181,6 +199,9 @@ function findCodexBinaryPath(): string | undefined {
   const searchPaths = getCodexBinaryCandidates();
 
   for (const p of searchPaths) {
+    if (isDisallowedCodexCandidate(p)) {
+      continue;
+    }
     if (fs.existsSync(p) && isExecutableFile(p)) {
       console.log(`${LOG_PREFIX} Found Codex binary at: ${p}`);
       return p;
@@ -189,6 +210,55 @@ function findCodexBinaryPath(): string | undefined {
 
   console.warn(`${LOG_PREFIX} Codex binary not found. Checked: ${searchPaths.join(", ")}`);
   return undefined;
+}
+
+function prependCodexBinToPath(codexBinaryPath: string): void {
+  const codexBinDir = path.dirname(codexBinaryPath);
+  const existingEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  if (existingEntries.includes(codexBinDir)) {
+    console.log(`${LOG_PREFIX} Codex bin dir already present on PATH: ${codexBinDir}`);
+    return;
+  }
+
+  process.env.PATH = [codexBinDir, ...existingEntries].join(path.delimiter);
+  console.log(`${LOG_PREFIX} Prepended Codex bin dir to PATH: ${codexBinDir}`);
+}
+
+function isNodeShebangScript(filePath: string): boolean {
+  if (process.platform === "win32") return false;
+  try {
+    const header = fs.readFileSync(filePath, "utf8").slice(0, 128);
+    return header.startsWith("#!/usr/bin/env node");
+  } catch {
+    return false;
+  }
+}
+
+function getSiblingNodePath(codexBinaryPath: string): string | undefined {
+  if (process.platform === "win32") return undefined;
+  const nodePath = path.join(path.dirname(codexBinaryPath), "node");
+  return fs.existsSync(nodePath) && isExecutableFile(nodePath) ? nodePath : undefined;
+}
+
+function getCodexLaunchPath(codexBinaryPath: string): string {
+  const nodePath = getSiblingNodePath(codexBinaryPath);
+  if (!isNodeShebangScript(codexBinaryPath) || !nodePath) {
+    return codexBinaryPath;
+  }
+
+  const launcherDir = path.join(os.tmpdir(), "bfloat-codex-launchers");
+  fs.mkdirSync(launcherDir, { recursive: true });
+
+  const hash = crypto
+    .createHash("sha256")
+    .update(`${nodePath}\0${codexBinaryPath}`)
+    .digest("hex")
+    .slice(0, 16);
+  const launcherPath = path.join(launcherDir, `codex-launcher-${hash}.sh`);
+  const script = `#!/bin/sh\nexec "${nodePath}" "${codexBinaryPath}" "$@"\n`;
+  fs.writeFileSync(launcherPath, script, { mode: 0o755 });
+  fs.chmodSync(launcherPath, 0o755);
+  return launcherPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,10 +402,13 @@ export class CodexProvider implements AgentProvider {
   readonly name = "Codex";
 
   private codexBinaryPath: string | undefined;
+  private codexLaunchPath: string | undefined;
 
   constructor() {
     this.codexBinaryPath = findCodexBinaryPath();
     if (this.codexBinaryPath) {
+      prependCodexBinToPath(this.codexBinaryPath);
+      this.codexLaunchPath = getCodexLaunchPath(this.codexBinaryPath);
       console.log(`${LOG_PREFIX} Initialized with binary path: ${this.codexBinaryPath}`);
     } else {
       console.log(`${LOG_PREFIX} Will use SDK default path resolution`);
@@ -375,8 +448,8 @@ export class CodexProvider implements AgentProvider {
 
     // Build Codex SDK instance
     const codexOptions: Record<string, unknown> = {};
-    if (this.codexBinaryPath) {
-      codexOptions.codexPathOverride = this.codexBinaryPath;
+    if (this.codexLaunchPath) {
+      codexOptions.codexPathOverride = this.codexLaunchPath;
     }
 
     const config: Record<string, unknown> = {};
@@ -414,6 +487,7 @@ export class CodexProvider implements AgentProvider {
       thread = codex.startThread(threadOptions);
     }
 
+    let turnCompleted = false;
     try {
       const { events } = await thread.runStreamed(message, {
         signal: options.abortController.signal,
@@ -443,6 +517,7 @@ export class CodexProvider implements AgentProvider {
 
           case "turn.completed": {
             const totalTokens = event.usage.input_tokens + event.usage.output_tokens;
+            turnCompleted = true;
             yield {
               kind: "done",
               interrupted: false,
@@ -479,6 +554,10 @@ export class CodexProvider implements AgentProvider {
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         yield { kind: "done", interrupted: true };
+        return;
+      }
+
+      if (turnCompleted && isIgnorablePostCompletionCodexError(error)) {
         return;
       }
 

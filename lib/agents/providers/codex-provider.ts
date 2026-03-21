@@ -38,6 +38,7 @@ import type {
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
+import crypto from 'crypto'
 
 // Logging prefix for easy identification
 const LOG_PREFIX = '[Codex Provider]'
@@ -71,6 +72,11 @@ function getCodexAuthPathCandidates(): string[] {
   return Array.from(candidates)
 }
 
+function isIgnorablePostCompletionCodexError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : ''
+  return message.includes('Failed to parse item: undefined')
+}
+
 /**
  * Find the Codex binary path.
  *
@@ -83,6 +89,17 @@ function isExecutableFile(filePath: string): boolean {
   } catch {
     return false
   }
+}
+
+function isDisallowedCodexCandidate(filePath: string): boolean {
+  const normalized = path.normalize(filePath)
+  const segments = normalized.split(path.sep).filter(Boolean)
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (segments[index] === 'node_modules' && segments[index + 1] === '.bin') {
+      return true
+    }
+  }
+  return false
 }
 
 function getLatestNvmBinDir(home: string): string | null {
@@ -139,6 +156,9 @@ function findCodexBinaryPath(): string | undefined {
   const searchPaths = getCodexBinaryCandidates()
 
   for (const p of searchPaths) {
+    if (isDisallowedCodexCandidate(p)) {
+      continue
+    }
     if (fs.existsSync(p) && isExecutableFile(p)) {
       console.log(`${LOG_PREFIX} Found Codex binary at: ${p}`)
       return p
@@ -147,6 +167,55 @@ function findCodexBinaryPath(): string | undefined {
 
   console.warn(`${LOG_PREFIX} Codex binary not found. Checked: ${searchPaths.join(', ')}`)
   return undefined
+}
+
+function prependCodexBinToPath(codexBinaryPath: string): void {
+  const codexBinDir = path.dirname(codexBinaryPath)
+  const existingEntries = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)
+  if (existingEntries.includes(codexBinDir)) {
+    console.log(`${LOG_PREFIX} Codex bin dir already present on PATH: ${codexBinDir}`)
+    return
+  }
+
+  process.env.PATH = [codexBinDir, ...existingEntries].join(path.delimiter)
+  console.log(`${LOG_PREFIX} Prepended Codex bin dir to PATH: ${codexBinDir}`)
+}
+
+function isNodeShebangScript(filePath: string): boolean {
+  if (process.platform === 'win32') return false
+  try {
+    const header = fs.readFileSync(filePath, 'utf8').slice(0, 128)
+    return header.startsWith('#!/usr/bin/env node')
+  } catch {
+    return false
+  }
+}
+
+function getSiblingNodePath(codexBinaryPath: string): string | undefined {
+  if (process.platform === 'win32') return undefined
+  const nodePath = path.join(path.dirname(codexBinaryPath), 'node')
+  return fs.existsSync(nodePath) && isExecutableFile(nodePath) ? nodePath : undefined
+}
+
+function getCodexLaunchPath(codexBinaryPath: string): string {
+  const nodePath = getSiblingNodePath(codexBinaryPath)
+  if (!isNodeShebangScript(codexBinaryPath) || !nodePath) {
+    return codexBinaryPath
+  }
+
+  const launcherDir = path.join(os.tmpdir(), 'bfloat-codex-launchers')
+  fs.mkdirSync(launcherDir, { recursive: true })
+
+  const hash = crypto
+    .createHash('sha256')
+    .update(`${nodePath}\0${codexBinaryPath}`)
+    .digest('hex')
+    .slice(0, 16)
+  const launcherPath = path.join(launcherDir, `codex-launcher-${hash}.sh`)
+  const script = `#!/bin/sh\nexec "${nodePath}" "${codexBinaryPath}" "$@"\n`
+  fs.writeFileSync(launcherPath, script, { mode: 0o755 })
+  fs.chmodSync(launcherPath, 0o755)
+  return launcherPath
 }
 
 // Available Codex models
@@ -510,6 +579,7 @@ class CodexAgentSession implements AgentSession {
 
     this.state.status = 'running'
     this.abortController = new AbortController()
+    let turnCompleted = false
 
     try {
       // Build thread options
@@ -563,6 +633,7 @@ class CodexAgentSession implements AgentSession {
           if (event.type === 'turn.completed') {
             const usage = (event as { usage: Usage }).usage
             this.state.totalTokens += usage.input_tokens + usage.output_tokens
+            turnCompleted = true
           }
 
           // Update status based on message type
@@ -586,6 +657,10 @@ class CodexAgentSession implements AgentSession {
         }
       }
     } catch (error) {
+      if (turnCompleted && isIgnorablePostCompletionCodexError(error)) {
+        return
+      }
+
       console.error(`${LOG_PREFIX} Execution error:`, error)
       this.state.status = 'error'
       this.state.endTime = Date.now()
@@ -655,6 +730,7 @@ export class CodexAgentProvider implements AgentProvider {
   readonly name = 'Codex'
 
   private codexBinaryPath: string | undefined
+  private codexLaunchPath: string | undefined
 
   constructor() {
     // Find the binary path explicitly since SDK's import.meta.url
@@ -662,6 +738,8 @@ export class CodexAgentProvider implements AgentProvider {
     this.codexBinaryPath = findCodexBinaryPath()
 
     if (this.codexBinaryPath) {
+      prependCodexBinToPath(this.codexBinaryPath)
+      this.codexLaunchPath = getCodexLaunchPath(this.codexBinaryPath)
       console.log(`${LOG_PREFIX} Initialized with explicit binary path: ${this.codexBinaryPath}`)
     } else {
       console.log(`${LOG_PREFIX} Will use SDK default path resolution`)
@@ -680,8 +758,8 @@ export class CodexAgentProvider implements AgentProvider {
     const mcpConfig = buildMcpConfigOverrides(mcpServers)
 
     const codexOptions: Record<string, unknown> = {}
-    if (this.codexBinaryPath) {
-      codexOptions.codexPathOverride = this.codexBinaryPath
+    if (this.codexLaunchPath) {
+      codexOptions.codexPathOverride = this.codexLaunchPath
     }
 
     const config: Record<string, unknown> = {}
